@@ -1861,3 +1861,47 @@ def test_an_unknown_tokenizer_name_is_refused_with_the_registered_names() -> Non
     assert re.search(
         r"unknown tokenizer 'segmentr'.*'default'.*'segmenter'", str(raised.value.__cause__)
     )
+
+
+_SPECS = [
+    {},
+    {"max_window": 3},
+    {"tokenizer": "default"},
+    {"tokenizer": token_spans},
+    {"tokenizer": _same_tokens},
+    {"tokenizer": _same_tokens, "max_window": 3},
+    {"normalizer": str.casefold},
+    {"normalizer": str.casefold, "max_window": 3},
+]
+
+
+@pytest.mark.parametrize("spec", _SPECS, ids=repr)
+@pytest.mark.parametrize("source_fold", [None, _squash], ids=["counted", "uncountable"])
+async def test_window_bounded_answers_what_the_built_rung_does(
+    spec: dict[str, Any], source_fold: Callable[[str], str] | None
+) -> None:
+    """The classmethod's answer, checked against the probes a rung built from the spec spends.
+
+    A door asks ``window_bounded`` before anything is built; the rung decides
+    its bound when it runs. Bounded means fewer probes than every window, so
+    the two are compared by counting rather than by reading either one's
+    code.
+    """
+    query = " ".join(["word"] * 34 + SENTENCE.split())
+    tokens = len(token_spans(query))
+    sync_source = CountingEntitySource(RETRIEVERS, normalizer=source_fold)
+    async_source = AsyncCountingEntitySource(RETRIEVERS, normalizer=source_fold)
+    count = sync_source.longest_form_tokens()
+    assert (count is None) == (source_fold is not None)
+
+    signal_backends.create("scan", {"entities": sync_source, **spec}).candidates(query, k=5)
+    await async_signal_backends.create("scan", {"entities": async_source, **spec}).candidates(
+        query, k=5
+    )
+    assert sync_source.probes == async_source.probes
+    probed_every_window = sync_source.probes == tokens * (tokens + 1) // 2
+
+    answer = ScanningSignal.window_bounded(spec, count)
+    assert AsyncScanningSignal.window_bounded(spec, count) is answer
+    assert signal_backends.get_metadata("scan")["window_bounded"](spec, count) is answer
+    assert answer is not probed_every_window

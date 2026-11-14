@@ -2084,6 +2084,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged by a tokenizer; its `max_query_tokens` counts the tokenizer's
   tokens.
 
+- **`ScanningSignal.window_bounded(spec, longest_form_tokens)`** and its async
+  twin's: whether a rung built from a configuration spec bounds its window
+  over a source reporting that count — the rung's own rule, asked before it is
+  built. `declared_signal_metadata` publishes it as `window_bounded` in a
+  rung's registry metadata when the class defines it, so a door refusing an
+  unbounded scan asks the rung rather than restating which keys bound it. A
+  consumer's rung declaring `bounded_by_longest_form` opts in by defining the
+  same classmethod.
+
 - **`SourceDescription.form_edge: int | None`, with no default**, for the
   reason `declares` has none. How many punctuation characters the widest edge
   of a declared form carries: `0` for none — a scan extends nothing — `n` for

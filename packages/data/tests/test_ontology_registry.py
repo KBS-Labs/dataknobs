@@ -2105,10 +2105,10 @@ async def test_forms_database_is_declared_as_a_collaborator_a_caller_may_inject(
 # --------------------------------------------------------------------------
 
 
-def _scanning_document(**lookup: Any) -> dict[str, Any]:
-    """A record binding with a declared ``scan`` rung over it."""
+def _scanning_document(*, rung: dict[str, Any] | None = None, **lookup: Any) -> dict[str, Any]:
+    """A record binding with a declared ``scan`` rung over it, or ``rung`` as given."""
     return _document(
-        resolver={"rungs": [{"kind": "scan"}]},
+        resolver={"rungs": [rung if rung is not None else {"kind": "scan"}]},
         sources=[
             {
                 "id": "products",
@@ -2188,6 +2188,115 @@ async def test_a_composition_with_no_scan_needs_no_bound() -> None:
         assert ontology.entities.longest_form_tokens() is None
     finally:
         await registry.close()
+
+
+async def _loads(document: dict[str, Any]) -> None:
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**document), database=AsyncMemoryDatabase()
+    )
+    try:
+        await registry.load()
+    finally:
+        await registry.close()
+
+
+async def test_a_declared_scan_that_caps_its_own_window_loads_without_a_count() -> None:
+    """``max_window`` bounds every probe, so the binding owes no count.
+
+    The refusal read the rung kind and never the spec, so it turned this away
+    although the rung would probe at most four tokens per window.
+    """
+    await _loads(_scanning_document(rung={"kind": "scan", "max_window": 4}))
+
+
+@pytest.fixture
+def registered_tokenizer() -> Any:
+    """``segmenter`` in the tokenizer registry, for the length of one test."""
+    from dataknobs_common.text import TOKENIZERS, token_spans
+
+    def own_tokens(text: str) -> tuple[tuple[int, int], ...]:
+        # The default output from a callable that is not ``token_spans``
+        # itself, which is all the trust rule reads.
+        return token_spans(text)
+
+    TOKENIZERS.register("segmenter", lambda config: own_tokens)
+    yield
+    TOKENIZERS.unregister("segmenter")
+
+
+@pytest.mark.usefixtures("registered_tokenizer")
+async def test_a_declared_scan_with_its_own_tokenizer_does_not_lean_on_the_count() -> None:
+    """The count is in default tokens, and this rung does not use them.
+
+    A rung with its own tokenizer declines the source's count, so a binding
+    declaring one leaves this scan unbounded: every window, one round trip
+    each. Refused, naming the cap that does bound it.
+    """
+    document = _scanning_document(
+        rung={"kind": "scan", "tokenizer": "segmenter"}, longest_form_tokens=4
+    )
+    with pytest.raises(ValidationError, match="max_window"):
+        await _loads(document)
+
+    capped = _scanning_document(
+        rung={"kind": "scan", "tokenizer": "segmenter", "max_window": 4}, longest_form_tokens=4
+    )
+    await _loads(capped)
+
+
+async def test_a_declared_scan_naming_the_default_tokenizer_keeps_the_count() -> None:
+    await _loads(
+        _scanning_document(rung={"kind": "scan", "tokenizer": "default"}, longest_form_tokens=4)
+    )
+
+
+class _ConsumerScan:
+    """A consumer's scanning rung that predates the question: no ``window_bounded``."""
+
+    reads_surface_forms = True
+    bounded_by_longest_form = True
+
+
+@pytest.fixture
+def consumer_scan() -> Any:
+    """``consumer_scan`` registered in both flavours, without the hook."""
+    from dataknobs_common.entity_resolution import (
+        AsyncScanningSignal,
+        ScanningSignal,
+        async_signal_backends,
+        declared_signal_metadata,
+        signal_backends,
+    )
+
+    signal_backends.register(
+        "consumer_scan",
+        lambda config: ScanningSignal(config["entities"]),
+        metadata=declared_signal_metadata(_ConsumerScan, {"flavour": "sync", "needs_io": False}),
+    )
+    async_signal_backends.register(
+        "consumer_scan",
+        lambda config: AsyncScanningSignal(config["entities"]),
+        metadata=declared_signal_metadata(_ConsumerScan, {"flavour": "async", "needs_io": False}),
+    )
+    yield
+    signal_backends.unregister("consumer_scan")
+    async_signal_backends.unregister("consumer_scan")
+
+
+@pytest.mark.usefixtures("consumer_scan")
+async def test_a_consumer_rung_with_no_answer_is_read_as_before() -> None:
+    """No ``window_bounded``: bounded exactly when the binding declares a count.
+
+    Its spec's keys are its own, so the door does not read ``max_window`` off
+    it -- a consumer's rung is asked nothing new.
+    """
+    from dataknobs_common.entity_resolution import async_signal_backends
+
+    assert "window_bounded" not in async_signal_backends.get_metadata("consumer_scan")
+    rung = {"kind": "consumer_scan", "max_window": 4}
+    with pytest.raises(ValidationError, match="longest_form_tokens"):
+        await _loads(_scanning_document(rung=rung))
+    await _loads(_scanning_document(rung=rung, longest_form_tokens=4))
 
 
 # --------------------------------------------------------------------------

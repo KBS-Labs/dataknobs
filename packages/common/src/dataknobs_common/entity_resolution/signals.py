@@ -60,9 +60,10 @@ from dataknobs_common.text import (
     token_spans,
 )
 from dataknobs_common.text.scan import _checked_tokens
+from dataknobs_common.text.tokenizers import tokenizer_from_config
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Sequence, Set as AbstractSet
+    from collections.abc import Callable, Iterator, Mapping, Sequence, Set as AbstractSet
 
     from dataknobs_common.ontology.sources import AsyncEntitySource, EntitySource
     from dataknobs_common.text import Tokenizer
@@ -337,7 +338,9 @@ def _source_measures_probes(
     them. Only a rung with neither -- no ``normalizer``, and no tokenizer or
     :func:`~dataknobs_common.text.token_spans` itself -- may ask.
 
-    The one rule :func:`_window_bound` and :func:`_edge_bound` both read.
+    The one rule :func:`_window_bound`, :func:`_edge_bound` and
+    :func:`_window_bounded` all read, so a rung's bounds and the registry's
+    answer about them cannot disagree.
     """
     return normalizer is None and tokenizer in (None, token_spans)
 
@@ -437,6 +440,35 @@ def _edge_bound(
     if max_edge is None:
         return derived
     return max_edge if derived is None else min(derived, max_edge)
+
+
+def _window_bounded(spec: Mapping[str, Any], longest_form_tokens: int | None) -> bool:
+    """Whether a scan built from ``spec`` bounds its window over such a source.
+
+    :func:`_window_bound`'s decision asked of a configuration rather than of
+    a built rung, for a door that has to refuse a composition before anything
+    is constructed -- a binding whose every probe is a round trip cannot
+    afford a scan that enumerates every window, and has only the spec and
+    the number the binding declares to go on. Bounded when the spec caps the
+    window itself, or when the rung would trust the source's count and the
+    source has one.
+
+    Reads ``normalizer``, ``tokenizer`` and ``max_window`` exactly as the
+    factories do, through the same checks, so a value the factory would
+    refuse is refused here with the same message, and
+    :func:`_source_measures_probes` is the one rule both consult -- the
+    answer and the rung cannot disagree.
+
+    Raises:
+        ValidationError: For a ``max_window`` below one, a ``normalizer``
+            that is not callable, or a ``tokenizer`` the registry cannot
+            build -- whatever the factory would refuse.
+    """
+    if _checked_max_window(spec.get("max_window")) is not None:
+        return True
+    normalizer = _checked_callable(spec.get("normalizer"), "normalizer")
+    tokenizer = tokenizer_from_config(spec.get("tokenizer"))
+    return _source_measures_probes(normalizer, tokenizer) and longest_form_tokens is not None
 
 
 def _checked_query_tokens(max_query_tokens: int | None) -> int | None:
@@ -1478,6 +1510,29 @@ class ScanningSignal(DeclaredSignal):
         self._max_edge = _checked_max_edge(max_edge)
         self._tokenizer: Tokenizer = _checked_callable(tokenizer, "tokenizer") or token_spans
 
+    @classmethod
+    def window_bounded(cls, spec: Mapping[str, Any], longest_form_tokens: int | None) -> bool:
+        """Whether a rung built from ``spec`` bounds its window over such a source.
+
+        The question a door asks before building, where every probe would
+        be a round trip: a source reporting ``longest_form_tokens`` (``None``
+        for one that cannot count) and a rung spec as a document writes it.
+        True when the spec sets ``max_window``, or when it names no
+        ``normalizer`` and no tokenizer but the default and the source has a
+        count -- the same rule the rung applies to itself when it runs.
+
+        **The extension point.** The signal registry publishes this under
+        ``window_bounded`` in a rung's metadata, and a consumer's rung that
+        declares ``bounded_by_longest_form`` opts in by defining the same
+        classmethod. One that does not is treated as bounded exactly when the
+        source declares a count, which is what a door assumed before the
+        question could be asked.
+
+        Raises:
+            ValidationError: For a spec the factory would refuse.
+        """
+        return _window_bounded(spec, longest_form_tokens)
+
     def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
         measured = _source_measures_probes(self._normalizer, self._tokenizer)
@@ -1937,6 +1992,15 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
         self._max_window = _checked_max_window(max_window)
         self._max_edge = _checked_max_edge(max_edge)
         self._tokenizer: Tokenizer = _checked_callable(tokenizer, "tokenizer") or token_spans
+
+    @classmethod
+    def window_bounded(cls, spec: Mapping[str, Any], longest_form_tokens: int | None) -> bool:
+        """:meth:`ScanningSignal.window_bounded`, answered identically.
+
+        Raises:
+            ValidationError: For a spec the factory would refuse.
+        """
+        return _window_bounded(spec, longest_form_tokens)
 
     async def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []

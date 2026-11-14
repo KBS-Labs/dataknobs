@@ -918,7 +918,9 @@ forms in default tokens, so `longest_form_tokens` and `form_edge` say nothing
 about windows over anyone else's, and a scan with its own tokenizer does not
 ask for them — exactly as for a rung with its own `normalizer`. `max_window`
 and `max_edge` are then the only caps, and a tokenizer whose tokens include the
-punctuation wants `max_edge=0`. `LexicalSignal`'s bound is
+punctuation wants `max_edge=0`. Over a live table that is a refusal at load: a
+`kind: scan` rung naming a tokenizer must set `max_window`, because the
+binding's `longest_form_tokens` no longer bounds it. `LexicalSignal`'s bound is
 in characters, so a tokenizer moves its windows and leaves its bound alone, and
 its `max_query_tokens` counts the tokenizer's tokens.
 

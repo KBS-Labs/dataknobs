@@ -187,6 +187,20 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
     subclasses, a bare-protocol rung sets it itself, and a rung that declares
     nothing gets the reading that refuses nothing.
 
+    **One entry is a question rather than a fact.** ``window_bounded`` is
+    the rung's own classmethod, ``(spec, longest_form_tokens) -> bool``,
+    published here when the class defines one -- see
+    :meth:`~dataknobs_common.entity_resolution.ScanningSignal.window_bounded`.
+    ``bounded_by_longest_form`` says the rung's cost *can* depend on the
+    source's count; whether a particular configuration of it does depends on
+    that configuration (a ``max_window`` caps it, a tokenizer stops it
+    trusting the count), and the class is the only place that rule can live
+    without a door restating it. A rung that defines no such classmethod
+    gets no entry, so its metadata is what it was, and a door reading the
+    key falls back to *bounded exactly when the source declares a count*.
+    Signal metadata is read through ``get_metadata`` and never serialised,
+    so a callable here travels nowhere.
+
     Args:
         rung: The class whose declarations are read. Not the factory -- a
             factory may be a plain callable, which declares nothing
@@ -195,13 +209,18 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
             so one base can serve both flavours
 
     Returns:
-        A new dict: ``base``, plus each fact read off ``rung``.
+        A new dict: ``base``, plus each fact read off ``rung``, plus
+        ``window_bounded`` where ``rung`` defines it.
     """
-    return dict(
+    metadata = dict(
         base,
         reads_surface_forms=getattr(rung, "reads_surface_forms", False),
         bounded_by_longest_form=getattr(rung, "bounded_by_longest_form", False),
     )
+    window_bounded = getattr(rung, "window_bounded", None)
+    if callable(window_bounded):
+        metadata["window_bounded"] = window_bounded
+    return metadata
 
 
 signal_backends.register(
