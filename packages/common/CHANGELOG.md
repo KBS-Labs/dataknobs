@@ -423,7 +423,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dataknobs_common`: a SHA-256 of any value's content by the canonical
   encoding `StructuredConfig.fingerprint()` uses. Unlike a config fingerprint
   it encodes NaN rather than refusing it, since two values that both hold NaN
-  hold the same content. `fingerprint()` is unchanged.
+  hold the same content. `fingerprint()` is unchanged. Its cost follows the
+  distinct containers a value holds, not the paths to them: a subtree reached
+  by several paths, as a YAML anchor builds, is digested once.
 
 - **Variants of an authored form, in `dataknobs_common.text`.** `generate`
   makes a form's variants from named rules, each rule seeing what the rules
@@ -474,7 +476,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ValueError`. Fields with `compare=False` are left out. Two extension
   points: `_FINGERPRINT_EXCLUDE`, a declared policy, leaves fields out, and
   overriding `_fingerprint_value` encodes a value type of the config's own,
-  kept apart from a plain value of the same encoding.
+  kept apart from a plain value of the same encoding; its answer may depend
+  only on the value, since a shared container is read once. The encoding is a
+  tree hash, each nested container standing as its own digest, so the cost
+  follows the distinct containers a config holds rather than the paths to
+  them. A fingerprint computed by a pre-release build of this version does not
+  match one computed by the release.
 
 - **`StructuredConfig.merge_inputs(config, kwargs)`**, the one input a
   `StructuredConfigConsumer` makes of a configuration mapping and keyword

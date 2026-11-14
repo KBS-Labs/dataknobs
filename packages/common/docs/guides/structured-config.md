@@ -341,6 +341,9 @@ def client_for(cfg: ServiceConfig) -> Client:
   it can key something that outlives one.
 - **A credential does not appear in it.** A digest of a guessable one can
   still be brute-forced, so it is no place to publish one.
+- **Its cost follows the distinct containers the fields hold**, not the paths
+  to them. A subtree held in several places, as a YAML anchor builds, is
+  digested once, and digests as an equal copy of it would.
 
 It follows field values, which is what the generated equality compares. A
 config whose `__eq__` is written by hand, or that compares by identity under
@@ -379,7 +382,9 @@ class GatewayConfig(StructuredConfig):
 What `_fingerprint_value` returns is tagged as its answer, with the value's
 type when an import reaches it, so an endpoint encoded as its URL does not share
 a key with that URL held as a string. It is encoded without consulting
-`_fingerprint_value` again.
+`_fingerprint_value` again. The answer may depend only on the value: a
+shared container is read once, so the answer given where a value first occurs
+stands wherever else it occurs. `path` is there for the error message.
 
 ### `accepts(key)` (classmethod)
 
