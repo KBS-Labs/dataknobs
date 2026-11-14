@@ -1030,8 +1030,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dataknobs_data.ontology`. With one, the source declares
   `Capability.SOURCE_REVISION` and `revision()` awaits the provider on every
   call, uncached; without one it withholds the capability and answers `None`.
-  A binding the registry builds from a document has no provider, because a
-  document cannot name one.
+  A provider answering anything but a string raises `TypeError`, and one that
+  cannot be called is refused at construction.
+
+- **`OntologyRegistry` takes a `revision_providers` collaborator**, mapping a
+  live source's id to its provider, through `from_components` or any door's
+  components. The registry hands each `kind: record` binding the provider
+  keyed to its id; one keyed to an authored source is refused at load.
 
 - **The registry's authored sources answer a revision** spelled as the
   `dataknobs_common` loaders spell it: the document's version, `@`, then a

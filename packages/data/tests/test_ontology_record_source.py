@@ -1450,5 +1450,30 @@ async def test_a_provider_is_asked_on_every_call() -> None:
     assert asked == 2
 
 
+async def test_a_provider_answering_something_other_than_a_string_is_refused() -> None:
+    """A ``None`` from an empty change log would read as *no change* from a declaring source."""
+
+    async def empty_changelog() -> Any:
+        return None
+
+    projection = EntityProjection.from_mapping(PROJECTION, binding="products")
+    source = RecordEntitySource(
+        AsyncMemoryDatabase(), projection, source_id="products", revision=empty_changelog
+    )
+    with pytest.raises(TypeError, match=r"'products'.*NoneType"):
+        await source.revision()
+
+
+def test_a_provider_that_cannot_be_called_is_refused_at_construction() -> None:
+    projection = EntityProjection.from_mapping(PROJECTION, binding="products")
+    with pytest.raises(ValidationError, match=r"'products'.*str"):
+        RecordEntitySource(
+            AsyncMemoryDatabase(),
+            projection,
+            source_id="products",
+            revision="snapshot-0042",  # type: ignore[arg-type]
+        )
+
+
 def test_the_kind_can_declare_a_revision_before_any_binding_exists() -> None:
     assert Capability.SOURCE_REVISION in RecordEntitySource.supported_capabilities()

@@ -1947,7 +1947,9 @@ async def test_what_the_registry_may_be_handed_is_still_advertised() -> None:
     reason rather than left undeclared, because a collaborator a caller must
     supply and cannot discover is worse than one they merely may supply.
     """
-    accepted = frozenset({"database", "embedder", "event_bus", "forms_database"})
+    accepted = frozenset(
+        {"database", "embedder", "event_bus", "forms_database", "revision_providers"}
+    )
     assert OntologyRegistry.expected_components() == frozenset()
     assert OntologyRegistry.optional_components() == accepted
     assert OntologyRegistry.accepted_components() == accepted
@@ -2502,3 +2504,51 @@ async def test_a_live_binding_through_a_document_declares_no_revision() -> None:
         assert await ontology.entities.revision() is None
     finally:
         await registry.close()
+
+
+async def test_an_injected_revision_provider_reaches_the_live_source_of_its_id() -> None:
+    """The registry's door to a live revision: injected, because a document cannot name code."""
+    asked = 0
+
+    async def snapshot() -> str:
+        nonlocal asked
+        asked += 1
+        return f"snapshot-{asked}"
+
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_document()),
+        database=await _seeded(),
+        revision_providers={"products": snapshot},
+    )
+    try:
+        ontology = await registry.load()
+        assert Capability.SOURCE_REVISION in ontology.entities.describe().capabilities
+        assert await ontology.entities.revision() == "snapshot-1"
+        assert await ontology.entities.revision() == "snapshot-2"
+    finally:
+        await registry.close()
+
+
+async def test_a_provider_for_another_source_id_leaves_this_binding_without_one() -> None:
+    async def snapshot() -> str:
+        return "snapshot"
+
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_document()),
+        database=await _seeded(),
+        revision_providers={"suppliers": snapshot},
+    )
+    try:
+        ontology = await registry.load()
+        assert await ontology.entities.revision() is None
+    finally:
+        await registry.close()
+
+
+async def test_a_revision_provider_that_cannot_be_called_is_refused_at_construction() -> None:
+    with pytest.raises(ValidationError, match=r"not callable.*'products'"):
+        OntologyRegistry.from_components(
+            config=OntologyConfig(**_document()),
+            database=await _seeded(),
+            revision_providers={"products": "snapshot"},
+        )

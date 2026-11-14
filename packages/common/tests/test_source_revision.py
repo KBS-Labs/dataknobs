@@ -169,21 +169,22 @@ def test_the_digest_is_the_entities_fingerprint() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_a_change_to_a_handed_out_entity_leaves_the_revision_where_the_lookups_are() -> None:
+def test_the_digest_is_taken_at_construction_not_at_the_first_ask() -> None:
     """The digest describes the state the lookup maps were built from.
 
     An entity ``get()`` hands out can still be changed after construction, and
-    the lookups do not see it. A digest computed later would describe a state
-    no lookup answers from; this one does not move, and neither do the
-    lookups. Whether the change should be possible at all is a separate
-    question about the model.
+    the lookups do not see it. A digest computed later -- on first ask, or on
+    every ask -- would describe a state no lookup answers from. So the entity
+    is changed **before** ``revision()`` is first called, and the answer is
+    compared with a source built from an unchanged copy: only a digest taken
+    at construction equals it. Whether the change should be possible at all is
+    a separate question about the model.
     """
     source = MappingEntitySource(_entities())
-    before = source.revision()
     entity = source.get("e-1")
     assert entity is not None
     entity.aliases.append("Slides")
-    assert source.revision() == before
+    assert source.revision() == MappingEntitySource(_entities()).revision()
     assert source.by_surface_form("Slides") == frozenset()
 
 
@@ -265,6 +266,28 @@ def test_a_yaml_document_holding_nan_loads_and_answers(tmp_path: pathlib.Path) -
         revisions[name] = load_ontology(path).entities.revision()
     assert revisions["nan-a"] == revisions["nan-b"]
     assert revisions["nan-a"] != revisions["inf"]
+
+
+def test_a_config_nested_in_a_value_takes_the_values_nan_mode() -> None:
+    """A config in an entity's metadata does not bring the config path's refusal with it."""
+    from dataknobs_common.retry import RetryConfig
+
+    def holding(config: RetryConfig) -> dict[str, Entity]:
+        entities = _entities()
+        entities["e-1"].metadata["retry"] = config
+        return entities
+
+    one = MappingEntitySource(holding(RetryConfig(backoff_multiplier=math.nan))).revision()
+    two = MappingEntitySource(holding(RetryConfig(backoff_multiplier=math.nan))).revision()
+    assert one == two
+    assert one != MappingEntitySource(holding(RetryConfig())).revision()
+
+
+def test_a_config_digests_as_its_own_fingerprint() -> None:
+    from dataknobs_common.retry import RetryConfig
+
+    config = RetryConfig(max_attempts=4, retry_on_exceptions=[ValueError])
+    assert fingerprint_value(config) == config.fingerprint()
 
 
 def test_a_config_fingerprint_still_refuses_nan() -> None:

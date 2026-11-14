@@ -572,6 +572,13 @@ class RecordEntitySource(DynamicCapabilityMixin):
         forms_database: AsyncDatabase | None = None,
         revision: RevisionProvider | None = None,
     ) -> None:
+        if revision is not None and not callable(revision):
+            raise ValidationError(
+                f"source {source_id!r} was handed a revision provider of type "
+                f"{type(revision).__name__}, which cannot be called. Pass an async "
+                f"callable answering the revision",
+                context={"source_id": source_id},
+            )
         self._db = database
         self._revision = revision
         self._projection = projection
@@ -988,8 +995,23 @@ class RecordEntitySource(DynamicCapabilityMixin):
         absent from :meth:`describe`. See
         :meth:`~dataknobs_common.ontology.EntitySource.revision` for what a
         caller may read into an answer.
+
+        Raises:
+            TypeError: The provider answered something other than a string --
+                a ``None`` from an empty change log, say. Passed on, it would
+                read as *no change* from a source declaring that it can tell.
         """
-        return None if self._revision is None else await self._revision()
+        if self._revision is None:
+            return None
+        answer = await self._revision()
+        if not isinstance(answer, str):
+            raise TypeError(
+                f"source {self._source_id!r}'s revision provider answered "
+                f"{type(answer).__name__} {answer!r}, not a string. A source that "
+                f"declares source_revision must answer one, or a caller comparing "
+                f"two answers reads the gap as no change"
+            )
+        return answer
 
     def _projected(self, record: Record) -> Entity[str]:
         """One row to one entity -- the single place a column name is spent."""

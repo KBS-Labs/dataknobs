@@ -130,3 +130,20 @@ async def test_the_registry_passes_the_documents_version_to_the_authored_source(
     assert revision is not None
     assert revision.startswith("2.3@")
     assert revision == load_ontology(grocery(version="2.3")).entities.revision()
+
+
+async def test_a_revision_provider_keyed_to_an_authored_source_is_refused() -> None:
+    """An authored source digests its own entities; a provider for one would be ignored."""
+
+    async def snapshot() -> str:
+        return "snapshot"
+
+    document = grocery(sources=[{"id": "groceries", "kind": "inline"}])
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**document), revision_providers={"groceries": snapshot}
+    )
+    try:
+        with pytest.raises(ValidationError, match=r"'groceries'.*authored"):
+            await registry.load()
+    finally:
+        await registry.close()

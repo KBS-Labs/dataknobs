@@ -597,7 +597,9 @@ used without it, and nothing degrades silently.
 ### The one member that is partial
 
 `by_surface_form` is on the protocol rather than beside it, and is the one
-member a conforming source may decline. The fold is the **source's** —
+member a conforming source may decline. (`revision` may answer `None`, which
+is not declining: it is the answer, and it says the source cannot tell — see
+[Which state of a vocabulary answered](#which-state-of-a-vocabulary-answered).) The fold is the **source's** —
 a caller hands the query as it was typed — and a source reading a live table
 holds the form as it was written, with no engine primitive folding at query
 time the way `str.casefold` does. Such a source withholds
@@ -670,15 +672,20 @@ digest can identify — a lambda in its `metadata` — fails the construction wi
 a `TypeError` naming the entity and field. NaN does not: two documents that
 both say `.nan` hold the same content, and answer the same revision.
 
-Three things the answer does not track, each erring in a stated direction:
+Four things the answer does not track exactly, each erring in a stated
+direction:
 
 - **The fold.** A normalizer is a callable, and is not digested. The same
   entities built with a different `normalizer=` answer the same revision while
   resolving differently. A fold is code, and a fold change is a code change.
+- **Values Python calls equal.** The digest encodes content as Python
+  compares it, so `1`, `1.0` and `true` in an entity's `metadata` share it, as
+  do one instant written in two time zones. Changing one to another does not
+  move the revision. Nothing resolution reads can differ between them, but
+  your own code reading `metadata` by type could.
 - **The library release.** Equal answers mean equal content under one release
   of this library; another release may encode differently and move every
-  revision. That reports a change that did not happen, never hides one that
-  did.
+  revision. That reports a change that did not happen.
 - **Alias order.** Reordering an entity's aliases moves the revision, though
   it resolves the same. That errs the same way.
 

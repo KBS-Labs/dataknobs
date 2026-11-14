@@ -482,13 +482,56 @@ assert await source.revision() == "snapshot-0042"
 
 The provider is a `RevisionProvider` — `Callable[[], Awaitable[str]]` — and is
 awaited on every call, with no cache, because an answer held from an earlier
-call is the one thing that could miss a change. It answers `str` and never
-`None`: the source declares `Capability.SOURCE_REVISION` exactly when it is
-given one, and without one it withholds the capability and answers `None`.
+call is the one thing that could miss a change. It must answer a `str`: the
+source declares `Capability.SOURCE_REVISION` exactly when it is given one, so
+an answer of anything else — a `None` from an empty change log — raises
+`TypeError` rather than reading as *no change*. A provider that cannot be
+called is refused when the source is built. Without one, the source withholds
+the capability and answers `None`.
 
-**A document cannot name a provider yet**, so a `kind: record` binding the
-registry builds from configuration has none: it withholds the capability and
-answers `None`. Build the source yourself, as above, when you need one.
+**Through the registry, inject it.** A document can name a table but not the
+code that knows which state the table is in, so a provider reaches the
+registry the way an embedder does: as a collaborator, keyed by the source id
+the document declares.
+
+```python
+from dataknobs_common.ontology import OntologyConfig
+from dataknobs_data.ontology import OntologyRegistry
+
+document = {
+    "id": "catalog",
+    "entity_types": [{"id": "Product"}],
+    "sources": [
+        {
+            "id": "products",
+            "kind": "record",
+            "entity_projection": {
+                "table": "products",
+                "id": "sku",
+                "name": "title",
+                "type": {"const": "Product"},
+            },
+            "schema": [
+                {"name": "sku", "type": "string"},
+                {"name": "title", "type": "string"},
+            ],
+        }
+    ],
+}
+registry = OntologyRegistry.from_components(
+    config=OntologyConfig(**document),
+    database=AsyncMemoryDatabase(),
+    revision_providers={"products": snapshot},
+)
+async with registry:
+    onto = await registry.load()
+    assert await onto.entities.revision() == "snapshot-0042"
+```
+
+A provider applies to the `kind: record` source of that id in every document
+the registry loads, and a source with no provider keyed to it has none. One
+keyed to an **authored** source is refused at load: an authored source answers
+from the entities it holds, so the provider could only be ignored.
 
 ## A taxonomy over a parent column
 

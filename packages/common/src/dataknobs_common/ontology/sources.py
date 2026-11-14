@@ -175,11 +175,12 @@ class EntitySource(Protocol[K]):
     could not be used together. A source written before the parameter existed
     is an ``EntitySource[str]`` and conforms unchanged.
 
-    **Four of its members move with the key and four do not**, which is the
+    **Four of its members move with the key and five do not**, which is the
     distinction a reader cannot get from the diff: ``get``, ``get_many``,
     ``by_surface_form`` and ``by_type`` each carry an entity id somewhere. What
     stays ``str`` is a *surface form* a person typed, an entity **type** id the
-    document authored, and the origin members' record types.
+    document authored, the origin members' record types, and a revision, which
+    is a label the source mints for its own state.
     ``by_surface_form(form: str) -> frozenset[K]`` is the member with one of
     each in one signature.
 
@@ -305,11 +306,17 @@ class EntitySource(Protocol[K]):
         digest when it was built with no version, but a caller may not split
         on the ``@``: a version string may itself contain one.
 
-        **Equal answers mean equal content under one release of this
-        library.** A different release may encode differently and move every
-        revision. That errs toward reporting a change that did not happen,
-        never toward hiding one that did. Reordering an entity's aliases moves
-        it too, for the same reason and in the same direction.
+        **Equal answers mean content Python compares equal, under one release
+        of this library.** Two limits follow, in opposite directions:
+
+        * a change between values Python calls equal does not move it --
+          ``1`` to ``1.0`` or ``True`` in an entity's ``metadata``, a ``set``
+          to a ``frozenset`` of the same members, one instant moved to another
+          time zone. Nothing resolution reads can differ between such values,
+          but a consumer reading ``metadata`` by type could;
+        * a different release may encode differently and move every revision,
+          and reordering an entity's aliases moves it though the entity
+          resolves the same. Those report a change that did not happen.
 
         **The fold is not part of it.** A normalizer is a callable and is not
         digested by content, so the same entities built with a different fold
@@ -333,14 +340,14 @@ class AsyncEntitySource(Protocol[K]):
     making either awaitable would buy nothing and cost every caller an
     ``await``.
 
-    :meth:`revision` is the one member that is awaitable here and not there,
-    unlike ``describe``: a live source reads its answer from its owner, which
+    :meth:`revision` reports on the source as those two do, and is awaitable
+    here all the same: a live source reads its answer from its owner, which
     may be a round trip.
 
     :meth:`longest_form_tokens` and :meth:`revision` widened this protocol
     too, under the dated exception :class:`EntitySource` records and for the
-    same reason -- neither twin had been in a release. Read that note before adding a second member
-    on its authority: what it licensed was a widening with no conformers to
+    same reason -- neither twin had been in a release. Read that note before
+    adding a third member on its authority: what it licensed was a widening with no conformers to
     break, and that is a fact about ``common/v3.2.0``, not a standing
     allowance.
     """
@@ -716,6 +723,7 @@ class MappingEntitySource(CapabilityMixin):
             TypeError: An entity holds a value no digest can identify, such
                 as a lambda in its ``metadata``. The message names the entity
                 and the field.
+            ValueError: An entity holds a container that holds itself.
         """
         self._index = _EntityIndex(entities, normalizer or default_normalizer, version)
 
@@ -879,6 +887,7 @@ class AsyncMappingEntitySource(CapabilityMixin):
             TypeError: An entity holds a value no digest can identify, such
                 as a lambda in its ``metadata``. The message names the entity
                 and the field.
+            ValueError: An entity holds a container that holds itself.
         """
         self._index = _EntityIndex(entities, normalizer or default_normalizer, version)
 

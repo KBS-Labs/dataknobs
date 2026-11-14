@@ -147,6 +147,9 @@ class AsyncUnfoldedSource(UnfoldedSource):
     async def fetch_origin(self, ref: SourceRef) -> Record | None:  # type: ignore[override]
         return None
 
+    async def revision(self) -> str | None:  # type: ignore[override]
+        return self._inner.revision()
+
     async def fetch_origins(self, refs: Sequence[SourceRef]) -> list[Record | None]:
         return [None] * len(refs)
 

@@ -840,7 +840,7 @@ def _fingerprint_encode(
     if isinstance(value, Enum) and named is not None:
         return {"enum": [named, inner(value.value, path)]}
     if isinstance(value, StructuredConfig) and named is not None:
-        return {"config": [named, value._fingerprint_fields(path, active | {id(value)})]}
+        return {"config": [named, value._fingerprint_fields(path, active | {id(value)}, nan=nan)]}
     if dataclasses.is_dataclass(value) and not isinstance(value, type) and named is not None:
         fields = {
             f.name: inner(getattr(value, f.name), f"{path}.{f.name}")
@@ -912,9 +912,18 @@ def fingerprint_value(value: Any, *, path: str = "value") -> str:
     neither equals the other. A value holding NaN therefore shares a digest
     with another holding NaN where they would not compare equal.
 
-    It is not interchangeable with a config's fingerprint: a config is encoded
-    under a tag of its own, so a value never shares a digest with a config
-    holding it.
+    **A config is encoded as its own fingerprint encodes it**, its
+    ``_fingerprint_value`` hook and ``_FINGERPRINT_EXCLUDE`` included, so
+    ``fingerprint_value(cfg) == cfg.fingerprint()`` for any config ``cfg`` that
+    holds no NaN. One holding NaN has a digest here and none from
+    ``fingerprint()``, which refuses it. A config is tagged as a config, so it
+    never shares a digest with a plain value holding the same fields.
+
+    **Equal means as Python compares**, which is the encoding's point and its
+    limit as a record of content: ``1``, ``1.0`` and ``True`` share an
+    encoding, as do a ``set`` and a ``frozenset`` of the same members, and one
+    instant in two time zones. A change between two such values does not move
+    the digest.
 
     Args:
         value: What to digest.
@@ -928,7 +937,11 @@ def fingerprint_value(value: Any, *, path: str = "value") -> str:
         TypeError: ``value`` holds something nothing identifies -- a lambda, a
             bound method, a live client, a class defined inside a function --
             so two such values could share a digest and differ.
-        ValueError: ``value`` holds a container that holds itself.
+        ValueError: ``value`` holds a container that holds itself, or a
+            config whose ``_FINGERPRINT_EXCLUDE`` names something that is not
+            a field.
+        RecursionError: ``value`` nests deeper than the interpreter's
+            recursion limit allows.
     """
     return _digest(_fingerprint_encode(None, value, path, hook=False, nan=True))
 
@@ -1449,8 +1462,15 @@ class StructuredConfig:
             {"config": [named, self._fingerprint_fields(type(self).__name__, frozenset())]}
         )
 
-    def _fingerprint_fields(self, path: str, active: frozenset[int]) -> dict[str, Any]:
-        """This config's fields, encoded, without the ones its equality or policy leaves out."""
+    def _fingerprint_fields(
+        self, path: str, active: frozenset[int], *, nan: bool = False
+    ) -> dict[str, Any]:
+        """This config's fields, encoded, without the ones its equality or policy leaves out.
+
+        ``nan`` is the mode of the digest this config is nested in, carried
+        down so a config inside :func:`fingerprint_value` tags NaN as the
+        rest of that value does. :meth:`fingerprint` leaves it off.
+        """
         fields = {f.name: f for f in dataclasses.fields(self)}
         unknown = sorted(set(self._FINGERPRINT_EXCLUDE) - fields.keys())
         if unknown:
@@ -1459,7 +1479,9 @@ class StructuredConfig:
                 f"which are not fields. Fields: {sorted(fields)}."
             )
         return {
-            name: _fingerprint_encode(self, getattr(self, name), f"{path}.{name}", active=active)
+            name: _fingerprint_encode(
+                self, getattr(self, name), f"{path}.{name}", active=active, nan=nan
+            )
             for name, f in fields.items()
             if f.compare and name not in self._FINGERPRINT_EXCLUDE
         }
