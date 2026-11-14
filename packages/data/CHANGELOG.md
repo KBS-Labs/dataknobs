@@ -1589,7 +1589,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rung is bounded is the rung's answer, read from the signal registry's
   `window_bounded` metadata, so a consumer's rung kind is covered too; one
   that publishes no answer is bounded exactly when the binding declares
-  `longest_form_tokens:`.
+  `longest_form_tokens:`. The refusal names only the remedy that would bound
+  the rung: a scan that would not trust a count is not told to declare one.
 
   `surface_forms.form_edge:` is the second number a scan reads, and is
   optional: how many punctuation characters the widest edge of any form in the
@@ -1599,7 +1600,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window over the whole run of punctuation beside it: the same answers, at a
   cost growing with the square of that run, each probe a round trip. Its
   absence is not refused, because it costs reads rather than answers, and the
-  scan rung's `max_edge` caps it; a negative value or a non-integer is.
+  scan rung's `max_edge` caps it; a negative value or a non-integer is. A rung
+  naming its own `tokenizer:` or `normalizer:` does not read `form_edge`, for
+  the reason it does not trust the count, so over a live binding it widens
+  over the whole run unless it sets `max_edge` --- `0` for a tokenizer whose
+  tokens already carry the punctuation.
 
   The fold a surface-form lookup compares by is `str.casefold`, and no engine
   performs it at query time --- so the fold happens before the row is written

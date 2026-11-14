@@ -453,22 +453,49 @@ def _window_bounded(spec: Mapping[str, Any], longest_form_tokens: int | None) ->
     window itself, or when the rung would trust the source's count and the
     source has one.
 
-    Reads ``normalizer``, ``tokenizer`` and ``max_window`` exactly as the
-    factories do, through the same checks, so a value the factory would
-    refuse is refused here with the same message, and
-    :func:`_source_measures_probes` is the one rule both consult -- the
-    answer and the rung cannot disagree.
+    Reads ``max_window``, then ``normalizer`` and ``tokenizer``, as the
+    shipped factories do and through the same checks, and
+    :func:`_source_measures_probes` is the one rule both consult, so for a
+    rung built by those factories the answer and the rung cannot disagree. A
+    ``max_window`` settles the answer, so the other two are not read when one
+    is set; the factory still checks them when it builds. A subclass whose
+    factory reads its spec differently answers for itself -- see
+    :func:`~dataknobs_common.entity_resolution.declared_signal_metadata`.
 
     Raises:
-        ValidationError: For a ``max_window`` below one, a ``normalizer``
-            that is not callable, or a ``tokenizer`` the registry cannot
-            build -- whatever the factory would refuse.
+        ValidationError: For a ``max_window`` that is not a whole number of at
+            least one; and, when no ``max_window`` is set, for a
+            ``normalizer`` that is not callable or a ``tokenizer`` the
+            registry cannot build.
     """
     if _checked_max_window(spec.get("max_window")) is not None:
         return True
     normalizer = _checked_callable(spec.get("normalizer"), "normalizer")
     tokenizer = tokenizer_from_config(spec.get("tokenizer"))
     return _source_measures_probes(normalizer, tokenizer) and longest_form_tokens is not None
+
+
+def _checked_count(value: object, name: str, at_least: int, consequence: str) -> int | None:
+    """``value`` as given, when it is ``None`` or a whole number of at least ``at_least``.
+
+    Every integer cap the rungs take is refused through here, so they all
+    refuse alike. These values arrive from documents, so they are external
+    input: a string or a float is refused here, naming the key, rather than
+    failing later in a comparison or inside ``range``. A bool is refused too,
+    although Python counts it as an ``int``, because ``true`` written for a cap
+    is a mistake rather than the number one.
+
+    Raises:
+        ValidationError: For a value that is not a whole number, or one below
+            ``at_least``; ``consequence`` says what the second would build.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValidationError(f"{name} must be a whole number, got {value!r}")
+    if value < at_least:
+        raise ValidationError(f"{name} must be at least {at_least}, got {value}. {consequence}")
+    return value
 
 
 def _checked_query_tokens(max_query_tokens: int | None) -> int | None:
@@ -480,15 +507,16 @@ def _checked_query_tokens(max_query_tokens: int | None) -> int | None:
     indistinguishable from a vocabulary that matches nothing.
 
     Raises:
-        ValidationError: For a ``max_query_tokens`` below one.
+        ValidationError: For a ``max_query_tokens`` that is not a whole
+            number, or is below one.
     """
-    if max_query_tokens is not None and max_query_tokens < 1:
-        raise ValidationError(
-            f"max_query_tokens must be at least 1, got {max_query_tokens}. A "
-            f"rung that may probe no tokens reports an empty result for every "
-            f"query, which is what a vocabulary matching nothing looks like."
-        )
-    return max_query_tokens
+    return _checked_count(
+        max_query_tokens,
+        "max_query_tokens",
+        1,
+        "A rung that may probe no tokens reports an empty result for every "
+        "query, which is what a vocabulary matching nothing looks like.",
+    )
 
 
 def _checked_query(tokens: Sequence[tuple[int, int]], max_query_tokens: int | None) -> None:
@@ -570,15 +598,16 @@ def _checked_max_window(max_window: int | None) -> int | None:
     A caller who wants a rung that never fires leaves it out of the cascade.
 
     Raises:
-        ValidationError: For a ``max_window`` below one.
+        ValidationError: For a ``max_window`` that is not a whole number, or
+            is below one.
     """
-    if max_window is not None and max_window < 1:
-        raise ValidationError(
-            f"max_window must be at least 1, got {max_window}. A scan with a "
-            f"window narrower than one token probes nothing and would report "
-            f"an empty result for every query."
-        )
-    return max_window
+    return _checked_count(
+        max_window,
+        "max_window",
+        1,
+        "A scan with a window narrower than one token probes nothing and "
+        "would report an empty result for every query.",
+    )
 
 
 def _checked_max_edge(max_edge: int | None) -> int | None:
@@ -589,14 +618,15 @@ def _checked_max_edge(max_edge: int | None) -> int | None:
     and still answers every form whose edges are alphanumeric.
 
     Raises:
-        ValidationError: For a ``max_edge`` below zero.
+        ValidationError: For a ``max_edge`` that is not a whole number, or is
+            below zero.
     """
-    if max_edge is not None and max_edge < 0:
-        raise ValidationError(
-            f"max_edge must be at least 0, got {max_edge}. It counts the "
-            f"punctuation characters a probe may be widened over on each side."
-        )
-    return max_edge
+    return _checked_count(
+        max_edge,
+        "max_edge",
+        0,
+        "It counts the punctuation characters a probe may be widened over on each side.",
+    )
 
 
 def _query_tokens(tokenizer: Tokenizer, query: str) -> tuple[tuple[int, int], ...]:
@@ -901,9 +931,16 @@ def _checked_threshold(threshold: float) -> float:
     of silence this family refuses to ship. One exactly is a real request --
     *only an exact fold* -- and is kept.
 
+    A value that is not a number -- a string, or a bool, which Python would
+    compare as ``1`` -- is refused by name, for :func:`_checked_count`'s
+    reason.
+
     Raises:
-        ValidationError: For a threshold outside ``(0, 1]``.
+        ValidationError: For a threshold that is not a number, or is outside
+            ``(0, 1]``.
     """
+    if isinstance(threshold, bool) or not isinstance(threshold, int | float):
+        raise ValidationError(f"threshold must be a number, got {threshold!r}")
     if not 0.0 < threshold <= 1.0:
         raise ValidationError(
             f"threshold must be greater than 0 and at most 1, got {threshold}. "
@@ -1527,6 +1564,12 @@ class ScanningSignal(DeclaredSignal):
         classmethod. One that does not is treated as bounded exactly when the
         source declares a count, which is what a door assumed before the
         question could be asked.
+
+        A subclass of this class is one that does not, unless its own body
+        defines the classmethod: this answer reads a spec as the shipped
+        factory does, and a subclass's factory may read it otherwise. One
+        whose factory reads it the same way defines it and returns
+        ``super().window_bounded(spec, longest_form_tokens)``.
 
         Raises:
             ValidationError: For a spec the factory would refuse.

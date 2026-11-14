@@ -329,6 +329,13 @@ window over the whole run of punctuation beside it, every pair of prefixes a
 round trip, so one word between two 300-character `=====` rules is 90,600
 reads. Declare it, or set `max_edge` on the `scan` rung.
 
+A rung naming its own `tokenizer:` or `normalizer:` does not read `form_edge`
+either, for the reason it does not trust `longest_form_tokens`: the edge was
+measured beside default tokens under the table's fold. Over a live binding it
+therefore widens over the whole run unless it sets `max_edge` — `max_edge: 0`
+for a tokenizer whose tokens already carry the punctuation. Unlike the window,
+this is not refused at load, because it costs reads rather than answers.
+
 A source with no declared lookup **refuses** the call rather than answering over
 the unfolded column:
 

@@ -1382,7 +1382,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where a caller who knows their own queries supplies the number the
   vocabulary could not. Below one is refused rather than clamped — a scan that
   probes nothing reports an empty result for every query, which is
-  indistinguishable from a vocabulary that matches nothing.
+  indistinguishable from a vocabulary that matches nothing. A value that is
+  not a whole number — `"4"`, `2.5`, `true` — is refused with a
+  `ValidationError` naming the key, here and for `max_edge` and
+  `max_query_tokens`, as is a `threshold` that is not a number.
 
   A rung handed its own `normalizer` does not ask the source for a bound at
   all. The source measured its keys before that rung existed and cannot see
@@ -2091,7 +2094,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rung's registry metadata when the class defines it, so a door refusing an
   unbounded scan asks the rung rather than restating which keys bound it. A
   consumer's rung declaring `bounded_by_longest_form` opts in by defining the
-  same classmethod.
+  same classmethod on its own class: the answer is not inherited, because a
+  subclass's factory may read the spec differently, so a subclass that wants
+  to be asked defines it and delegates to `super()`.
 
 - **`SourceDescription.form_edge: int | None`, with no default**, for the
   reason `declares` has none. How many punctuation characters the widest edge

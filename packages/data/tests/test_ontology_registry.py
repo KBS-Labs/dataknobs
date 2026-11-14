@@ -2244,6 +2244,25 @@ async def test_a_declared_scan_with_its_own_tokenizer_does_not_lean_on_the_count
     await _loads(capped)
 
 
+@pytest.mark.usefixtures("registered_tokenizer")
+async def test_the_remedy_offers_only_what_would_bound_this_rung() -> None:
+    """A rung that does not trust a count is not told to declare one.
+
+    Over a binding with no count, a scan naming its own tokenizer was told to
+    declare ``longest_form_tokens`` or set ``max_window``. Declaring the count
+    led to a second refusal, because the rung does not trust it. Only
+    ``max_window`` bounds this rung, so that is the only remedy offered, and
+    following it loads.
+    """
+    rung = {"kind": "scan", "tokenizer": "segmenter"}
+    with pytest.raises(ValidationError) as raised:
+        await _loads(_scanning_document(rung=rung))
+    assert "max_window" in str(raised.value)
+    assert "must declare" not in str(raised.value)
+
+    await _loads(_scanning_document(rung={**rung, "max_window": 4}))
+
+
 async def test_a_declared_scan_naming_the_default_tokenizer_keeps_the_count() -> None:
     await _loads(
         _scanning_document(rung={"kind": "scan", "tokenizer": "default"}, longest_form_tokens=4)

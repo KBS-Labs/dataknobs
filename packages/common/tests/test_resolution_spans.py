@@ -53,6 +53,7 @@ from dataknobs_common.entity_resolution import (
     TOKENIZERS,
     async_signal_backends,
     content_span,
+    declared_signal_metadata,
     signal_backends,
     token_spans,
 )
@@ -1905,3 +1906,71 @@ async def test_window_bounded_answers_what_the_built_rung_does(
     assert AsyncScanningSignal.window_bounded(spec, count) is answer
     assert signal_backends.get_metadata("scan")["window_bounded"](spec, count) is answer
     assert answer is not probed_every_window
+
+
+_NOT_A_COUNT = [
+    (ScanningSignal, "max_window", "4"),
+    (ScanningSignal, "max_window", 2.5),
+    (ScanningSignal, "max_window", True),
+    (ScanningSignal, "max_edge", "1"),
+    (ScanningSignal, "max_edge", 0.5),
+    (ScanningSignal, "max_edge", False),
+    (AsyncScanningSignal, "max_window", "4"),
+    (AsyncScanningSignal, "max_edge", 0.5),
+    (LexicalSignal, "max_query_tokens", "8"),
+    (LexicalSignal, "max_query_tokens", 2.5),
+    (LexicalSignal, "threshold", "0.9"),
+    (LexicalSignal, "threshold", True),
+    (AsyncLexicalSignal, "max_query_tokens", True),
+    (AsyncLexicalSignal, "threshold", "0.9"),
+]
+
+
+@pytest.mark.parametrize(("rung", "key", "value"), _NOT_A_COUNT, ids=repr)
+def test_a_number_of_the_wrong_kind_is_refused_by_name(rung: type, key: str, value: Any) -> None:
+    """A document's ``"4"`` or ``2.5`` is refused where it is read, naming the key.
+
+    These values come from configuration, so they are external input. Before,
+    a string failed later with a bare ``TypeError`` from a comparison, and a
+    float passed and failed on the first query, inside ``range``. A bool is an
+    ``int`` to Python and is refused anyway: ``max_window: true`` is a typo,
+    not one token.
+    """
+    asynchronous = rung in (AsyncScanningSignal, AsyncLexicalSignal)
+    source = AsyncMappingEntitySource(TOWER) if asynchronous else MappingEntitySource(TOWER)
+    with pytest.raises(ValidationError, match=key):
+        rung(source, **{key: value})
+
+
+def test_window_bounded_refuses_a_cap_of_the_wrong_kind() -> None:
+    """The door asks before anything is built, so it is where a bad value surfaces first."""
+    with pytest.raises(ValidationError, match="max_window"):
+        ScanningSignal.window_bounded({"max_window": "4"}, 4)
+    with pytest.raises(ValidationError, match="max_window"):
+        AsyncScanningSignal.window_bounded({"max_window": 2.5}, 4)
+
+
+def test_only_a_class_that_answers_for_itself_publishes_window_bounded() -> None:
+    """The answer is not inherited; the fact that the cost depends on a count is.
+
+    ``window_bounded`` reads a spec the way the shipped factory does. A
+    subclass's factory may read it some other way -- a tokenizer fixed in code
+    and absent from the spec -- so an inherited answer could accept a scan that
+    enumerates every window. A subclass that wants to be asked defines the
+    classmethod itself; one that does not is read as a rung with no answer.
+    """
+
+    class FixedTokens(ScanningSignal):
+        """Registered by a factory that passes a tokenizer the spec never names."""
+
+    class Answers(ScanningSignal):
+        @classmethod
+        def window_bounded(cls, spec: Mapping[str, Any], longest_form_tokens: int | None) -> bool:
+            return spec.get("window") is not None
+
+    inherited = declared_signal_metadata(FixedTokens, {})
+    assert "window_bounded" not in inherited
+    assert inherited["bounded_by_longest_form"] is True
+
+    assert declared_signal_metadata(Answers, {})["window_bounded"]({"window": 3}, None) is True
+    assert declared_signal_metadata(ScanningSignal, {})["window_bounded"]({}, 4) is True

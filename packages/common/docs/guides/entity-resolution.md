@@ -884,6 +884,7 @@ three tokens), and a name inside a script written without spaces
 the rung tokens that reach them — any callable returning a string's tokens as
 in-order, non-overlapping half-open spans:
 
+<!-- worked-tokens -->
 ```python
 import re
 

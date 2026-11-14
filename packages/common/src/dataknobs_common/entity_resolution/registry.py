@@ -198,6 +198,15 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
     without a door restating it. A rung that defines no such classmethod
     gets no entry, so its metadata is what it was, and a door reading the
     key falls back to *bounded exactly when the source declares a count*.
+
+    **Unlike the two facts, it is not inherited.** The answer reads a spec
+    the way the class's own factory does, and a subclass is usually
+    registered with a factory of its own -- one that fixes a tokenizer in
+    code, say, which no spec names -- so an inherited answer could accept a
+    scan that enumerates every window. Only a class whose own body defines
+    ``window_bounded`` publishes it; a subclass that reads its spec as its
+    parent's factory does says so by defining it and delegating to
+    ``super()``.
     Signal metadata is read through ``get_metadata`` and never serialised,
     so a callable here travels nowhere.
 
@@ -210,7 +219,7 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
 
     Returns:
         A new dict: ``base``, plus each fact read off ``rung``, plus
-        ``window_bounded`` where ``rung`` defines it.
+        ``window_bounded`` where ``rung``'s own body defines it.
     """
     metadata = dict(
         base,
@@ -218,7 +227,7 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
         bounded_by_longest_form=getattr(rung, "bounded_by_longest_form", False),
     )
     window_bounded = getattr(rung, "window_bounded", None)
-    if callable(window_bounded):
+    if "window_bounded" in vars(rung) and callable(window_bounded):
         metadata["window_bounded"] = window_bounded
     return metadata
 

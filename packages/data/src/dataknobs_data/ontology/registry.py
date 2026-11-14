@@ -2878,6 +2878,14 @@ def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
     could ask: bounded exactly when the binding declares
     ``longest_form_tokens``.
 
+    **The remedy is asked as well.** Over a binding with no count, whether
+    declaring one would help depends on the rung: a scan with its own
+    tokenizer would not trust it, and telling its author to declare one sends
+    them to a second refusal. So each unbounded spec is asked again, as if
+    the binding declared a count, and ``longest_form_tokens`` is offered only
+    when every one of them would then be bounded; otherwise ``max_window`` is
+    the only remedy named.
+
     **Declared rungs only**, which is the sibling's scope and for its reason:
     a document with no ``resolver:`` section gets the default composition,
     whose scan nothing in the document names. That case belongs where the rung
@@ -2894,6 +2902,7 @@ def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
         return
     longest = lookup.longest_form_tokens
     unbounded: set[str] = set()
+    a_count_would_bound = True
     for spec in _declared_rungs(config):
         kind = str(spec.get("kind", ""))
         metadata = async_signal_backends.get_metadata(kind)
@@ -2903,10 +2912,13 @@ def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
         bounded = ask(spec, longest) if callable(ask) else longest is not None
         if not bounded:
             unbounded.add(kind)
+            # Would a declared count bound it? Any positive count asks that.
+            if callable(ask) and not ask(spec, 1):
+                a_count_would_bound = False
     if not unbounded:
         return
     scanning = sorted(unbounded)
-    if longest is None:
+    if longest is None and a_count_would_bound:
         remedy = (
             "A live table cannot be counted, so the binding must declare "
             "`surface_forms.longest_form_tokens:`, or the rung must cap its own "
@@ -2914,10 +2926,10 @@ def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
         )
     else:
         remedy = (
-            "The binding's `surface_forms.longest_form_tokens:` counts default "
-            "tokens under the source's fold, and this rung names a `tokenizer:` "
-            "or `normalizer:` of its own, so it does not trust that count -- "
-            "cap its window with `max_window:`"
+            "A count in `surface_forms.longest_form_tokens:` is in default "
+            "tokens under the source's fold, and this rung does not trust one "
+            "-- a `tokenizer:` or `normalizer:` of its own is what stops the "
+            "shipped scan trusting it -- so cap its window with `max_window:`"
         )
     raise ValidationError(
         f"binding {binding!r} is read by {scanning}, which probes every window "
