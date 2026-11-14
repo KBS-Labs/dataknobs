@@ -193,6 +193,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A config that does not fit its class answers 422 through the API
+  handlers.** `DEFAULT_ERROR_POLICY` has a row for `ConfigFieldError`
+  (`dataknobs-common`): 422, with message and `detail` disclosed, as its
+  parent `ValidationError` has. A config missing a required field used to
+  reach the handlers as the dataclass constructor's `TypeError`, which no
+  row governs, and answered `500 / "An unexpected error occurred"`. The
+  message names the config class, its fields and the keys the caller wrote,
+  never a value.
+
 - **BREAKING: bot configs are no longer hashable**, as no `StructuredConfig`
   now is (see `dataknobs-common`). Most raised at `hash()` already. These
   hashed, always or with their defaults, and can no longer be dict keys or set

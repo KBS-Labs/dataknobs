@@ -345,6 +345,9 @@ def _api_exception_classes() -> dict[str, type[BaseException]]:
 #: the source has to fail here first.
 _EXPECTED_POLICY: dict[str, tuple[int, bool, bool]] = {
     "ValidationError": (422, True, True),
+    # A ValidationError subclass; its message and context carry names, never
+    # a value.
+    "ConfigFieldError": (422, True, True),
     "ConsentRequiredError": (403, True, True),
     "ConcurrencyError": (409, True, True),
     # Overrides an inherited 500 rather than declaring a base's status; lives
@@ -1038,7 +1041,7 @@ class TestErrorPolicyTable:
         # wraps is not contiguous in the file. Flatten before matching.
         source = " ".join(raw.replace("#:", " ").split())
         count = len(DEFAULT_ERROR_POLICY)
-        spelled = {11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen"}[count]
+        spelled = {11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen", 15: "fifteen"}[count]
 
         assert f"{spelled.capitalize()} entries govern" in source, (
             f"the table has {count} rows; update the comment over "
