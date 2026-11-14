@@ -357,8 +357,10 @@ functions by import path. A value nothing identifies, such as a lambda, a bound
 method, a live client, or an instance of a class defined inside a function, is
 refused with `TypeError` naming the field, because two such values could share
 a key and differ. So is calling `fingerprint()` on a config whose own class is
-defined inside a function. NaN, being unequal to itself, and a container that
-holds itself are refused with `ValueError`.
+defined inside a function. NaN, being unequal to itself, a container that
+holds itself, and a `_fingerprint_value` whose answer asks it about the same
+value again are refused with `ValueError`. An answer handing the value to
+another config's hook is followed: that is a chain, not a loop.
 
 Two extension points. `_FINGERPRINT_EXCLUDE` leaves fields out: name only
 fields that do not decide what is built from the config, since two configs

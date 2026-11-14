@@ -833,7 +833,8 @@ class _EncodeWalk:
     and a later answer taking its ``id`` would otherwise be handed its node --
     a wrong digest, silently. ``active`` holds the ids on the current path, so
     a value that holds itself is refused rather than followed for ever, while
-    a container that is merely shared is not.
+    a container that is merely shared is not. ``asked`` does the same for the
+    hook; see :meth:`_hooked`.
 
     Anything not encoded by value goes to ``owner._fingerprint_value``, and
     what that returns is tagged as its answer and encoded with the hook off,
@@ -843,11 +844,12 @@ class _EncodeWalk:
     else, since its name could be another type's.
     """
 
-    __slots__ = ("active", "done", "keep", "nan")
+    __slots__ = ("active", "asked", "done", "keep", "nan")
 
     def __init__(self, *, nan: bool) -> None:
         self.nan = nan
         self.active: set[int] = set()
+        self.asked: set[tuple[int, type]] = set()
         self.done: dict[tuple[int, int, bool], dict[str, str]] = {}
         self.keep: list[Any] = []
 
@@ -885,33 +887,42 @@ class _EncodeWalk:
 
     def _body(self, owner: StructuredConfig | None, value: Any, path: str, *, hook: bool) -> Any:
         """``value``'s own encoding, its member containers standing as nodes."""
-
-        def inner(item: Any, at: str) -> Any:
-            return self.encode(owner, item, at, hook=hook)
-
         named = _import_path(type(value))
         if isinstance(value, Enum) and named is not None:
-            return {"enum": [named, inner(value.value, path)]}
+            return {"enum": [named, self.encode(owner, value.value, path, hook=hook)]}
         if isinstance(value, StructuredConfig) and named is not None:
             return {"config": [named, value._fingerprint_fields(self, path)]}
         if dataclasses.is_dataclass(value) and not isinstance(value, type) and named is not None:
             fields = {
-                f.name: inner(getattr(value, f.name), f"{path}.{f.name}")
+                f.name: self.encode(owner, getattr(value, f.name), f"{path}.{f.name}", hook=hook)
                 for f in dataclasses.fields(value)
                 if f.compare
             }
             return {"dataclass": [named, fields]}
         if isinstance(value, Mapping):
             pairs = [
-                [inner(k, f"{path}[{k!r}]"), inner(v, f"{path}[{k!r}]")] for k, v in value.items()
+                [
+                    self.encode(owner, k, f"{path}[{k!r}]", hook=hook),
+                    self.encode(owner, v, f"{path}[{k!r}]", hook=hook),
+                ]
+                for k, v in value.items()
             ]
             return {"map": sorted(pairs, key=lambda pair: _sort_key(pair[0]))}
         if isinstance(value, list):
-            return [inner(v, f"{path}[{i}]") for i, v in enumerate(value)]
+            return [self.encode(owner, v, f"{path}[{i}]", hook=hook) for i, v in enumerate(value)]
         if isinstance(value, tuple):
-            return {"tuple": [inner(v, f"{path}[{i}]") for i, v in enumerate(value)]}
+            return {
+                "tuple": [
+                    self.encode(owner, v, f"{path}[{i}]", hook=hook) for i, v in enumerate(value)
+                ]
+            }
         if isinstance(value, (set, frozenset)):
-            return {"set": sorted((inner(v, f"{path}{{...}}") for v in value), key=_sort_key)}
+            return {
+                "set": sorted(
+                    (self.encode(owner, v, f"{path}{{...}}", hook=hook) for v in value),
+                    key=_sort_key,
+                )
+            }
         if isinstance(value, (datetime.date, datetime.time, datetime.timedelta)):
             return _encode_temporal(value)
         if isinstance(value, pathlib.PurePath):
@@ -940,26 +951,37 @@ class _EncodeWalk:
     def _hooked(self, owner: StructuredConfig, value: Any, path: str, named: str | None) -> Any:
         """The hook's answer for ``value``, tagged as an answer.
 
-        A value the hook answers for usually is not a container, so nothing
-        on the way in put it on the path, and an answer can bring it round
-        again: a nested config in the answer turns the hook back on, and
-        asking about the same value answers the same config. So such a value
-        is checked against the path here and joins it while its answer is
-        encoded. A container -- a dataclass no import reaches -- is already
-        on the path, put there by :meth:`encode`.
+        An answer can bring its value round again: a nested config in it
+        turns the hook back on. That is a cycle only when **the same hook** is
+        asked about the same value again, and since a hook's answer may
+        depend only on the value, a hook is its owner's type: an owner of
+        that type would answer the same way, so the walk would never end.
+        Another config's hook asked about the value is a chain, not a loop,
+        and is followed. ``asked`` holds each (value, owner type) pair being
+        answered on the current path.
+
+        A container whose encoding ended here -- a dataclass no import
+        reaches -- leaves the path while its answer is encoded: the answer is
+        another encoding of it, not the container holding itself, and
+        ``asked`` is what bounds that walk.
         """
-        joins = not _is_container(value)
-        marker = id(value)
-        if joins and marker in self.active:
-            raise ValueError(f"{path} holds itself, so it has no finite encoding.")
+        question = (id(value), type(owner))
+        if question in self.asked:
+            raise ValueError(
+                f"{path} brings its value back to {type(owner).__qualname__}._fingerprint_value, "
+                "which would answer it again, so it has no finite encoding."
+            )
         answered = owner._fingerprint_value(value, path)
-        if joins:
-            self.active.add(marker)
+        on_path = _is_container(value)
+        self.asked.add(question)
+        if on_path:
+            self.active.discard(question[0])
         try:
             return {"custom": [named, self.encode(owner, answered, path, hook=False)]}
         finally:
-            if joins:
-                self.active.discard(marker)
+            self.asked.discard(question)
+            if on_path:
+                self.active.add(question[0])
 
 
 def _digest(encoded: Any) -> str:
@@ -1014,9 +1036,10 @@ def fingerprint_value(value: Any, *, path: str = "value") -> str:
         TypeError: ``value`` holds something nothing identifies -- a lambda, a
             bound method, a live client, a class defined inside a function --
             so two such values could share a digest and differ.
-        ValueError: ``value`` holds a container that holds itself, or a
-            config whose ``_FINGERPRINT_EXCLUDE`` names something that is not
-            a field.
+        ValueError: ``value`` holds a container that holds itself, a config
+            whose ``_fingerprint_value`` answers with something that asks it
+            about the same value again, or a config whose
+            ``_FINGERPRINT_EXCLUDE`` names something that is not a field.
         RecursionError: ``value`` nests deeper than the interpreter's
             recursion limit allows.
     """
@@ -1528,8 +1551,10 @@ class StructuredConfig:
         Raises:
             TypeError: A field holds a value nothing identifies, or the
                 config's own class is defined inside a function.
-            ValueError: A field holds NaN or a container that holds itself, or
-                ``_FINGERPRINT_EXCLUDE`` names something that is not a field.
+            ValueError: A field holds NaN or a container that holds itself,
+                ``_fingerprint_value`` answers with something that asks it
+                about the same value again, or ``_FINGERPRINT_EXCLUDE`` names
+                something that is not a field.
         """
         named = _import_path(type(self))
         if named is None:
@@ -1579,6 +1604,9 @@ class StructuredConfig:
         **The answer may depend only on ``value``.** A digest reads a shared
         container once, so the answer given at one place a value occurs
         stands for every place it occurs. ``path`` is for the error message.
+        It is also how a loop is told from a chain: an answer that asks a
+        config of this class about the same value again is refused as a loop,
+        even when that config's own state would have answered differently.
 
         Args:
             value: The value, from a field or from inside one.

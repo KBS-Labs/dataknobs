@@ -18,11 +18,10 @@ What this file pins:
 
 from __future__ import annotations
 
-import copy
 import subprocess
 import sys
 import textwrap
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -71,6 +70,16 @@ class Opaque:
 
     def __init__(self, n: int) -> None:
         self.n = n
+
+
+def a_local_dataclass(n: int = 1) -> Any:
+    """An instance of a dataclass defined in a function, so no import reaches it."""
+
+    @dataclass(frozen=True)
+    class Local:
+        n: int
+
+    return Local(n)
 
 
 @dataclass(frozen=True)
@@ -174,25 +183,34 @@ class Inner(StructuredConfig):
 
 
 @pytest.mark.parametrize(
-    "shared",
+    "make",
     [
-        ["a", ["b"]],
-        ("a", ("b",)),
-        {"k": {"j": 1}},
-        frozenset({"a", "b"}),
-        Plain(columns=["x", "y"]),
-        Inner(names=("x", "y")),
+        lambda: ["a", ["b"]],
+        lambda: ("a", tuple("b")),
+        lambda: {"k": {"j": 1}},
+        lambda: frozenset(["a", "b"]),
+        lambda: Plain(columns=["x", "y"]),
+        lambda: Inner(names=tuple("xy")),
     ],
     ids=["list", "tuple", "mapping", "frozenset", "dataclass", "config"],
 )
-def test_a_shared_subtree_digests_as_its_copy(shared: Any) -> None:
-    """A node that depended on identity would part these two."""
+def test_a_shared_subtree_digests_as_its_copy(make: Callable[[], Any]) -> None:
+    """A node that depended on identity would part these two.
+
+    Each side is built afresh rather than copied: ``copy.deepcopy`` hands an
+    immutable value back as itself, which would compare sharing with sharing.
+    The tuples are built by ``tuple()`` because a literal is a constant, one
+    object however often the lambda runs.
+    """
+    shared, equal = make(), make()
+    assert equal is not shared
+    assert equal == shared
     assert fingerprint_value({"a": shared, "b": shared}) == fingerprint_value(
-        {"a": shared, "b": copy.deepcopy(shared)}
+        {"a": shared, "b": equal}
     )
     assert (
         Holder(payload=[shared, shared]).fingerprint()
-        == Holder(payload=[shared, copy.deepcopy(shared)]).fingerprint()
+        == Holder(payload=[shared, equal]).fingerprint()
     )
 
 
@@ -215,10 +233,56 @@ def test_a_shared_container_that_holds_itself_is_refused() -> None:
         fingerprint_value([looped, looped])
 
 
+_ENDLESS = r"Rewrap\.endpoint.*Rewrap\._fingerprint_value.*no finite encoding"
+
+
 def test_a_cycle_closed_by_a_hooks_answer_is_refused() -> None:
     """No container closes this cycle, so only the hook branch can see it."""
-    with pytest.raises(ValueError, match=r"Rewrap\.endpoint.*holds itself"):
+    with pytest.raises(ValueError, match=_ENDLESS):
         Rewrap(endpoint=Opaque(1)).fingerprint()
+
+
+def test_a_cycle_through_a_dataclass_no_import_reaches_is_refused() -> None:
+    """Such a dataclass is a container, and its encoding still ends at the hook."""
+    with pytest.raises(ValueError, match=_ENDLESS):
+        Rewrap(endpoint=a_local_dataclass()).fingerprint()
+
+
+# --------------------------------------------------------------------------
+# A value passed between two hooks is not a cycle
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class EndpointSpec(StructuredConfig):
+    """Identifies the value by what it holds: the end of the chain."""
+
+    endpoint: Any = None
+
+    def _fingerprint_value(self, value: Any, path: str) -> Any:
+        return f"opaque-{value.n}"
+
+
+@dataclass(frozen=True)
+class Gateway(StructuredConfig):
+    """Wraps the value in a spec config, whose own hook identifies it."""
+
+    endpoint: Any = None
+
+    def _fingerprint_value(self, value: Any, path: str) -> Any:
+        return EndpointSpec(endpoint=value)
+
+
+@pytest.mark.parametrize(
+    "make",
+    [Opaque, a_local_dataclass],
+    ids=["plain-value", "dataclass-no-import-reaches"],
+)
+def test_a_value_handed_to_another_configs_hook_is_digested(make: Callable[[int], Any]) -> None:
+    """Two hooks asked about one value once each: a chain, not a loop."""
+    one = Gateway(endpoint=make(1)).fingerprint()
+    assert one == Gateway(endpoint=make(1)).fingerprint()
+    assert one != Gateway(endpoint=make(2)).fingerprint()
 
 
 # --------------------------------------------------------------------------
