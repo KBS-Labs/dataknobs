@@ -106,7 +106,7 @@ except DataknobsError as e:
 
 All standard exceptions extend `DataknobsError` and follow the same constructor pattern.
 
-Beyond the eight below, the hierarchy also carries `ConsentRequiredError`,
+Beyond the nine below, the hierarchy also carries `ConsentRequiredError`,
 `RateLimitError` (which extends `OperationError`), and the dotted-path pair
 `DottedPathError` / `DottedPathTypeError` (both extending
 `ConfigurationError`). See the
@@ -130,6 +130,35 @@ raise ValidationError(
     context={"email": "invalid-email", "field": "user.email"}
 )
 ```
+
+#### `ConfigFieldError`
+
+Raised by `StructuredConfig.from_dict` when a mapping does not fit its config
+class: it leaves out a required field, or carries a key a class with
+`_UNKNOWN_KEYS = "raise"` does not read. Both a `ValidationError` and a
+`ValueError`, so an `except ValueError` written against the unknown-key
+refusal still catches it.
+
+```python
+class ConfigFieldError(ValidationError, ValueError):
+    """A mapping does not fit the config class it is read into."""
+```
+
+The message names the class, its field names and the keys the caller wrote,
+never a value. `context` carries `config_class`, and either `missing` or
+`unknown` with `accepted`.
+
+**Example:**
+```python
+from dataknobs_common import ConfigFieldError
+
+try:
+    config = EndpointConfig.from_dict(raw)
+except ConfigFieldError as e:
+    print(e.context.get("missing"))  # e.g. ['token', 'url']
+```
+
+See [A mapping that does not fit its class](structured-config.md#a-mapping-that-does-not-fit-its-class-configfielderror).
 
 #### `ConfigurationError`
 

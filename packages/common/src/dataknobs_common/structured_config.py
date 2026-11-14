@@ -77,7 +77,7 @@ from typing import (
     get_type_hints,
 )
 
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.exceptions import ConfigFieldError, ConfigurationError
 from dataknobs_common.registry import Registry, _bind_structured_config
 from dataknobs_common.serialization import jsonify
 
@@ -262,6 +262,43 @@ def _accepted_keys(cls: type) -> frozenset[str]:
     return fields | declared
 
 
+@functools.cache
+def _required_fields(cls: type) -> tuple[str, ...]:
+    """The init fields ``from_dict`` cannot leave out, sorted, computed once.
+
+    A field is required when the constructor takes it and it declares
+    neither a ``default`` nor a ``default_factory``. Like
+    :func:`_accepted_keys`, a class-definition-time fact, so cached.
+    """
+    if not dataclasses.is_dataclass(cls):
+        return ()
+    return tuple(
+        sorted(
+            f.name
+            for f in dataclasses.fields(cls)
+            if f.init
+            and f.default is dataclasses.MISSING
+            and f.default_factory is dataclasses.MISSING
+        )
+    )
+
+
+def _missing_fields_error(cls: type, missing: list[str], *, preamble: str = "") -> ConfigFieldError:
+    """The refusal for required fields a mapping leaves out, naming every one.
+
+    CPython's constructor names the first only, in its own words. This names
+    the class and all the missing fields, and nothing the caller wrote, so
+    the message is safe to show the config's author (see
+    :class:`~dataknobs_common.exceptions.ConfigFieldError`).
+    """
+    names = " and ".join(", ".join(repr(name) for name in missing).rsplit(", ", 1))
+    noun = "field" if len(missing) == 1 else "fields"
+    return ConfigFieldError(
+        f"{preamble}{cls.__name__} requires the {noun} {names}, which the config does not supply.",
+        context={"config_class": cls.__name__, "missing": list(missing)},
+    )
+
+
 def _unknown_keys_message(cls: type, unknown: list[str], accepted: frozenset[str]) -> str:
     """Explain rejected keys by naming a likely intended spelling for each.
 
@@ -276,9 +313,11 @@ def _unknown_keys_message(cls: type, unknown: list[str], accepted: frozenset[str
         close = difflib.get_close_matches(key, candidates, n=1, cutoff=0.6)
         if not close and key:
             # A short key scores poorly against a longer canonical one
-            # (``connection`` against ``connection_string``), so fall back
-            # to a prefix relationship -- which is what an abbreviated or
-            # truncated spelling actually is.
+            # (``conn`` against ``connection_string`` scores 0.38, under the
+            # 0.6 cutoff), so fall back to a prefix relationship -- which is
+            # what an abbreviated or truncated spelling actually is. A longer
+            # truncation such as ``connection`` (0.74) never gets here:
+            # difflib answers it above.
             #
             # Guarded on a non-empty ``key`` because every candidate starts
             # with the empty string: an empty key would otherwise be told it
@@ -1336,13 +1375,20 @@ class StructuredConfig:
 
         Each ``@dataclass`` field on ``cls`` is read from ``config`` by
         name. Fields absent from ``config`` use their declared default
-        (or ``default_factory``). Keys in ``config`` that don't match
+        (or ``default_factory``); a field that declares neither is
+        required, and a mapping leaving it out is refused with a
+        :class:`~dataknobs_common.exceptions.ConfigFieldError` naming every
+        such field, before the constructor is called. A required field
+        written as ``None`` is supplied, not missing: some required fields
+        are legitimately optional-typed, and only a caller can say that
+        ``None`` means absent. Keys in ``config`` that don't match
         any field are ignored — registry-routing keys like
         ``"backend"`` pass through cleanly — unless the class sets
         ``_UNKNOWN_KEYS = "raise"``, in which case an unmatched key is
-        a ``ValueError`` naming it and the accepted spellings. The check
-        runs *after* :meth:`_normalize_dict`, so an alias that method
-        translates is accepted; one it does not is what gets reported.
+        a ``ConfigFieldError`` naming it and the accepted spellings. Both
+        checks run *after* :meth:`_normalize_dict`, so an alias that method
+        translates is accepted, and supplies its field; one it does not is
+        what gets reported.
 
         A field whose declared type is (or contains) a
         ``StructuredConfig`` subclass is rebuilt recursively from its raw
@@ -1364,6 +1410,15 @@ class StructuredConfig:
         Returns:
             A new ``cls`` instance with fields populated from
             ``config`` (and defaults where keys are absent).
+
+        Raises:
+            ConfigFieldError: When ``config`` leaves out a required field,
+                or carries a key the class does not read under
+                ``_UNKNOWN_KEYS = "raise"``. Raised for a nested
+                ``StructuredConfig`` section too, naming the nested class.
+                It is both a ``ValidationError`` and a ``ValueError``. The
+                unknown-key check runs first, so a misspelt required field is
+                reported as the misspelling, with the field it was near.
         """
         normalized = cls._normalize_dict(dict(config))
         if cls._UNKNOWN_KEYS == "raise":
@@ -1375,7 +1430,23 @@ class StructuredConfig:
                 key for key in normalized if key not in accepted and key not in _ROUTING_KEYS
             )
             if unknown:
-                raise ValueError(_unknown_keys_message(cls, unknown, accepted))
+                raise ConfigFieldError(
+                    _unknown_keys_message(cls, unknown, accepted),
+                    context={
+                        "config_class": cls.__name__,
+                        "unknown": unknown,
+                        "accepted": sorted(accepted),
+                    },
+                )
+        # Before the constructor, which would name only the first and in its
+        # own words: a ``TypeError`` for what is an authoring error.
+        missing = [
+            name
+            for name in _required_fields(cls)  # type: ignore[arg-type]  # see _redacted_repr
+            if name not in normalized
+        ]
+        if missing:
+            raise _missing_fields_error(cls, missing)
         hints = _resolved_hints(cls)  # type: ignore[arg-type]  # see _redacted_repr
         kwargs: dict[str, Any] = {}
         for f in dataclasses.fields(cls):
@@ -2437,6 +2508,12 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         ``StructuredConfig`` subclass with the same clear ``TypeError``
         rather than the opaque ``dict()``-on-dataclass crash that
         ``from_dict`` would otherwise raise.
+
+        Raises:
+            TypeError: When ``config`` is neither ``CONFIG_CLS`` nor a
+                mapping -- a programming error, not an authoring one.
+            ConfigFieldError: When a mapping does not fit ``CONFIG_CLS``;
+                see :meth:`StructuredConfig.from_dict`.
         """
         if isinstance(config, cls.CONFIG_CLS):
             return cast("ConfigT", config)
@@ -2467,6 +2544,11 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         ``self._components`` (see :attr:`components`) and made available
         to :meth:`_setup`; they are *not* folded into ``self.config``.
         The collaborator-free call ``from_config(config)`` is unchanged.
+
+        Raises:
+            TypeError: As :meth:`_coerce_config`, for a config of the wrong type.
+            ConfigFieldError: As :meth:`_coerce_config`, for a mapping that
+                does not fit ``CONFIG_CLS``.
         """
         return cls(cls._coerce_config(config), _components=components or None)
 
@@ -2496,6 +2578,10 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         a non-default ctor slot may override this; the override must
         still route through :meth:`_coerce_config` (pinned by
         :func:`dataknobs_common.testing.assert_structured_config_consumer`).
+
+        Raises:
+            TypeError: As :meth:`from_config`.
+            ConfigFieldError: As :meth:`from_config`.
         """
         obj = cls(cls._coerce_config(config), _components=components or None)
         await obj._ainit(**_components_for_hook(cls._ainit, obj._components))
@@ -2525,19 +2611,30 @@ class StructuredConfigConsumer(Generic[ConfigT]):
         collaborator attributes. A consumer's :meth:`_ainit` should
         short-circuit when ``self._prebuilt`` is ``True`` so a later
         :meth:`from_config_async` does not rebuild what is already wired.
+
+        Raises:
+            ConfigFieldError: When ``config`` is omitted and ``CONFIG_CLS``
+                has required fields, naming them; or as :meth:`from_config`
+                for a mapping that does not fit.
         """
         if config is not None:
             cfg: ConfigT = cls._coerce_config(config)
         else:
-            try:
-                cfg = cast("ConfigT", cls.CONFIG_CLS())
-            except TypeError as exc:
-                raise ValueError(
-                    f"{cls.__name__}.from_components: CONFIG_CLS "
-                    f"{cls.CONFIG_CLS.__name__} has required fields and "
-                    "cannot be default-constructed. Pass a `config=` "
-                    "snapshot covering the required fields."
-                ) from exc
+            # Asked of the class rather than read off a constructor
+            # ``TypeError``, which would also catch one raised by a
+            # ``__post_init__`` for a reason that has nothing to do with this.
+            missing = list(_required_fields(cls.CONFIG_CLS))  # type: ignore[arg-type]  # see _redacted_repr
+            if missing:
+                raise _missing_fields_error(
+                    cls.CONFIG_CLS,
+                    missing,
+                    preamble=(
+                        f"{cls.__name__}.from_components: CONFIG_CLS "
+                        f"{cls.CONFIG_CLS.__name__} cannot be default-constructed; "
+                        "pass a `config=` snapshot covering its required fields. "
+                    ),
+                )
+            cfg = cast("ConfigT", cls.CONFIG_CLS())
         obj = cls(cfg, _components=collaborators or None)
         obj._prebuilt = True
         obj._adopt_components(**_components_for_hook(cls._adopt_components, obj._components))

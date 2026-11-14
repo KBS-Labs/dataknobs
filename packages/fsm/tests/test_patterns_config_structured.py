@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 from dataknobs_common.retry import RetryConfig
+from dataknobs_common.exceptions import ConfigFieldError
 from dataknobs_common.structured_config import StructuredConfig
 from dataknobs_common.testing import assert_structured_config_roundtrip
 
@@ -211,8 +212,8 @@ class TestErrorRecoveryConfigStructured:
     def test_error_recovery_requires_primary_strategy(self):
         # primary_strategy has no default — unlike its sibling configs,
         # ErrorRecoveryConfig.from_dict({}) cannot be constructed without it.
-        # The dataclass ctor raises TypeError for the missing required field.
-        with pytest.raises(TypeError):
+        # from_dict refuses the mapping, naming the missing required field.
+        with pytest.raises(ConfigFieldError, match="primary_strategy"):
             ErrorRecoveryConfig.from_dict({})
 
 

@@ -17,6 +17,7 @@ the only place a shared implementation can actually live.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from collections.abc import Collection, Container, Mapping, Sequence
 from enum import Enum
 from pathlib import Path
@@ -158,7 +159,11 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
             attribute's ``entity_type``, a relation type's ``domain``,
             ``range`` or ``inverse_of``, an entity's ``type``, an assertion's
             or a taxonomy's ``relation`` -- that names nothing the section
-            holds. Every message names the offending value.
+            holds; or on the document's own ``id:`` written as ``null``
+            (read as missing), as anything but a string, or as the empty
+            string, which a registry reserves for *no document configured*;
+            or on a ``version:`` that is not a string. Every message names the
+            offending value.
 
             A ``relation:`` resolves against ``relation_types:`` union the
             declared attribute names, and is checked only where
@@ -172,8 +177,10 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
             rule. The rules are built here and carried on the result; they
             are *applied* by each door, which alone knows the fold
     """
-    _refuse_reserved_id(config.id)
-    _refuse_colon("ontology id", config.id)
+    ontology_id = _ontology_id(config.id)
+    version = _ontology_version(config.version)
+    _refuse_reserved_id(ontology_id)
+    _refuse_colon("ontology id", ontology_id)
 
     # Every section is a list of mappings before anything reads a row, and a
     # key written `null` is dropped here -- so every reader below, the
@@ -242,8 +249,8 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
     variant_rules = None if config.variants is None else rules_from_config(config.variants)
 
     return OntologyParts(
-        id=config.id,
-        version=config.version,
+        id=ontology_id,
+        version=version,
         entity_types=entity_types,
         relation_types=relation_types,
         taxonomies=taxonomies,
@@ -569,6 +576,58 @@ def _read_config(source: Path | Mapping[str, Any]) -> OntologyConfig:
 # --------------------------------------------------------------------------
 # Refusals -- each names the offending value
 # --------------------------------------------------------------------------
+
+
+def _ontology_id(value: Any) -> str:
+    """The document's ``id:``: a non-empty string, and ``null`` is missing.
+
+    A namespace, written into every qualified id as ``ns:local``, so not a row
+    id: a number is refused rather than rendered as text. The empty id is
+    refused because a registry spells *no document configured* with it, which
+    is true only while no document can claim it.
+    """
+    if value is None:
+        raise ValidationError(
+            "`id:` is null, which reads as missing: an ontology document must declare its id",
+            context={"section": "id", "value": None},
+        )
+    _refuse_a_bare_scalar("id", value)
+    if not value:
+        raise ValidationError(
+            "`id:` is the empty string, which no document can claim: a registry "
+            "spells *no document configured* with it",
+            context={"section": "id", "value": value},
+        )
+    return str(value)
+
+
+def _ontology_version(value: Any) -> str:
+    """The document's ``version:``, a string, and ``null`` is the default.
+
+    A number is refused rather than rendered, because by the time it is a
+    number the author's text may already be gone: YAML reads ``1.10`` as
+    ``1.1``.
+    """
+    if value is None:
+        return str(_VERSION_DEFAULT)
+    _refuse_a_bare_scalar("version", value)
+    return str(value)
+
+
+#: ``OntologyConfig.version``'s own default, read off the field rather than
+#: restated, for a ``version:`` written as ``null``.
+_VERSION_DEFAULT = next(
+    f.default for f in dataclasses.fields(OntologyConfig) if f.name == "version"
+)
+
+
+def _refuse_a_bare_scalar(key: str, value: Any) -> None:
+    if not isinstance(value, str):
+        raise ValidationError(
+            f"`{key}:` declares {value!r}, which is not a string; quote it, so the "
+            f"text is the one written rather than what a YAML reader made of it",
+            context={"section": key, "value": value},
+        )
 
 
 def _refuse_reserved_id(ontology_id: str) -> None:

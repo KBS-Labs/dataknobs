@@ -133,6 +133,42 @@ class ValidationError(DataknobsError):
     pass
 
 
+class ConfigFieldError(ValidationError, ValueError):
+    """Raised when a mapping does not fit the config class it is read into.
+
+    :meth:`~dataknobs_common.structured_config.StructuredConfig.from_dict`
+    raises it when a mapping leaves out a field the class requires, or, for a
+    class that sets ``_UNKNOWN_KEYS = "raise"``, carries a key the class does
+    not read. Both are one authoring error, so they share one type, and
+    neither reaches the dataclass constructor's ``TypeError``.
+
+    **Both a** :class:`ValidationError` **and a** ``ValueError``, on purpose:
+
+    - a ``ValidationError``, because that is what a door documenting a
+      dataknobs refusal promises. An ontology document missing its ``id``
+      meets the loader's contract with no translation in between;
+    - a ``ValueError``, because the unknown-key refusal was one before this
+      type existed. An ``except ValueError`` written against it keeps
+      catching it.
+
+    The message names only what the code supplies (the class, its field names
+    and the keys the caller wrote) and never a value, so a caller may show it
+    to the config's author without vetting it first.
+
+    ``context`` carries ``config_class``, and either ``missing`` (the absent
+    required fields) or ``unknown`` with ``accepted`` (the refused keys and
+    the keys the class reads), each a sorted list of names.
+
+    Example:
+        ```python
+        try:
+            config = MyConfig.from_dict(raw)
+        except ConfigFieldError as e:
+            report_to_author(str(e), missing=e.context.get("missing"))
+        ```
+    """
+
+
 class ConfigurationError(DataknobsError):
     """Raised when configuration is invalid or missing.
 
@@ -536,6 +572,7 @@ def naming_refusals(origin: str, *, context: Mapping[str, Any] | None = None) ->
 __all__ = [
     "DataknobsError",
     "ValidationError",
+    "ConfigFieldError",
     "ConfigurationError",
     "DottedPathError",
     "DottedPathReason",

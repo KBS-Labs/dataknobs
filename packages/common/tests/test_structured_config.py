@@ -24,6 +24,7 @@ from typing import Any, ClassVar
 import pytest
 
 from dataknobs_common import structured_config as _sc
+from dataknobs_common.exceptions import ConfigFieldError
 from dataknobs_common.serialization import Serializable
 from dataknobs_common.structured_config import (
     StructuredConfig,
@@ -80,7 +81,7 @@ class TestStructuredConfigFromDict:
         assert _Empty.from_dict({"backend": "x"}) == _Empty()
 
     def test_required_field_must_be_supplied(self) -> None:
-        with pytest.raises(TypeError, match="required"):
+        with pytest.raises(ConfigFieldError, match="requires the field 'required'"):
             _Simple.from_dict({})
 
     def test_field_projection_with_defaults(self) -> None:

@@ -69,6 +69,29 @@ by default — `pip install dataknobs-common[yaml]`. Nothing else on this page
 does: `load_ontology` also takes a `.json` path or a plain mapping, and either
 runs on the base install.
 
+### The document's top level
+
+The document itself is read as strictly as its rows. It takes these sections
+and no others: `id`, `version`, `imports`, `entity_types`, `relation_types`,
+`entities`, `assertions`, `sources`, `taxonomies`, `index`, `resolver`,
+`event_bus` and `variants`. A misspelt section is refused by name, with the
+nearest one (`entites:` is asked whether it meant `entities:`), rather than
+loading with nothing in it.
+
+- **`id:`** is required, and is a non-empty string. Left out or written
+  `null`, it is refused as missing. A number is refused rather than rendered:
+  quote it. The empty string is refused because a registry uses it to mean
+  that no document was configured.
+- **`version:`** is a string, and defaults to `"1.0"`, as it does when written
+  `null`. A number is refused: YAML reads `version: 1.10` as `1.1`, so by the
+  time it is a number the text you wrote may already be gone. Quote it.
+
+A missing `id:` or a section the document does not take raises
+`ConfigFieldError`, which is a `ValidationError`, as every other refusal on
+this page is. The base config layer also lets its routing keys (`backend`,
+`class`, `factory`, `name`, `type`) through without reading them, so a
+`name:` at the top of a document is dropped rather than refused.
+
 ### What each row reads
 
 Each section is a list of rows, and each row a mapping. A section keyed by id

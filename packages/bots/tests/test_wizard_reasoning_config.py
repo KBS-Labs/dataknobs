@@ -27,6 +27,7 @@ import dataclasses
 
 import pytest
 
+from dataknobs_common.exceptions import ConfigFieldError
 from dataknobs_common.structured_config import StructuredConfig
 from dataknobs_common.testing import assert_structured_config_roundtrip
 
@@ -129,10 +130,10 @@ class TestWizardReasoningConfig:
         """from_dict({}) is not silently tolerated — wizard_config is required.
 
         ``from_dict`` skips absent fields (they take their declared default),
-        but ``wizard_config`` has no default, so the dataclass constructor
-        raises rather than producing a half-built config.
+        but ``wizard_config`` has no default, so ``from_dict`` refuses the
+        mapping by name rather than producing a half-built config.
         """
-        with pytest.raises(TypeError):
+        with pytest.raises(ConfigFieldError, match="wizard_config"):
             WizardReasoningConfig.from_dict({})
 
     def test_from_dict_rejects_non_str_non_dict_wizard_config(self) -> None:

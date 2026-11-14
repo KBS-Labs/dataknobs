@@ -73,7 +73,10 @@ Widget.from_config({"name": "x", "size": 4})
 
 Auto-derived projection. Each `@dataclass` field is read from `config`
 by name; absent fields use their declared default (or
-`default_factory`). Unknown keys in the dict are ignored by default —
+`default_factory`), and a field declaring neither is required — a mapping
+leaving it out is refused, naming it; see [A mapping that does not fit its
+class](#a-mapping-that-does-not-fit-its-class-configfielderror). Unknown
+keys in the dict are ignored by default —
 useful for registry-routing keys like `"backend"` — unless the class opts
 into rejecting them; see [Unknown-key
 policy](#unknown-key-policy-_unknown_keys-_input_keys). The caller's dict
@@ -182,9 +185,13 @@ class ServiceConfig(StructuredConfig):
     _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
 
 ServiceConfig.from_dict({"hosst": "db"})
-# ValueError: ServiceConfig does not accept 'hosst' (did you mean 'host'?).
-#             Accepted keys: host.
+# ConfigFieldError: ServiceConfig does not accept 'hosst' (did you mean 'host'?).
+#                   Accepted keys: host.
 ```
+
+The refusal is a [`ConfigFieldError`](#a-mapping-that-does-not-fit-its-class-configfielderror),
+which is a `ValueError`, so an `except ValueError` around `from_dict` still
+catches it.
 
 The default is `"ignore"`, so nothing changes for a class that does not opt
 in. Every `dataknobs_data` backend config opts in via `DatabaseConfig`.
@@ -231,6 +238,63 @@ error's accepted-key list for the same reason.
 `class` and `factory` are alternatives rather than neighbours — the builder
 chooses between them in one condition and pops whichever it finds — so a
 config carrying either one reaches `from_dict` in the same state.
+
+### A mapping that does not fit its class (`ConfigFieldError`)
+
+`from_dict` refuses a mapping in two ways, and both raise one type,
+`ConfigFieldError` (`from dataknobs_common.exceptions import ConfigFieldError`):
+
+- the mapping leaves out a **required field**, one declaring neither a
+  `default` nor a `default_factory`. Every missing field is named at once,
+  before the constructor is called;
+- the class sets `_UNKNOWN_KEYS = "raise"` and the mapping carries a key the
+  class does not read ([above](#unknown-key-policy-_unknown_keys-_input_keys)).
+
+```python
+@dataclass(frozen=True)
+class EndpointConfig(StructuredConfig):
+    url: str
+    token: str
+    timeout: float = 30.0
+
+EndpointConfig.from_dict({"timeout": 5})
+# ConfigFieldError: EndpointConfig requires the fields 'token' and 'url',
+#                   which the config does not supply.
+```
+
+`ConfigFieldError` is both a `ValidationError` and a `ValueError`. It is a
+`ValidationError` because that is what a door documenting a dataknobs refusal
+promises, so a loader built on `from_dict` meets its contract with no
+translation. It is a `ValueError` because the unknown-key refusal was one
+before this type existed.
+
+Its message names the class, its field names and the keys the caller wrote,
+and **never a value**, so it can be shown to whoever wrote the config. Its
+`context` carries `config_class`, and either `missing` or `unknown` with
+`accepted`, each a sorted list of names, for a caller that would rather not
+parse the message:
+
+```python
+try:
+    config = EndpointConfig.from_dict(raw)
+except ConfigFieldError as e:
+    report(str(e), missing=e.context.get("missing", []))
+```
+
+Both checks run after `_normalize_dict`, so a required field supplied through
+an alias the normalizer translates is not missing. The unknown-key check runs
+first, so a misspelt required field is reported as the misspelling, with the
+field it was near.
+
+A required field written as `None` is **supplied**, not missing: some required
+fields are legitimately optional-typed, and only a caller knows whether `None`
+means absent there. A section that needs that reading checks for it itself.
+
+A nested `StructuredConfig` section missing a field is refused the same way,
+naming the nested class rather than the path to it.
+
+`from_components()` called with no `config` on a `CONFIG_CLS` that has
+required fields raises the same type, naming them.
 
 ### Misdeclaring a policy is refused at class definition
 

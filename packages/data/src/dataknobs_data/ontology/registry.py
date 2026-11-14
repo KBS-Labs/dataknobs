@@ -596,8 +596,13 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             ValidationError: For every refusal ``build_ontology`` makes, and
                 for this registry's own: an id already loaded without
                 ``replace``, a source kind nothing binds, a document mixing an
-                authored vocabulary with a live one, and a live binding whose
-                schema, projection or surface-form lookup does not hold up
+                authored vocabulary with a live one, an ``event_bus:`` block
+                that is not a mapping, and a live binding whose schema,
+                projection or surface-form lookup does not hold up. A document
+                that leaves out ``id:`` or writes a section this class does not
+                read is refused as a
+                :class:`~dataknobs_common.exceptions.ConfigFieldError`, which
+                is one
             ResourceNotFoundError: When a ``$resource`` names a resource this
                 environment does not define and the effective level is strict
         """
@@ -1018,6 +1023,20 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             config if isinstance(config, OntologyConfig) else OntologyConfig.from_dict(dict(config))
         )
         if typed.event_bus is not None:
+            # Refused before anything is built, and whether or not a bus is
+            # already held: a block that would not have been applied is still
+            # a block the document got wrong.
+            if not isinstance(typed.event_bus, Mapping):
+                raise ValidationError(
+                    f"ontology {typed.id!r} declares `event_bus:` as "
+                    f"{type(typed.event_bus).__name__}; `event_bus:` must be a mapping "
+                    f"naming the bus's backend and its settings",
+                    context={
+                        "ontology_id": typed.id,
+                        "section": "event_bus",
+                        "value": typed.event_bus,
+                    },
+                )
             await self._event_bus_from(typed.event_bus, ontology_id=typed.id)
         parts = build_ontology(typed)
         if parts.id in self._ontologies and not replace:

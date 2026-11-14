@@ -24,7 +24,7 @@ and ignores both.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from dataknobs_common.structured_config import StructuredConfig
 
@@ -40,6 +40,16 @@ class OntologyConfig(StructuredConfig):
     :class:`~dataknobs_common.structured_config.StructuredConfig` is: the
     base declares each subclass unhashable, and its docstring says why.
 
+    **The top level is a closed key set** (``_UNKNOWN_KEYS = "raise"``), as
+    every row of the document is. A misspelt section is refused by name, with
+    the nearest field, rather than loading with nothing in it. The base's
+    routing keys (``backend``, ``class``, ``factory``, ``name``, ``type``)
+    still pass, because the base exempts them for every class.
+
+    **No ``overlay:``.** An overlay is a component a reader is handed, not a
+    key a document configures, and a read-only vocabulary builds none; the
+    key is refused like any other this class does not read.
+
     Attributes:
         id: The ontology's namespace. Reserved value ``dk`` is refused, and so
             is any id containing ``:``
@@ -51,7 +61,6 @@ class OntologyConfig(StructuredConfig):
         entities: Inline entity rows, each carrying its own ``id``
         assertions: Inline assertion rows over those entities
         sources: Unbound source specs, discriminated by ``kind:``
-        overlay: A default rather than a binding
         taxonomies: Axis definitions -- the definition, never the built axis
         index: The semantic index's configuration, raw. Two blocks: a
             ``store:`` the reader resolves and opens itself, and an
@@ -83,9 +92,10 @@ class OntologyConfig(StructuredConfig):
     entities: list[Mapping[str, Any]] = field(default_factory=list)
     assertions: list[Mapping[str, Any]] = field(default_factory=list)
     sources: list[Mapping[str, Any]] = field(default_factory=list)
-    overlay: Mapping[str, Any] | None = None
     taxonomies: list[Mapping[str, Any]] = field(default_factory=list)
     index: Mapping[str, Any] | None = None
     resolver: Mapping[str, Any] | None = None
     event_bus: Mapping[str, Any] | None = None
     variants: list[str | Mapping[str, Any]] | None = None
+
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
