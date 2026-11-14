@@ -25,7 +25,7 @@ from dataknobs_common.testing import assert_structured_config_roundtrip
 
 
 def _populated() -> OntologyConfig:
-    """A config with every field set, including the three that default to None."""
+    """A populated config, including ``index`` and ``resolver``, which default to None."""
     return OntologyConfig(
         id="creatures",
         version="1",
@@ -35,7 +35,6 @@ def _populated() -> OntologyConfig:
         entities=[{"id": "dog", "type": "animal"}],
         assertions=[{"subject": "dog", "relation": "isa", "object": "animal"}],
         sources=[{"source_id": "s", "backend": "memory"}],
-        overlay={"note": "kept"},
         taxonomies=[{"id": "t", "relation": "isa"}],
         index={"backend": "memory"},
         resolver={"kind": "mapping"},

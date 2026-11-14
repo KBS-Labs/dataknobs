@@ -51,6 +51,7 @@ except DataknobsError as e:
 
 - `DataknobsError` - Base exception for all packages
 - `ValidationError` - Data validation failures
+- `ConfigFieldError` - A config mapping that does not fit its class (a `ValidationError` and a `ValueError`)
 - `ConfigurationError` - Configuration issues
 - `ResourceError` - Resource acquisition/management failures
 - `NotFoundError` - Item lookup failures

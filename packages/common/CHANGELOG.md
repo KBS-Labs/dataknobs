@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An ontology document's own top level is read for its shape**, as its rows
+  are. `OntologyConfig` is a closed key set, so a misspelt section is refused
+  by name with the nearest one (`entites:` is asked about `entities:`) instead
+  of loading with nothing in it. `overlay:` is refused with the rest: an
+  overlay is a component a reader is handed, not a key a document configures,
+  and the field is gone. `id:` must be a non-empty string; written `null` it
+  is refused as missing, a number is refused with a hint to quote it, and the
+  empty string, which a registry reserves for *no document configured*, is
+  refused. `version:` must be a string, so `version: 1.10` is refused instead
+  of loading as `'1.1'`; written `null` it takes its default `"1.0"`. Each is
+  a `ValidationError`, through `load_ontology` and `async_load_ontology` both,
+  and `load_ontology({})` no longer raises the constructor's `TypeError`.
+
 - **Every row of an authored ontology is read for its shape, and only for the
   keys it reads.** The entity-type, relation-type, entity, assertion and
   taxonomy rows, a literal `object:` and a nested-tree node now check each
@@ -1411,12 +1424,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 362,
-  the twenty-two beyond them being the operation family, the near-spelling rung,
+  the resolution cascade — 134 names, taking the package's `__all__` to 363,
+  the twenty-three beyond them being the operation family, the near-spelling rung,
   the surface-form catalogue, the index-source family, the edge rule's three
   functions, `aclosing_iter`, `PluginConfig`, `naming_refusals`,
-  `fingerprint_value`, `freeze_structure`, `thaw_structure` and
-  `FrozenMapping`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond
+  `fingerprint_value`, `freeze_structure`, `thaw_structure`,
+  `FrozenMapping` and `ConfigFieldError`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond
   them, which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to
@@ -2070,6 +2083,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than going quiet.
 
 ### Changed
+
+- **BREAKING: a mapping that does not fit its `StructuredConfig` raises
+  `ConfigFieldError`.** `from_dict` used to pass a mapping missing a required
+  field straight to the dataclass constructor, which raised CPython's
+  `TypeError` and named only the first field. It now refuses the mapping
+  first, naming the class and every missing field. The unknown-key refusal
+  under `_UNKNOWN_KEYS = "raise"` raises the same type, with its message
+  unchanged, and so does `from_components()` with no `config` on a class with
+  required fields. A missing field in a nested section names the nested class.
+
+  `ConfigFieldError` (in `dataknobs_common.exceptions`, exported from
+  `dataknobs_common`) is both a `ValidationError` and a `ValueError`. Every
+  `except ValueError` around `from_dict` still catches it, and a door that
+  documents `ValidationError` meets that contract with no translation. Its
+  message names only the class, its fields and the keys the caller wrote,
+  never a value, and its `context` carries `config_class` with `missing` or
+  `unknown` and `accepted`. A required field written `None` is still supplied,
+  not missing. On a class with `_UNKNOWN_KEYS = "raise"`, a key that is not a
+  string (YAML's reading of an unquoted `yes:`, `on:` or `null:`) raises the
+  same type, naming the key, instead of a `TypeError` from sorting the keys.
+
+  - **Migration:** a caller that catches `TypeError` around `from_dict`,
+    `from_config`, `from_config_async` or `from_components` to detect a
+    missing field catches `ConfigFieldError` instead, and reads
+    `e.context["missing"]` rather than parsing the message. A caller that
+    catches `ValueError` there now catches a missing field as well as an
+    unknown key. A subclass that gives a declared field a default in a
+    hand-written `__init__` is refused for that field before the `__init__`
+    runs; declare the default on the field.
 
 - **BREAKING: a `StructuredConfig` is no longer hashable.** Every subclass
   compares field by field, which the round-trip property

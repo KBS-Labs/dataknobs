@@ -21,7 +21,7 @@ import pytest
 
 from dataknobs_common.capabilities import Capability
 from dataknobs_common.events import Event, EventType, InMemoryEventBus, event_bus_backends
-from dataknobs_common.exceptions import OperationError, ValidationError
+from dataknobs_common.exceptions import ConfigFieldError, OperationError, ValidationError
 from dataknobs_common.ontology import (
     AUTHORED_SOURCE_ID,
     RESOLVER_SECTION_KEYS,
@@ -243,7 +243,7 @@ async def test_the_portable_form_round_trips_and_sits_one_level_up(deployment: P
         "type": "databases",
     }
     assert "id" not in stored, "the stored form is the app document, not the section"
-    with pytest.raises(TypeError, match="id"):
+    with pytest.raises(ConfigFieldError, match="does not accept 'ontology'"):
         OntologyConfig.from_dict(stored)
 
     registry = OntologyRegistry(environment=cfg.environment)

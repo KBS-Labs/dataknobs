@@ -179,6 +179,7 @@ from dataknobs_common.entity_resolution import (
 )
 from dataknobs_common.exceptions import (
     ConcurrencyError,
+    ConfigFieldError,
     ConfigurationError,
     ConsentRequiredError,
     DataknobsError,
@@ -493,6 +494,7 @@ __all__ = [
     # Exceptions
     "DataknobsError",
     "ValidationError",
+    "ConfigFieldError",
     "ConfigurationError",
     "ResourceError",
     "NotFoundError",

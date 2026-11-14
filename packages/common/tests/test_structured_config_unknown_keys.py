@@ -14,6 +14,7 @@ decision has to be taken rather than arrived at.
 
 from __future__ import annotations
 
+import difflib
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal
 
@@ -87,9 +88,30 @@ class TestOptingIn:
             StrictConfig.from_dict({"hosst": "typo"})
 
     def test_the_error_suggests_a_longer_key_the_input_prefixes(self) -> None:
-        """``connection`` scores too low for difflib but prefixes the real key."""
+        """``conn`` scores too low for difflib but prefixes the real key."""
         with pytest.raises(ValueError, match="did you mean 'connection_string'"):
-            StrictConfig.from_dict({"connection": "postgres://..."})
+            StrictConfig.from_dict({"conn": "postgres://..."})
+
+    @pytest.mark.parametrize(
+        ("spelling", "difflib_finds_it"),
+        [("connection", True), ("conn", False), ("hosst", True)],
+    )
+    def test_which_branch_supplies_each_suggestion(
+        self, spelling: str, difflib_finds_it: bool
+    ) -> None:
+        """Pin the branch, not only the message, so the fallback's example stays true.
+
+        The two branches give the same message, so asserting the message alone
+        cannot tell which one ran. ``connection`` scores 0.74 against
+        ``connection_string`` and difflib answers it; only a spelling as short
+        as ``conn`` (0.38) reaches the prefix fallback.
+        """
+        accepted = sorted(("connection_string", "host"))
+        assert bool(difflib.get_close_matches(spelling, accepted, n=1, cutoff=0.6)) is (
+            difflib_finds_it
+        )
+        with pytest.raises(ValueError, match="did you mean"):
+            StrictConfig.from_dict({spelling: "x"})
 
     def test_the_error_lists_the_accepted_keys(self) -> None:
         with pytest.raises(ValueError) as excinfo:
@@ -298,3 +320,29 @@ class TestTheSuggestionIsUseful:
         with pytest.raises(ValueError) as excinfo:
             StrictConfig.from_dict({"": 1})
         assert "did you mean" not in str(excinfo.value)
+
+
+class TestANonStringKey:
+    """A key that is not a string is refused by name, not by ``sorted``.
+
+    YAML 1.1 reads an unquoted ``yes:`` or ``on:`` as ``True`` and ``null:``
+    as ``None``, so a closed class meets such a key from any document. The
+    check used to sort and fuzzy-match the keys, and both fail on a mixed or
+    non-string key with a ``TypeError`` in their own words.
+    """
+
+    @pytest.mark.parametrize(
+        "document",
+        [{"host": "h", 1: "x"}, {1: "x"}, {True: "x"}, {None: "x"}],
+        ids=["mixed", "int-alone", "bool", "null"],
+    )
+    def test_it_is_refused_as_a_config_field_error(self, document: dict[Any, Any]) -> None:
+        from dataknobs_common.exceptions import ConfigFieldError
+
+        with pytest.raises(ConfigFieldError, match="not a string") as excinfo:
+            StrictConfig.from_dict(document)
+        (key,) = (k for k in document if not isinstance(k, str))
+        assert excinfo.value.context["non_string_keys"] == [repr(key)]
+
+    def test_the_lenient_default_still_drops_it(self) -> None:
+        assert LenientConfig.from_dict({"host": "h", 1: "x"}).host == "h"

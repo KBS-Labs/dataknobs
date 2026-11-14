@@ -95,6 +95,9 @@ from dataknobs_common.exceptions import (
     ConcurrencyError as CommonConcurrencyError,
 )
 from dataknobs_common.exceptions import (
+    ConfigFieldError as CommonConfigFieldError,
+)
+from dataknobs_common.exceptions import (
     ConfigurationError as CommonConfigurationError,
 )
 from dataknobs_common.exceptions import (
@@ -578,14 +581,14 @@ class ErrorPolicy(NamedTuple):
 
 
 #: The default type -> policy mapping, resolved by MRO walk (see
-#: :func:`resolve_error_policy`). Fourteen entries govern more than fifty
+#: :func:`resolve_error_policy`). Fifteen entries govern more than fifty
 #: reachable classes: every ``DataknobsError`` subclass the other packages
 #: define resolves to its nearest listed ancestor, so ``RecordNotFoundError``
 #: returns 404 without appearing here. An exact-type table would cover the
-#: fourteen and silently 500 the rest -- which is the behaviour this handler
+#: fifteen and silently 500 the rest -- which is the behaviour this handler
 #: replaces.
 #:
-#: Thirteen come from ``dataknobs_common.exceptions``; the fourteenth,
+#: Fourteen come from ``dataknobs_common.exceptions``; the fifteenth,
 #: ``InvalidTransitionError``, is from ``dataknobs_common.transitions``. Any
 #: count here is checked against the shipped mapping by the parity test, so
 #: the two cannot drift.
@@ -605,6 +608,13 @@ DEFAULT_ERROR_POLICY: Mapping[type[DataknobsError], ErrorPolicy] = MappingProxyT
         # --- fully disclosed: message and context are both authored for the caller
         # context: field names and offending values -- the caller's own input.
         CommonValidationError: ErrorPolicy(422, True, True),
+        # Its parent's row, written out because the guard wants the decision
+        # made. message: the config class, its field names and the keys the
+        # caller wrote -- never a value. context: `config_class` with `missing`,
+        # or `unknown` and `accepted` (the class's declared key set, which is
+        # its documented schema), or `non_string_keys`. Reached on a route when
+        # a caller's own config (a tenant's bot config) does not fit its class.
+        CommonConfigFieldError: ErrorPolicy(422, True, True),
         # context: `scope`, which the caller must act on, and `user_id`. That id is
         # the caller's own, so returning it to them discloses nothing new -- unless
         # a route attempts access on behalf of a third party, where it would.

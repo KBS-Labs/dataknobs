@@ -363,6 +363,7 @@ values while its message can be a database driver's.
 | DataKnobs error | Status | Message disclosed? | `detail` disclosed? |
 |---|---|---|---|
 | `ValidationError` | 422 | yes | yes |
+| `ConfigFieldError` | 422 | yes | yes |
 | `ConsentRequiredError` | 403 | yes | yes |
 | `ConcurrencyError` | 409 | yes | yes |
 | `InvalidTransitionError` | 409 | yes | yes |
