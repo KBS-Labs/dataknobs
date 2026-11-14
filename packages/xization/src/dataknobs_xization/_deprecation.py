@@ -51,7 +51,11 @@ _MODULE_ADVICE = {
     "authorities": (
         f"{_DICTIONARY}. Regex authorities and annotation validators have no replacement yet."
     ),
-    "lexicon": f"{_DICTIONARY}, and declare each variation as a form of its entity.",
+    "lexicon": (
+        f"{_DICTIONARY}, and declare each variation as a form of its entity. An "
+        "ontology document's variants: section generates them, with the rules in "
+        "dataknobs_common.text."
+    ),
     "masking_tokenizer": _TOKENS,
 }
 

@@ -273,7 +273,7 @@ added to `Ontology` reaches all three without anyone threading it three times.
 
 ## What one holds
 
-Ten fields, and the ones you read most are sources rather than containers:
+The fields you read most are sources rather than containers:
 
 | Field | What it is |
 |---|---|
@@ -284,6 +284,7 @@ Ten fields, and the ones you read most are sources rather than containers:
 | `taxonomies` | `TaxonomyDefinition` per declared axis, keyed by its own id |
 | `structures` | a materialized structure per axis, where one was asked for |
 | `describes`, `imports` | what this vocabulary claims to describe, and what it pulls in |
+| `variants` | what a `variants:` section admitted and refused, or `None` with no section — see [Variants of a form](#variants-of-a-form) |
 
 The value types are ordinary frozen or field-wise dataclasses: `Entity`,
 `EntityRef`, `Assertion`, `AttributeDef`, `Term` (an `EntityRef` or a
@@ -294,6 +295,120 @@ it.
 `Ontology` and `AsyncOntology` are frozen and compared by identity: they hold
 the sources a vocabulary was built over, and two loads of one document are two
 vocabularies rather than one repeated.
+
+## Variants of a form
+
+A reader types *apples* and the vocabulary says *Apple*; a catalogue writes
+*Fruit & Veg* and the reader types *fruit and veg*. A fold cannot bridge either
+-- it runs on every query, and must not change what a word is -- so the
+variants are made once, where the vocabulary is bound, and each is written as
+an alias of its entity. Opt in with a `variants:` section naming the rules, in
+the order they compose:
+
+```yaml
+id: grocery
+entity_types:
+  - id: item
+entities:
+  - {id: apple, type: item, name: Apple}
+  - {id: glass, type: item, name: Glass}
+  - {id: glasses, type: item, name: Glasses}
+  - {id: acme-pb, type: item, name: Acme Peanut Butter, metadata: {brand: Acme}}
+variants:
+  - drop_parentheticals
+  - ampersand
+  - slash_or
+  - inflect
+  - {rule: strip_prefix, field: brand}
+```
+
+```python
+from dataknobs_common.ontology import load_ontology
+
+onto = load_ontology(grocery)  # the document above, as a mapping or a path
+onto.by_surface_form("apples")  # frozenset({"apple"})
+onto.by_surface_form("peanut butter")  # frozenset({"acme-pb"})
+onto.by_surface_form("glasses")  # frozenset({"glasses"}) -- and only that
+[refusal.variant.form for refusal in onto.variants.refused]  # ["Glasses", "Glass"]
+```
+
+**Each rule sees what the rules before it made**, so *Fruit & Veg (fresh)*
+reaches *Fruit and Veg* through `drop_parentheticals` and then `ampersand`.
+The first four are `dataknobs_common.text.DEFAULT_RULES`, and they are
+English: `inflect` makes the last word plural or singular by the regular
+endings. A rule given parameters is a mapping naming it under `rule`;
+`strip_prefix` reads its prefix from the entity's `metadata`.
+
+**Regular endings misread a few words.** Admission refuses a collision between
+entities, not a misreading: *News* would gain *New*, and *Jeans* *Jean*, which
+are real words a reader types meaning something else. Name such words in
+`inflect`'s `keep` -- `{rule: inflect, keep: [news, jeans]}` -- and they are
+left as written. Most misreadings give a spelling nobody types (*Series* gives
+*Sery*) and cost nothing.
+
+| Rule | Example | In `DEFAULT_RULES` |
+|---|---|---|
+| `drop_parentheticals` | *Fruit & Veg (fresh)* → *Fruit & Veg* | yes |
+| `ampersand` | *Fruit & Veg* → *Fruit and Veg* | yes |
+| `slash_or` | *Jam / Jelly* → *Jam or Jelly*; not in a form holding a digit | yes |
+| `inflect` (`keep`) | *Apple* → *Apples*; *Cherries* → *Cherry* | yes |
+| `camelcase` | *BlueBerry* → *Blue Berry* | no |
+| `hyphen` (`subs`) | *Gluten-Free* → *Gluten Free*, *GlutenFree* | no |
+| `split` (`sep`, `min_token_len`) | *Jam / Jelly* → *Jam*, *Jelly* | no: makes fragments |
+| `parenthetical` | *Soda (Pop)* → *Pop* | no: makes a fragment |
+| `strip_prefix` (`field`) | *Acme Peanut Butter* → *Peanut Butter* | no: reads the entity's metadata |
+
+**A variant that would make a collision is refused, not dropped.** *Glass*'s
+plural is another entity's name, so it is not admitted, and neither is
+*Glasses*'s singular. A variant may repeat an ambiguity its source already has
+-- two entities both named *Apple* each get *Apples* -- but it may not create
+one. Collisions are counted under the door's own fold, over every id, name and
+alias the document declares. `onto.variants` holds each `Refusal` with the
+entities it would have met; each load also logs the counts at INFO and every
+refusal at DEBUG, on `dataknobs_common.ontology.variants`. An unknown rule
+name is refused when the document is built, by name.
+
+`OntologyRegistry` in `dataknobs-data` reads the section the same way. The
+vocabulary's entities as authored are what a reload diffs, so changing the
+rules is not reported as a change to the vocabulary.
+
+**Rules of your own** are registered by name, and every configuration can then
+name them. A registry entry is a factory taking the rule's parameters:
+
+```python
+from dataknobs_common.text import VARIANT_RULES
+
+def pack_of(config):
+    size = config["size"]
+    return lambda form, context: (f"{form} {size}-pack",)
+
+VARIANT_RULES.register("pack_of", pack_of)
+# variants: [{rule: pack_of, size: 6}]
+```
+
+**In code**, `with_variants` does what a door does, for entities you hold, and
+`dataknobs_common.text.admit` is the primitive under both, generic in whatever
+your entities are keyed by:
+
+```python
+from dataknobs_common.ontology import Entity, MappingEntitySource, with_variants
+from dataknobs_common.text import Declared, admit
+
+entities = {"apple": Entity(id="apple", type="item", name="Apple")}
+varied, report = with_variants(entities)  # the default rules
+MappingEntitySource(varied).by_surface_form("apples")  # frozenset({"apple"})
+
+report = admit([Declared(1, "Glass"), Declared(2, "Glasses")])
+report.refused[0].others  # (2,)
+```
+
+**A live table is not varied for you.** A source over a table of your own
+(`kind: record`, with a surface-form side table) is filled by you, and
+`OntologyRegistry` refuses a `variants:` section beside one. Fill the side
+table from `admit`'s `admitted` forms instead, and re-declare
+`surface_forms.longest_form_tokens:` as the larger of your own widest form and
+`report.longest_form_tokens()` -- `ampersand` and `slash_or` each add a token,
+and a scan never looks wider than the declared bound.
 
 ## Ids are local at the door
 

@@ -67,6 +67,12 @@ class OntologyConfig(StructuredConfig):
             so a section that is not declared here does not survive the trip
             and a door reading one off the raw document disagrees with a door
             that cannot
+        variants: The rules that make each authored form's variants, in the
+            order they compose: each a rule's name, or a mapping naming it
+            under ``rule`` with its parameters beside it. Built by
+            :func:`~dataknobs_common.text.rules_from_config` from
+            :data:`~dataknobs_common.text.VARIANT_RULES`. ``None`` -- the
+            section absent -- generates nothing
     """
 
     id: str
@@ -82,3 +88,4 @@ class OntologyConfig(StructuredConfig):
     index: Mapping[str, Any] | None = None
     resolver: Mapping[str, Any] | None = None
     event_bus: Mapping[str, Any] | None = None
+    variants: list[str | Mapping[str, Any]] | None = None

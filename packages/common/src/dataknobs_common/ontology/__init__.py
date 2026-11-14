@@ -132,6 +132,7 @@ from dataknobs_common.ontology.taxonomy import (
     TaxonomyView,
 )
 from dataknobs_common.text import default_normalizer
+from dataknobs_common.ontology.variants import apply_variants, with_variants
 from dataknobs_common.ontology.values import (
     AsyncOntology,
     KeyCodec,
@@ -229,6 +230,8 @@ __all__ = [
     "relation_id",
     "roll_up",
     "split_qualified",
+    "with_variants",
+    "apply_variants",
     "EntitySourceIndexSource",
     "ALIAS_FORMS_KEY",
     "NODE_ID_KEY",

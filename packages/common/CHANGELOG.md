@@ -367,6 +367,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Variants of an authored form, in `dataknobs_common.text`.** `generate`
+  makes a form's variants from named rules, each rule seeing what the rules
+  before it made, and `admit` keeps the variants that make no collision the
+  authors did not: a variant is refused when an entity that does not hold its
+  source form would hold it, and the refusal is returned with the entities it
+  would have met. The default rules, `DEFAULT_RULES`, are English:
+  `drop_parentheticals`, `ampersand`, `slash_or` (not in a form holding a
+  digit) and `inflect` (the last word, singular to plural and back, by the
+  regular endings; regular endings misread a few words, *News* as the plural
+  of *New*, so `{rule: inflect, keep: [...]}` and `inflect_keeping` name words
+  to leave alone). `camelcase`, `hyphen`, `split`, `parenthetical` and
+  `strip_prefix` are built in and off by default; `strip_prefix` reads the
+  prefix from a field of the context the caller hands each form. Rules are
+  named in `VARIANT_RULES`, a `PluginRegistry`, so a configuration names them
+  and a consumer registers rules of their own; `rules_from_config` builds a
+  list of rule specs and refuses an unknown name or parameter by name.
+  `dataknobs_common.text` is now a package of two modules, `scan` and
+  `variants`, and every name stays importable from `dataknobs_common.text`.
+
+- **An ontology document's `variants:` section.** A list of rule specs; each
+  door that binds an authored vocabulary -- `load_ontology` and
+  `async_load_ontology` -- admits the variants of every entity's name and
+  aliases with its own fold, over the whole document, and appends them to the
+  entities' aliases. `Ontology.variants` carries what was admitted and
+  refused (`None` with no section), and each load logs the counts at INFO and
+  each refusal at DEBUG. No section, no variants. `with_variants` does the same
+  for entities a caller holds in code, and `apply_variants` is the one call
+  every door makes. `OntologyParts.variant_rules` carries the built rules
+  (`None` with no section) and leaves `declared_entities` as authored, and
+  `assemble_ontology` / `assemble_async_ontology` take the report as
+  `variants=`.
+
 - **`StructuredConfig.fingerprint()`: a stable key for a config that is not
   hashable.** The SHA-256 of a canonical encoding of the config's class and
   field values. Configs of one class whose fields hold equal values share it,

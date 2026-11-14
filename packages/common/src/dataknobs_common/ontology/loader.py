@@ -76,6 +76,8 @@ from dataknobs_common.ontology.sources import (
     SourceDescription,
 )
 from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyParts, StrCodec
+from dataknobs_common.ontology.variants import apply_variants
+from dataknobs_common.text import rules_from_config
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -88,6 +90,7 @@ if TYPE_CHECKING:
         MatchSignal,
     )
     from dataknobs_common.registry import PluginRegistry
+    from dataknobs_common.text import Variants
 
 #: Whichever enum a document is declaring a member of. Bound to ``Enum``
 #: because :func:`_declared_enum` calls the type and iterates its members, and
@@ -151,7 +154,12 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
             ``relation_types:`` is non-empty; a ``kind:``-bearing taxonomy row
             declares a label rather than a reference and is exempt. See
             :func:`_declared_relations` and
-            :func:`_refuse_undeclared_taxonomy_relations`
+            :func:`_refuse_undeclared_taxonomy_relations`. Also on a
+            ``variants:`` section that is not a list of rule specs, names a
+            rule :data:`~dataknobs_common.text.VARIANT_RULES` does not hold,
+            or gives a rule parameters it refuses -- the message names the
+            rule. The rules are built here and carried on the result; they
+            are *applied* by each door, which alone knows the fold
     """
     _refuse_reserved_id(config.id)
     _refuse_colon("ontology id", config.id)
@@ -209,6 +217,8 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
 
     _refuse_duplicate_assertion_ids(assertions)
 
+    variant_rules = None if config.variants is None else rules_from_config(config.variants)
+
     return OntologyParts(
         id=config.id,
         version=config.version,
@@ -220,6 +230,7 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
         declared_assertions=tuple(assertions),
         source_specs=source_specs,
         taxonomy_specs=tuple(config.taxonomies),
+        variant_rules=variant_rules,
     )
 
 
@@ -264,13 +275,15 @@ def load_ontology(
     """
     config = _read_config(source)
     parts = _validated_parts(config)
-    entities = MappingEntitySource(parts.declared_entities, normalizer=normalizer)
+    bound, variants = apply_variants(parts, normalizer=normalizer)
+    entities = MappingEntitySource(bound, normalizer=normalizer)
     assertions = MappingAssertionSource(parts.declared_assertions)
     return assemble_ontology(
         parts,
         entities=entities,
         assertions=assertions,
         describes=(entities.describe(),),
+        variants=variants,
     )
 
 
@@ -306,13 +319,15 @@ async def async_load_ontology(
         config = _read_config(source)
 
     parts = _validated_parts(config)
-    entities = AsyncMappingEntitySource(parts.declared_entities, normalizer=normalizer)
+    bound, variants = apply_variants(parts, normalizer=normalizer)
+    entities = AsyncMappingEntitySource(bound, normalizer=normalizer)
     assertions = AsyncMappingAssertionSource(parts.declared_assertions)
     return await assemble_async_ontology(
         parts,
         entities=entities,
         assertions=assertions,
         describes=(entities.describe(),),
+        variants=variants,
     )
 
 
@@ -323,6 +338,7 @@ def assemble_ontology(
     assertions: AssertionSource[str],
     describes: tuple[SourceDescription, ...],
     structures: Mapping[str, Hierarchy[str]] | None = None,
+    variants: Variants[str] | None = None,
 ) -> Ontology[str]:
     """The value a door returns, from the parts every door has in common.
 
@@ -360,6 +376,10 @@ def assemble_ontology(
         structures: The axes this door bound, keyed by the name each is
             reached under. ``None`` from a door that binds none, which is
             every synchronous door there is -- see :func:`_bound_structures`
+        variants: What the door's
+            :func:`~dataknobs_common.ontology.variants.apply_variants` call
+            reported, carried onto the value. ``None`` where the document has
+            no ``variants:`` section
 
     Returns:
         The vocabulary, with synchronous backings
@@ -383,6 +403,7 @@ def assemble_ontology(
         codec=StrCodec(),
         structures={**bound, **copied},
         imports=parts.imports,
+        variants=variants,
     )
 
 
@@ -393,6 +414,7 @@ async def assemble_async_ontology(
     assertions: AsyncAssertionSource[str],
     describes: tuple[SourceDescription, ...],
     structures: Mapping[str, AsyncHierarchy[str]] | None = None,
+    variants: Variants[str] | None = None,
 ) -> AsyncOntology[str]:
     """:func:`assemble_ontology`'s twin, and the one the third door calls.
 
@@ -410,6 +432,7 @@ async def assemble_async_ontology(
             name each is reached under -- a ``kind: column`` axis over a table
             is the case, and the door that binds one is in another
             distribution. ``None`` from a door that binds none
+        variants: As :func:`assemble_ontology`
 
     Returns:
         The vocabulary, with asynchronous backings
@@ -433,6 +456,7 @@ async def assemble_async_ontology(
         codec=StrCodec(),
         structures={**bound, **copied},
         imports=parts.imports,
+        variants=variants,
     )
 
 

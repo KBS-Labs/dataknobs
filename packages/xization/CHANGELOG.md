@@ -65,6 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`get_hyphen_slash_expansions_fn` substitutes where the pattern it is given
+  matches.** Only the split read `hyphen_slash_re`; the substitutions used the
+  combined hyphen, slash and space pattern whatever was passed, so a
+  slash-only pattern turned `a-b c` into `a or b or c`. Called without the
+  argument, it behaves as before, and so does `get_lexical_variations`, which
+  now passes the combined pattern explicitly.
+
 - **A configured annotation column name no longer breaks reading the rows
   back.** `AnnotationsMetaData.sort_fields` holds col *types*, as its own
   parameter documents, and `sort_df` handed them to pandas as though they were
@@ -392,6 +399,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`expand_camelcase_fn` is `dataknobs_common.text`'s `camelcase` rule**, and
+  `get_lexical_variations` splits camelCase through it. Its output, and that of
+  `get_lexical_variations`, is unchanged, which a comparison against the
+  released implementation over every pair of its flags pins. New code wanting
+  a vocabulary's variants should use `dataknobs_common.text`'s generator,
+  which refuses a variant that would make two entities collide. This package
+  now needs the `dataknobs-common` release that ships that module.
+
 - **`DirectoryProcessor.process()` no longer refuses a caller already on an
   event loop.** The sync wrapper collected `process_async()` through
   `asyncio.run`, which raises `RuntimeError: asyncio.run() cannot be called
@@ -459,7 +474,8 @@ listed above ship deprecated with them.
   `dataknobs_common.ontology`. Regex
   authorities and annotation validators have none yet.
 - **`dataknobs_xization.lexicon`.** Same replacement; declare each variation
-  as a form of its entity. Two defects in its matching are known and will not
+  as a form of its entity. An ontology document's `variants:` section
+  generates them, with the rules in `dataknobs_common.text`. Two defects in its matching are known and will not
   be fixed: a form shared by several values is annotated with the first
   value's id only, and the separators between tokens are ignored, so a form
   with interior punctuation never matches and a multi-word form matches
