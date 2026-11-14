@@ -453,6 +453,86 @@ which binding a row belongs to. A `kind: record` binding only ever **reads**,
 so that column is yours to add rather than the registry's to write, and there
 is no form of `table:` that could stand in for one.
 
+### A live binding's revision is its owner's
+
+An authored vocabulary digests what it holds, and that is its
+[revision](https://kbs-labs.github.io/dataknobs/packages/common/ontology/#which-state-of-a-vocabulary-answered).
+A table's rows change without the source hearing of it, so only the table's
+owner can say which state is answering: a migration number, a snapshot id, a
+high-water mark of a change log. Hand the source an async callable that
+answers it:
+
+```python
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_data.ontology import EntityProjection, RecordEntitySource
+
+projection = EntityProjection.from_mapping(
+    {"table": "products", "id": "sku", "name": "title", "type": {"const": "Product"}},
+    binding="products",
+)
+
+async def snapshot() -> str:
+    return "snapshot-0042"   # read from wherever your deployment records it
+
+source = RecordEntitySource(
+    AsyncMemoryDatabase(), projection, source_id="products", revision=snapshot
+)
+assert await source.revision() == "snapshot-0042"
+```
+
+The provider is a `RevisionProvider` — `Callable[[], Awaitable[str]]` — and is
+awaited on every call, with no cache, because an answer held from an earlier
+call is the one thing that could miss a change. It must answer a `str`: the
+source declares `Capability.SOURCE_REVISION` exactly when it is given one, so
+an answer of anything else — a `None` from an empty change log — raises
+`TypeError` rather than reading as *no change*. A provider that cannot be
+called is refused when the source is built. Without one, the source withholds
+the capability and answers `None`.
+
+**Through the registry, inject it.** A document can name a table but not the
+code that knows which state the table is in, so a provider reaches the
+registry the way an embedder does: as a collaborator, keyed by the source id
+the document declares.
+
+```python
+from dataknobs_common.ontology import OntologyConfig
+from dataknobs_data.ontology import OntologyRegistry
+
+document = {
+    "id": "catalog",
+    "entity_types": [{"id": "Product"}],
+    "sources": [
+        {
+            "id": "products",
+            "kind": "record",
+            "entity_projection": {
+                "table": "products",
+                "id": "sku",
+                "name": "title",
+                "type": {"const": "Product"},
+            },
+            "schema": [
+                {"name": "sku", "type": "string"},
+                {"name": "title", "type": "string"},
+            ],
+        }
+    ],
+}
+registry = OntologyRegistry.from_components(
+    config=OntologyConfig(**document),
+    database=AsyncMemoryDatabase(),
+    revision_providers={"products": snapshot},
+)
+async with registry:
+    onto = await registry.load()
+    assert await onto.entities.revision() == "snapshot-0042"
+```
+
+A provider applies to the `kind: record` source of that id in every document
+the registry loads, and a source with no provider keyed to it has none. One
+keyed to an **authored** source is refused at load: an authored source answers
+from the entities it holds, so the provider could only be ignored.
+
 ## A taxonomy over a parent column
 
 Rows that carry their parent's key are a hierarchy already. A `taxonomies:`

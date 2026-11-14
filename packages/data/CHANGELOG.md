@@ -1025,6 +1025,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`RecordEntitySource` takes a `revision=` provider**, an async callable
+  typed by the new `RevisionProvider` alias, exported from
+  `dataknobs_data.ontology`. With one, the source declares
+  `Capability.SOURCE_REVISION` and `revision()` awaits the provider on every
+  call, uncached; without one it withholds the capability and answers `None`.
+  A provider answering anything but a string raises `TypeError`, and one that
+  cannot be called is refused at construction.
+
+- **`OntologyRegistry` takes a `revision_providers` collaborator**, mapping a
+  live source's id to its provider, through `from_components` or any door's
+  components. The registry hands each `kind: record` binding the provider
+  keyed to its id; one keyed to an authored source is refused at load.
+
+- **The registry's authored sources answer a revision** spelled as the
+  `dataknobs_common` loaders spell it: the document's version, `@`, then a
+  digest of the entities bound, since the registry now passes the document's
+  version to the source it builds.
+
 - **`OntologyRegistry.load` reads an ontology's `variants:` section**, as
   `dataknobs_common`'s loaders do: the variants of an authored vocabulary are
   admitted with the registry's fold and bound as aliases, and the report is on

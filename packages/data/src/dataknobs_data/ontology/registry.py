@@ -80,6 +80,7 @@ from dataknobs_data.ontology.sources import (
     RECORD_SOURCE_KIND,
     EntityProjection,
     RecordEntitySource,
+    RevisionProvider,
     refuse_undeclared_columns,
     validate_against_schema,
 )
@@ -264,8 +265,15 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
     #: **refused at load**, naming what to inject. Refused rather than
     #: dropped: a section parsed into a field and discarded with no error is
     #: the failure this registry has already been caught in once.
+    #:
+    #: ``revision_providers`` maps a live source's id to the async callable
+    #: that answers its revision, for the reason the embedder is injected: a
+    #: document can name a table but not the code that knows which state the
+    #: table is in. A provider applies to the ``kind: record`` source of that
+    #: id in every document this registry loads. One keyed to an authored
+    #: source is refused at load, since an authored source digests its own.
     OPTIONAL_COMPONENTS: ClassVar[frozenset[str]] = frozenset(
-        {"database", "embedder", "event_bus", "forms_database"}
+        {"database", "embedder", "event_bus", "forms_database", "revision_providers"}
     )
 
     #: The live source kinds this registry binds.
@@ -428,6 +436,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         self._injected_database: AsyncDatabase | None = None
         self._injected_forms_database: AsyncDatabase | None = None
         self._injected_embedder: TextEmbedder | None = None
+        self._revision_providers: dict[str, RevisionProvider] = {}
         self._event_bus: EventBus | None = None
         self._owns_event_bus = False
         # A registry may hold no document at all -- `OntologyRegistry()` then
@@ -487,6 +496,23 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         embedder = self.components.get("embedder")
         if embedder is not None:
             self._injected_embedder = embedder
+        providers = self.components.get("revision_providers")
+        if providers is not None:
+            if not isinstance(providers, Mapping):
+                raise ValidationError(
+                    "`revision_providers` maps a live source's id to its revision "
+                    f"provider, and was handed a {type(providers).__name__}",
+                    context={"component": "revision_providers"},
+                )
+            refused = sorted(str(key) for key, value in providers.items() if not callable(value))
+            if refused:
+                raise ValidationError(
+                    f"`revision_providers` holds something that is not callable for "
+                    f"{refused}. Each value is an async callable answering the "
+                    f"source's revision",
+                    context={"component": "revision_providers", "source_ids": refused},
+                )
+            self._revision_providers = {str(key): value for key, value in providers.items()}
         event_bus = self.components.get("event_bus")
         if event_bus is not None:
             self._event_bus = event_bus
@@ -1096,9 +1122,25 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                     f"module-level loader binds: {sorted(AUTHORED_SOURCE_KINDS)}",
                     context={"source_id": spec.get("id"), "kind": kind},
                 )
+        authored_with_a_provider = sorted(
+            str(spec.get("id", ""))
+            for spec in parts.source_specs
+            if str(spec.get("kind", "")) in AUTHORED_SOURCE_KINDS
+            and str(spec.get("id", "")) in self._revision_providers
+        )
+        if authored_with_a_provider:
+            raise ValidationError(
+                f"ontology {parts.id!r} declares {authored_with_a_provider} as authored, "
+                f"and `revision_providers` names them. An authored source answers "
+                f"its revision from the entities it holds; a provider is for a "
+                f"`kind: record` source, whose rows change without a reload",
+                context={"ontology_id": parts.id, "source_ids": authored_with_a_provider},
+            )
         if not live:
             entities, variants = apply_variants(parts, normalizer=self._normalizer)
-            authored = AsyncMappingEntitySource(entities, normalizer=self._normalizer)
+            authored = AsyncMappingEntitySource(
+                entities, normalizer=self._normalizer, version=parts.version
+            )
             return _BoundSources(authored, (authored.describe(),), {}, variants)
         if parts.variant_rules is not None:
             raise ValidationError(
@@ -1261,6 +1303,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             backend=backend,
             normalizer=self._normalizer,
             forms_database=forms_database,
+            revision=self._revision_providers.get(source_id),
         )
         return source, _LiveBinding(
             source_id, database, projection, declared_schema, tuple(source.entity_filters())

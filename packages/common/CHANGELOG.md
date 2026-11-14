@@ -367,6 +367,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A source says which state of its vocabulary is answering.**
+  `EntitySource.revision()` and `AsyncEntitySource.revision()` (awaitable on
+  the async twin) answer an opaque string that changes when what the source
+  resolves changes, so a caller can store it beside a link and detect a later
+  change. A source that can answer declares the new
+  `Capability.SOURCE_REVISION`; one that cannot answers `None`.
+  `MappingEntitySource` and its twin declare it and answer the document's
+  version, `@`, then a SHA-256 of the entities they hold, variants included,
+  digested when the source is built. Both take a new keyword-only `version=`,
+  which `load_ontology` and `async_load_ontology` pass from the document; a
+  source built in code without one answers the bare digest. An entity holding
+  a value no digest can identify, such as a lambda in its `metadata`, now
+  fails the source's construction with a `TypeError` naming the field. The
+  normalizer is not part of the revision. Compare answers for equality; do not
+  parse them.
+
+- **`fingerprint_value(value, *, path="value")`**, exported from
+  `dataknobs_common`: a SHA-256 of any value's content by the canonical
+  encoding `StructuredConfig.fingerprint()` uses. Unlike a config fingerprint
+  it encodes NaN rather than refusing it, since two values that both hold NaN
+  hold the same content. `fingerprint()` is unchanged.
+
 - **Variants of an authored form, in `dataknobs_common.text`.** `generate`
   makes a form's variants from named rules, each rule seeing what the rules
   before it made, and `admit` keeps the variants that make no collision the
@@ -1306,11 +1328,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 358,
-  the eighteen beyond them being the operation family, the near-spelling rung,
+  the resolution cascade — 134 names, taking the package's `__all__` to 359,
+  the nineteen beyond them being the operation family, the near-spelling rung,
   the surface-form catalogue, the index-source family, the edge rule's three
-  functions, `aclosing_iter`, `PluginConfig` and `naming_refusals`, each added
-  by its own entry. `declared_candidates` is inside the 134 rather than beyond
+  functions, `aclosing_iter`, `PluginConfig`, `naming_refusals` and
+  `fingerprint_value`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond
   them, which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to

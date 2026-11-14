@@ -90,6 +90,9 @@ class _RecordingEntitySource:
         # accessor returning it can only mean it asked.
         return 99
 
+    def revision(self) -> str | None:
+        return self._inner.revision()
+
 
 def test_the_double_conforms_to_the_protocol_it_stands_in_for() -> None:
     """The guard whose absence is why widening the protocol broke this quietly.
@@ -224,6 +227,7 @@ _SOURCE_MEMBERS = [
     "by_surface_form",
     "by_type",
     "longest_form_tokens",
+    "revision",
 ]
 _SOURCE_UNFLAVOURED = ("describe", "longest_form_tokens")
 

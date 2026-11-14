@@ -427,6 +427,7 @@ from dataknobs_common.structured_config import (
     StructuredConfig,
     StructuredConfigConsumer,
     config_registries,
+    fingerprint_value,
     register_sensitive_interior_key,
 )
 from dataknobs_common.tenancy import (
@@ -701,6 +702,7 @@ __all__ = [
     "StructuredConfig",
     "StructuredConfigConsumer",
     "config_registries",
+    "fingerprint_value",
     "register_sensitive_interior_key",
     # Ontology — an authored vocabulary, and what loads and reads one
     #

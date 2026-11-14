@@ -733,16 +733,20 @@ def _sort_key(encoded: Any) -> str:
 _NUMBER_TYPES: tuple[type, ...] = (int, float, decimal.Decimal, fractions.Fraction)
 
 
-def _encode_number(value: Any, path: str) -> Any:
+def _encode_number(value: Any, path: str, *, nan: bool = False) -> Any:
     """Encode a number by its exact value, so numbers Python calls equal meet.
 
     An integral value is its ``int``; any other finite value is its ratio in
     lowest terms; an infinity is its sign. NaN is refused, being unequal to
-    itself.
+    itself -- unless ``nan`` is on, when it is a tag of its own: a digest of
+    *content* treats two values that both say NaN as saying the same thing,
+    which a key for *equality* cannot.
     """
     if (isinstance(value, float) and math.isnan(value)) or (
         isinstance(value, decimal.Decimal) and value.is_nan()
     ):
+        if nan:
+            return {"nan": 1}
         raise ValueError(
             f"{path} holds NaN, which is unequal to itself, so no key can stand "
             "for it. Leave the field out with _FINGERPRINT_EXCLUDE."
@@ -793,12 +797,13 @@ def _encode_path(value: pathlib.PurePath) -> Any:
 
 
 def _fingerprint_encode(
-    owner: StructuredConfig,
+    owner: StructuredConfig | None,
     value: Any,
     path: str,
     *,
     hook: bool = True,
     active: frozenset[int] = frozenset(),
+    nan: bool = False,
 ) -> Any:
     """Encode ``value`` as JSON that two values share only if they are equal.
 
@@ -811,19 +816,21 @@ def _fingerprint_encode(
 
     Anything else goes to ``owner._fingerprint_value``, and what that returns
     is tagged as its answer and encoded with ``hook`` off all the way down, so
-    the hook is consulted once per value. A type nothing can import is
+    the hook is consulted once per value. With no ``owner`` there is no hook,
+    and anything else is refused. ``nan`` tags NaN rather than refusing it;
+    see :func:`_encode_number`. A type nothing can import is
     anything else, since its name could be another type's. ``active`` holds
     the containers being encoded, so one holding itself is refused rather
     than followed for ever.
     """
 
     def inner(item: Any, at: str) -> Any:
-        return _fingerprint_encode(owner, item, at, hook=hook, active=active | {id(value)})
+        return _fingerprint_encode(owner, item, at, hook=hook, active=active | {id(value)}, nan=nan)
 
     if value is None or isinstance(value, str):
         return value
     if isinstance(value, _NUMBER_TYPES):
-        return _encode_number(value, path)
+        return _encode_number(value, path, nan=nan)
     if isinstance(value, (list, tuple, set, frozenset, Mapping)) or (
         dataclasses.is_dataclass(value) and not isinstance(value, type)
     ):
@@ -833,7 +840,7 @@ def _fingerprint_encode(
     if isinstance(value, Enum) and named is not None:
         return {"enum": [named, inner(value.value, path)]}
     if isinstance(value, StructuredConfig) and named is not None:
-        return {"config": [named, value._fingerprint_fields(path, active | {id(value)})]}
+        return {"config": [named, value._fingerprint_fields(path, active | {id(value)}, nan=nan)]}
     if dataclasses.is_dataclass(value) and not isinstance(value, type) and named is not None:
         fields = {
             f.name: inner(getattr(value, f.name), f"{path}.{f.name}")
@@ -862,19 +869,81 @@ def _fingerprint_encode(
         ref = _import_path(value)
         if ref is not None:
             return {"ref": ref}
-    if hook:
+    if hook and owner is not None:
         answered = owner._fingerprint_value(value, path)
         return {
             "custom": [
                 named,
-                _fingerprint_encode(owner, answered, path, hook=False, active=active),
+                _fingerprint_encode(owner, answered, path, hook=False, active=active, nan=nan),
             ]
         }
+    remedy = (
+        "Leave the field out with _FINGERPRINT_EXCLUDE, or encode it by overriding "
+        "_fingerprint_value."
+        if owner is not None
+        else "Hold a value that identifies it instead, such as a name or an import path."
+    )
     raise TypeError(
         f"{path} holds {type(value).__name__} {value!r}, which a fingerprint cannot "
-        "identify: it has no import path and no value text. Leave the field out with "
-        "_FINGERPRINT_EXCLUDE, or encode it by overriding _fingerprint_value."
+        f"identify: it has no import path and no value text. {remedy}"
     )
+
+
+def _digest(encoded: Any) -> str:
+    """SHA-256 of an encoding's canonical text: the one place the digest format lives."""
+    text = json.dumps(encoded, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def fingerprint_value(value: Any, *, path: str = "value") -> str:
+    """A stable digest of a value's content, by the encoding configs are keyed with.
+
+    The same canonical encoding :meth:`StructuredConfig.fingerprint` uses, over
+    any value rather than a config's fields: two values share a digest when
+    Python calls them equal -- mapping and set order, ``1`` against ``1.0``,
+    one instant in two time zones -- and differ when their content or their
+    kinds differ. Dataclasses, containers, enum members, numbers, dates,
+    paths, UUIDs and byte strings are encoded by value, and types and
+    module-level functions by import path.
+
+    **A digest of content, not a key for equality**, which is the one place it
+    parts from ``fingerprint()``: NaN is encoded as NaN rather than refused,
+    because two values that both say NaN hold the same content even though
+    neither equals the other. A value holding NaN therefore shares a digest
+    with another holding NaN where they would not compare equal.
+
+    **A config is encoded as its own fingerprint encodes it**, its
+    ``_fingerprint_value`` hook and ``_FINGERPRINT_EXCLUDE`` included, so
+    ``fingerprint_value(cfg) == cfg.fingerprint()`` for any config ``cfg`` that
+    holds no NaN. One holding NaN has a digest here and none from
+    ``fingerprint()``, which refuses it. A config is tagged as a config, so it
+    never shares a digest with a plain value holding the same fields.
+
+    **Equal means as Python compares**, which is the encoding's point and its
+    limit as a record of content: ``1``, ``1.0`` and ``True`` share an
+    encoding, as do a ``set`` and a ``frozenset`` of the same members, and one
+    instant in two time zones. A change between two such values does not move
+    the digest.
+
+    Args:
+        value: What to digest.
+        path: How to name ``value`` in an error, so the refusal names the
+            field that holds the offending value.
+
+    Returns:
+        Sixty-four hex characters.
+
+    Raises:
+        TypeError: ``value`` holds something nothing identifies -- a lambda, a
+            bound method, a live client, a class defined inside a function --
+            so two such values could share a digest and differ.
+        ValueError: ``value`` holds a container that holds itself, or a
+            config whose ``_FINGERPRINT_EXCLUDE`` names something that is not
+            a field.
+        RecursionError: ``value`` nests deeper than the interpreter's
+            recursion limit allows.
+    """
+    return _digest(_fingerprint_encode(None, value, path, hook=False, nan=True))
 
 
 # ``eq=False``: the base has no fields, and an ``__eq__`` generated over none
@@ -1389,12 +1458,19 @@ class StructuredConfig:
                 "import reaches it and another class of that name could share "
                 "its fingerprint. Define it at module level."
             )
-        encoded = {"config": [named, self._fingerprint_fields(type(self).__name__, frozenset())]}
-        text = json.dumps(encoded, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+        return _digest(
+            {"config": [named, self._fingerprint_fields(type(self).__name__, frozenset())]}
+        )
 
-    def _fingerprint_fields(self, path: str, active: frozenset[int]) -> dict[str, Any]:
-        """This config's fields, encoded, without the ones its equality or policy leaves out."""
+    def _fingerprint_fields(
+        self, path: str, active: frozenset[int], *, nan: bool = False
+    ) -> dict[str, Any]:
+        """This config's fields, encoded, without the ones its equality or policy leaves out.
+
+        ``nan`` is the mode of the digest this config is nested in, carried
+        down so a config inside :func:`fingerprint_value` tags NaN as the
+        rest of that value does. :meth:`fingerprint` leaves it off.
+        """
         fields = {f.name: f for f in dataclasses.fields(self)}
         unknown = sorted(set(self._FINGERPRINT_EXCLUDE) - fields.keys())
         if unknown:
@@ -1403,7 +1479,9 @@ class StructuredConfig:
                 f"which are not fields. Fields: {sorted(fields)}."
             )
         return {
-            name: _fingerprint_encode(self, getattr(self, name), f"{path}.{name}", active=active)
+            name: _fingerprint_encode(
+                self, getattr(self, name), f"{path}.{name}", active=active, nan=nan
+            )
             for name, f in fields.items()
             if f.compare and name not in self._FINGERPRINT_EXCLUDE
         }
@@ -2436,5 +2514,6 @@ __all__ = [
     "StructuredConfig",
     "StructuredConfigConsumer",
     "config_registries",
+    "fingerprint_value",
     "register_sensitive_interior_key",
 ]

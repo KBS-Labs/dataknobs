@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 
 from dataknobs_common.capabilities import Capability, CapabilityLike, CapabilityMixin
 from dataknobs_common.hierarchy import K
+from dataknobs_common.structured_config import fingerprint_value
 from dataknobs_common.ontology.model import (
     Assertion,
     Entity,
@@ -64,7 +65,12 @@ AUTHORED_SOURCE_ID = "authored"
 #: not ``ORIGIN_FETCH``: the index folds every entity's id, name and aliases
 #: when it is built, which is what the member answers over, and an authored
 #: file has no database behind it to reach an origin in.
-_AUTHORED_CAPABILITIES: frozenset[Capability] = frozenset({Capability.SURFACE_FORM_LOOKUP})
+#: :attr:`~dataknobs_common.capabilities.Capability.SOURCE_REVISION` because
+#: the index digests the entities it holds when it is built, so it always has
+#: an answer, and the answer describes the same state its lookups do.
+_AUTHORED_CAPABILITIES: frozenset[Capability] = frozenset(
+    {Capability.SURFACE_FORM_LOOKUP, Capability.SOURCE_REVISION}
+)
 
 
 @dataclass(eq=True, frozen=False)
@@ -169,11 +175,12 @@ class EntitySource(Protocol[K]):
     could not be used together. A source written before the parameter existed
     is an ``EntitySource[str]`` and conforms unchanged.
 
-    **Four of its members move with the key and four do not**, which is the
+    **Four of its members move with the key and five do not**, which is the
     distinction a reader cannot get from the diff: ``get``, ``get_many``,
     ``by_surface_form`` and ``by_type`` each carry an entity id somewhere. What
     stays ``str`` is a *surface form* a person typed, an entity **type** id the
-    document authored, and the origin members' record types.
+    document authored, the origin members' record types, and a revision, which
+    is a label the source mints for its own state.
     ``by_surface_form(form: str) -> frozenset[K]`` is the member with one of
     each in one signature.
 
@@ -187,14 +194,15 @@ class EntitySource(Protocol[K]):
     :class:`AssertionSource` refuses to impose, and it is stricter for a
     member than for a keyword.
 
-    **:meth:`longest_form_tokens` is here anyway, and the exception is dated.**
-    That argument is about a population of structural conformers, and when the
-    member was added that population was empty: ``git ls-tree -r
-    common/v3.2.0 -- packages/common/src/dataknobs_common/ontology`` lists no
-    files, so this protocol had not been in a release and the migration it
-    describes cost nothing. It is the only member that will ever be able to
-    say that, and the tag is named so the next author can re-run the check
-    rather than inherit the conclusion.
+    **:meth:`longest_form_tokens` and :meth:`revision` are here anyway, and
+    the exception is dated.** That argument is about a population of
+    structural conformers, and when each member was added that population was
+    empty: ``git ls-tree -r common/v3.2.0 --
+    packages/common/src/dataknobs_common/ontology`` lists no files, so this
+    protocol had not been in a release and the migration it describes cost
+    nothing. The exception closes at the first release that ships this
+    protocol, after which no member can claim it; the tag is named so the next
+    author can re-run the check rather than inherit the conclusion.
 
     The alternative -- a second optional protocol, on the
     :class:`AliasFormSource` pattern -- buys a source the right not to answer,
@@ -278,6 +286,46 @@ class EntitySource(Protocol[K]):
 
     def longest_form_tokens(self) -> int | None: ...
 
+    def revision(self) -> str | None:
+        """Which state of this vocabulary is answering, as an opaque string.
+
+        **What it is for.** A caller that records a link made against this
+        source -- a mention resolved to an entity, an index built over its
+        forms -- stores this beside it, and asks again later. Two different
+        answers mean the vocabulary has changed since, so the link is worth
+        checking rather than trusting.
+
+        **``None`` where the source does not declare**
+        :attr:`~dataknobs_common.capabilities.Capability.SOURCE_REVISION`, and
+        only there. A source that declares it always answers a string, because
+        a ``None`` from it would read as *no change* to a caller comparing two
+        answers.
+
+        **Opaque.** Compare two answers for equality and do not parse them. An
+        authored source spells its answer ``<version>@<digest>``, or the bare
+        digest when it was built with no version, but a caller may not split
+        on the ``@``: a version string may itself contain one.
+
+        **Equal answers mean content Python compares equal, under one release
+        of this library.** Two limits follow, in opposite directions:
+
+        * a change between values Python calls equal does not move it --
+          ``1`` to ``1.0`` or ``True`` in an entity's ``metadata``, a ``set``
+          to a ``frozenset`` of the same members, one instant moved to another
+          time zone. Nothing resolution reads can differ between such values,
+          but a consumer reading ``metadata`` by type could;
+        * a different release may encode differently and move every revision,
+          and reordering an entity's aliases moves it though the entity
+          resolves the same. Those report a change that did not happen.
+
+        **The fold is not part of it.** A normalizer is a callable and is not
+        digested by content, so the same entities built with a different fold
+        answer the same revision while resolving differently. A fold is code,
+        and a change to it is a code change, which a revision of the
+        vocabulary's content does not describe.
+        """
+        ...
+
 
 @runtime_checkable
 class AsyncEntitySource(Protocol[K]):
@@ -292,10 +340,14 @@ class AsyncEntitySource(Protocol[K]):
     making either awaitable would buy nothing and cost every caller an
     ``await``.
 
-    :meth:`longest_form_tokens` widened this protocol too, under the dated
-    exception :class:`EntitySource` records and for the same reason -- neither
-    twin had been in a release. Read that note before adding a second member
-    on its authority: what it licensed was a widening with no conformers to
+    :meth:`revision` reports on the source as those two do, and is awaitable
+    here all the same: a live source reads its answer from its owner, which
+    may be a round trip.
+
+    :meth:`longest_form_tokens` and :meth:`revision` widened this protocol
+    too, under the dated exception :class:`EntitySource` records and for the
+    same reason -- neither twin had been in a release. Read that note before
+    adding a third member on its authority: what it licensed was a widening with no conformers to
     break, and that is a fact about ``common/v3.2.0``, not a standing
     allowance.
     """
@@ -346,6 +398,16 @@ class AsyncEntitySource(Protocol[K]):
     async def by_type(self, type_id: str) -> frozenset[K]: ...
 
     def longest_form_tokens(self) -> int | None: ...
+
+    async def revision(self) -> str | None:
+        """The synchronous twin's contract, with an ``await`` for a live owner.
+
+        ``None`` only where the source does not declare
+        :attr:`~dataknobs_common.capabilities.Capability.SOURCE_REVISION`;
+        opaque; equal answers mean equal content under one release; the fold
+        is not part of it. See :meth:`EntitySource.revision`.
+        """
+        ...
 
 
 @runtime_checkable
@@ -448,10 +510,17 @@ class _EntityIndex:
     matched. Reconstructing it in the caller, by fetching each hit and folding
     its aliases again, would put the vocabulary's own answer in the matcher's
     hands, which is the arrangement the frozenset above exists to avoid.
+
+    **The revision is digested here too, in the same construction**, so the
+    digest and the lookup maps describe one state of the entities. Computed
+    later, it could describe entities changed after the maps were built --
+    a state no lookup answers from.
     """
 
     entities: Mapping[str, Entity]
     normalizer: Callable[[str], str] = default_normalizer
+    version: str | None = None
+    digest: str = field(default="", init=False)
     by_form: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
     by_alias: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
     by_type: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
@@ -496,6 +565,10 @@ class _EntityIndex:
         # token bound's reason: the key is then not what the query spells. See
         # :meth:`_edge` for why it reads the form as written too.
         self.form_edge = None if merges else edge
+        # Last, and here rather than on first ask: a value nothing identifies
+        # fails the construction, naming the entity and field, so a source
+        # built in code finds out where it was built.
+        self.digest = fingerprint_value(self.entities, path="entities")
 
     @staticmethod
     def _edge(form: str, folded: str) -> int:
@@ -584,6 +657,9 @@ class _EntityIndex:
     def longest_form_tokens(self) -> int | None:
         return self.longest_form
 
+    def revision(self) -> str:
+        return self.digest if self.version is None else f"{self.version}@{self.digest}"
+
     def describe(self) -> SourceDescription:
         return SourceDescription(
             source_id=AUTHORED_SOURCE_ID,
@@ -635,8 +711,21 @@ class MappingEntitySource(CapabilityMixin):
         entities: Mapping[str, Entity],
         *,
         normalizer: Callable[[str], str] | None = None,
+        version: str | None = None,
     ) -> None:
-        self._index = _EntityIndex(entities, normalizer or default_normalizer)
+        """Index ``entities``, folding with ``normalizer``.
+
+        ``version`` is the document's declared version, which prefixes
+        :meth:`revision`'s answer. The loader doors pass it; a source built in
+        code with none answers the bare digest.
+
+        Raises:
+            TypeError: An entity holds a value no digest can identify, such
+                as a lambda in its ``metadata``. The message names the entity
+                and the field.
+            ValueError: An entity holds a container that holds itself.
+        """
+        self._index = _EntityIndex(entities, normalizer or default_normalizer, version)
 
     def get(self, entity_id: str) -> Entity | None:
         """The entity with this id, or None."""
@@ -756,6 +845,16 @@ class MappingEntitySource(CapabilityMixin):
         """
         return self._index.longest_form_tokens()
 
+    def revision(self) -> str:
+        """The document's version, ``@``, then a digest of the entities held.
+
+        Digested when the source was built, over every entity including the
+        aliases variants added, so it is the state the lookups answer from.
+        See :meth:`EntitySource.revision` for what a caller may and may not
+        read into it.
+        """
+        return self._index.revision()
+
 
 class AsyncMappingEntitySource(CapabilityMixin):
     """:class:`MappingEntitySource` with ``async`` on the members that read.
@@ -776,8 +875,21 @@ class AsyncMappingEntitySource(CapabilityMixin):
         entities: Mapping[str, Entity],
         *,
         normalizer: Callable[[str], str] | None = None,
+        version: str | None = None,
     ) -> None:
-        self._index = _EntityIndex(entities, normalizer or default_normalizer)
+        """Index ``entities``, folding with ``normalizer``.
+
+        ``version`` is the document's declared version, which prefixes
+        :meth:`revision`'s answer. The loader doors pass it; a source built in
+        code with none answers the bare digest.
+
+        Raises:
+            TypeError: An entity holds a value no digest can identify, such
+                as a lambda in its ``metadata``. The message names the entity
+                and the field.
+            ValueError: An entity holds a container that holds itself.
+        """
+        self._index = _EntityIndex(entities, normalizer or default_normalizer, version)
 
     async def get(self, entity_id: str) -> Entity | None:
         """The entity with this id, or None."""
@@ -850,6 +962,13 @@ class AsyncMappingEntitySource(CapabilityMixin):
         :meth:`MappingEntitySource.longest_form_tokens`.
         """
         return self._index.longest_form_tokens()
+
+    async def revision(self) -> str:
+        """Awaitable to match the protocol; it reads what construction digested.
+
+        See :meth:`MappingEntitySource.revision`.
+        """
+        return self._index.revision()
 
 
 @dataclass

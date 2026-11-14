@@ -19,7 +19,7 @@ interpolated into SQL: :class:`~dataknobs_data.query.Filter` is the only path.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from itertools import batched
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -38,12 +38,23 @@ from dataknobs_common.text import default_normalizer
 from dataknobs_data.query import Filter, Operator, Query
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Sequence
 
     from dataknobs_common.records import Record
 
     from dataknobs_data.database import AsyncDatabase
     from dataknobs_data.schema import DatabaseSchema
+
+#: What a live source asks for its revision: an async callable answering a
+#: string the source's owner keeps -- a migration number, a snapshot id, a
+#: high-water mark of the table's change log.
+#:
+#: It answers ``str`` and never ``None``, because the source declares
+#: :attr:`~dataknobs_common.capabilities.Capability.SOURCE_REVISION` exactly
+#: when it is handed one: a provider that could say "I don't know" would make
+#: the capability's promise conditional, and put its meaning back in the
+#: caller's hands.
+RevisionProvider = Callable[[], Awaitable[str]]
 
 #: The source kind this module binds. One value, spelled the way the
 #: published ``sources:`` grammar spells it, and read by the registry's
@@ -528,6 +539,12 @@ class RecordEntitySource(DynamicCapabilityMixin):
             supported rather than merely tolerated, and
             :meth:`entity_filters` is what makes the entity side of it
             answer with entity rows
+        revision: What :meth:`revision` asks, every time it is asked. A
+            table's rows change without this object hearing of it, so only
+            the table's owner can say which state is answering; the source
+            declares
+            :attr:`~dataknobs_common.capabilities.Capability.SOURCE_REVISION`
+            only when given one
     """
 
     #: Everything a ``kind: record`` binding **can** declare -- the ceiling,
@@ -535,12 +552,13 @@ class RecordEntitySource(DynamicCapabilityMixin):
     #: :class:`~dataknobs_common.capabilities.CapabilityContract` is for: a
     #: caller choosing a source kind has a kind and no source yet.
     #:
-    #: Both are conditional on the projection, so what any one binding has is
+    #: Each is conditional -- two on the projection, one on a revision
+    #: provider being handed in -- so what any one binding has is
     #: :meth:`_compute_instance_capabilities`'s answer and is a subset of
     #: this. That is the whole reason the *dynamic* mixin rather than the
     #: plain one.
     SUPPORTED_CAPABILITIES: ClassVar[frozenset[CapabilityLike]] = frozenset(
-        {Capability.ORIGIN_FETCH, Capability.SURFACE_FORM_LOOKUP}
+        {Capability.ORIGIN_FETCH, Capability.SURFACE_FORM_LOOKUP, Capability.SOURCE_REVISION}
     )
 
     def __init__(
@@ -552,8 +570,17 @@ class RecordEntitySource(DynamicCapabilityMixin):
         backend: str | None = None,
         normalizer: Callable[[str], str] | None = None,
         forms_database: AsyncDatabase | None = None,
+        revision: RevisionProvider | None = None,
     ) -> None:
+        if revision is not None and not callable(revision):
+            raise ValidationError(
+                f"source {source_id!r} was handed a revision provider of type "
+                f"{type(revision).__name__}, which cannot be called. Pass an async "
+                f"callable answering the revision",
+                context={"source_id": source_id},
+            )
         self._db = database
+        self._revision = revision
         self._projection = projection
         self._source_id = source_id
         self._backend = backend or type(database).__name__
@@ -770,7 +797,7 @@ class RecordEntitySource(DynamicCapabilityMixin):
         )
 
     def _declared_capabilities(self) -> frozenset[Capability]:
-        """The two this projection declares, read off the projection.
+        """What this binding declares: two read off the projection, one off the provider.
 
         Narrowly typed, and that is why it exists beside the mixin's hook:
         :attr:`~dataknobs_common.ontology.SourceDescription.capabilities` is
@@ -785,6 +812,8 @@ class RecordEntitySource(DynamicCapabilityMixin):
             declared.add(Capability.ORIGIN_FETCH)
         if self._projection.surface_forms is not None:
             declared.add(Capability.SURFACE_FORM_LOOKUP)
+        if self._revision is not None:
+            declared.add(Capability.SOURCE_REVISION)
         return frozenset(declared)
 
     def _compute_instance_capabilities(self) -> frozenset[CapabilityLike]:
@@ -952,6 +981,37 @@ class RecordEntitySource(DynamicCapabilityMixin):
         """
         lookup = self._projection.surface_forms
         return None if lookup is None else lookup.longest_form_tokens
+
+    async def revision(self) -> str | None:
+        """The owner's answer, asked fresh every time; ``None`` with no owner to ask.
+
+        **Never cached.** A table's rows change without a reload, so an answer
+        held from an earlier call is the one thing that could be stale in the
+        direction that hurts -- reporting *no change* after one. Each call
+        awaits the provider.
+
+        ``None`` exactly where no provider was given, which is also where
+        :attr:`~dataknobs_common.capabilities.Capability.SOURCE_REVISION` is
+        absent from :meth:`describe`. See
+        :meth:`~dataknobs_common.ontology.EntitySource.revision` for what a
+        caller may read into an answer.
+
+        Raises:
+            TypeError: The provider answered something other than a string --
+                a ``None`` from an empty change log, say. Passed on, it would
+                read as *no change* from a source declaring that it can tell.
+        """
+        if self._revision is None:
+            return None
+        answer = await self._revision()
+        if not isinstance(answer, str):
+            raise TypeError(
+                f"source {self._source_id!r}'s revision provider answered "
+                f"{type(answer).__name__} {answer!r}, not a string. A source that "
+                f"declares source_revision must answer one, or a caller comparing "
+                f"two answers reads the gap as no change"
+            )
+        return answer
 
     def _projected(self, record: Record) -> Entity[str]:
         """One row to one entity -- the single place a column name is spent."""

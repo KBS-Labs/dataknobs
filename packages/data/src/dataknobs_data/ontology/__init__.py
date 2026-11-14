@@ -41,6 +41,7 @@ from dataknobs_data.ontology.sources import (
     RECORD_SOURCE_KIND,
     EntityProjection,
     RecordEntitySource,
+    RevisionProvider,
     SurfaceFormLookup,
 )
 
@@ -52,5 +53,6 @@ __all__ = [
     "EntityProjection",
     "OntologyRegistry",
     "RecordEntitySource",
+    "RevisionProvider",
     "SurfaceFormLookup",
 ]

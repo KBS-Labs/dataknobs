@@ -276,7 +276,7 @@ def load_ontology(
     config = _read_config(source)
     parts = _validated_parts(config)
     bound, variants = apply_variants(parts, normalizer=normalizer)
-    entities = MappingEntitySource(bound, normalizer=normalizer)
+    entities = MappingEntitySource(bound, normalizer=normalizer, version=parts.version)
     assertions = MappingAssertionSource(parts.declared_assertions)
     return assemble_ontology(
         parts,
@@ -320,7 +320,7 @@ async def async_load_ontology(
 
     parts = _validated_parts(config)
     bound, variants = apply_variants(parts, normalizer=normalizer)
-    entities = AsyncMappingEntitySource(bound, normalizer=normalizer)
+    entities = AsyncMappingEntitySource(bound, normalizer=normalizer, version=parts.version)
     assertions = AsyncMappingAssertionSource(parts.declared_assertions)
     return await assemble_async_ontology(
         parts,
