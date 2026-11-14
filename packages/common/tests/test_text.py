@@ -11,14 +11,20 @@ both in the order a scan publishes.
 
 from __future__ import annotations
 
+import random
+import re
+from operator import itemgetter
+
 import pytest
 
 from dataknobs_common.text import (
     edge_extensions,
+    narrowest,
     probe_spans,
     punctuation_edges,
     token_spans,
 )
+from dataknobs_common.text.scan import _core
 
 
 @pytest.mark.parametrize(
@@ -162,3 +168,157 @@ def test_probe_spans_never_repeats_a_span() -> None:
     query = "The C.D.C. (and AT&T), said."
     probes = list(probe_spans(query, None, edge=None))
     assert len(probes) == len(set(probes))
+
+
+# ---------------------------------------------------------------------------
+# The caller's own tokens
+# ---------------------------------------------------------------------------
+
+
+def _units(text: str, pattern: str) -> tuple[tuple[int, int], ...]:
+    """A caller's tokenization: every match of ``pattern``, as spans."""
+    return tuple(match.span() for match in re.finditer(pattern, text))
+
+
+#: Runs of alphanumerics, or any one character that is neither alphanumeric
+#: nor a space -- so ``$`` is a token of its own.
+_SYMBOLS = r"[^\W_]+|[^\w\s]|_"
+
+
+def test_a_scan_over_tokens_that_include_a_symbol_reaches_it() -> None:
+    """``$`` is never a window over the default tokens, and is one over these."""
+    text = "Price: $5,000 firm."
+    vocabulary = {"$"}
+
+    def found(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        return [span for span in spans if text[span[0] : span[1]] in vocabulary]
+
+    assert found(list(probe_spans(text, 1))) == []
+    assert found(list(probe_spans(text, 1, tokens=_units(text, _SYMBOLS)))) == [(7, 8)]
+
+
+_AGREEMENT_TEXTS = [
+    "",
+    "   ",
+    "...",
+    ":-)",
+    "beagle",
+    "a (beagle), here",
+    "C.D.C. said so",
+    "  leading and trailing  ",
+    "straße und ß",
+    "東京 タワー",
+    "x--y__z",
+    "golden retriever, (beagle) & C.D.C.!",
+]
+
+
+@pytest.mark.parametrize("text", _AGREEMENT_TEXTS)
+@pytest.mark.parametrize("longest", [1, 3, None])
+@pytest.mark.parametrize("edge", [0, 1, None])
+def test_the_default_tokens_passed_explicitly_enumerate_exactly_as_none(
+    text: str, longest: int | None, edge: int | None
+) -> None:
+    explicit = list(probe_spans(text, longest, edge=edge, tokens=token_spans(text)))
+    assert explicit == list(probe_spans(text, longest, edge=edge))
+
+
+def test_a_caller_unit_is_one_window_and_never_split() -> None:
+    """A grouped number is one unit, so none of its pieces is probed alone."""
+    text = "a $1,234.50 price"
+    units = _units(text, r"\d[\d,.]*\d|[^\W_]+|[^\w\s]")
+    windows = {text[start:end] for start, end in probe_spans(text, 1, tokens=units)}
+    assert "1,234.50" in windows
+    assert windows.isdisjoint({"1", "234", "50"})
+
+
+@pytest.mark.parametrize(
+    ("tokens", "index"),
+    [
+        ([(0, 3), (2, 5)], 1),  # overlapping
+        ([(4, 6), (0, 3)], 1),  # out of order
+        ([(0, 3), (4, 99)], 1),  # past the end
+        ([(-1, 3)], 0),  # negative start
+        ([(0, 3), (4, 4)], 1),  # empty
+        ([(0, 3), (4,)], 1),  # not a pair
+        ([(0, 3), ("4", 6)], 1),  # not ints
+        ([(0, True)], 0),  # a bool is not a bound
+    ],
+)
+def test_tokens_no_window_can_be_built_on_are_refused_by_index(
+    tokens: list[tuple[int, ...]], index: int
+) -> None:
+    with pytest.raises(ValueError, match=rf"token {index}\b"):
+        list(probe_spans("abc def", None, tokens=tokens))  # type: ignore[arg-type]
+
+
+def test_touching_tokens_are_accepted() -> None:
+    text = "$5"
+    assert list(probe_spans(text, None, tokens=[(0, 1), (1, 2)])) == [(0, 2), (0, 1), (1, 2)]
+
+
+# ---------------------------------------------------------------------------
+# narrowest
+# ---------------------------------------------------------------------------
+
+
+def test_narrowest_keeps_one_hit_where_a_caller_s_tokens_carry_separators() -> None:
+    """``TX``, ``, TX`` and ``, TX,`` share a core once whitespace is trimmed too."""
+    text = "Austin, TX, USA"
+    hits = [((6, 11), "tx"), ((6, 10), "tx"), ((8, 10), "tx")]
+    assert text[6:11] == ", TX," and text[8:10] == "TX"
+    assert narrowest(text, hits, span=itemgetter(0), key=itemgetter(1)) == [((8, 10), "tx")]
+
+
+def test_narrowest_keeps_a_symbol_apart_from_its_neighbour() -> None:
+    """``$`` has the empty core at its start, so ``$5`` does not absorb it."""
+    text = "costs $5"
+    hits = [((6, 8), "money"), ((6, 7), "money")]
+    assert narrowest(text, hits, span=itemgetter(0), key=itemgetter(1)) == hits
+
+
+def test_narrowest_is_generic_and_keeps_first_arrival_order() -> None:
+    text = "a (beagle) and (pug)"
+    hits = [
+        ((15, 20), "pug"),
+        ((2, 10), "beagle"),
+        ((16, 19), "pug"),
+        ((3, 9), "beagle"),
+        ((3, 9), "dog"),
+    ]
+    kept = narrowest(text, hits, span=itemgetter(0), key=itemgetter(1))
+    assert kept == [((16, 19), "pug"), ((3, 9), "beagle"), ((3, 9), "dog")]
+
+
+def test_narrowest_keeps_the_first_of_a_tie() -> None:
+    text = "(a)"
+    first, second = ((0, 2), "a", 1), ((1, 3), "a", 2)
+    assert narrowest(text, [first, second], span=itemgetter(0), key=itemgetter(1)) == [first]
+
+
+_ALPHABET = "abcXYZ019 \n" + "!\"#$%&'()*+,-./:;<=>?@[]^_{"
+
+
+def _punctuation_core(text: str, span: tuple[int, int]) -> tuple[int, int]:
+    start, end = span
+    leading, trailing = punctuation_edges(text[start:end])
+    return (start + leading, end - trailing)
+
+
+def test_narrowest_trims_every_default_probe_as_the_extension_rule_did() -> None:
+    """Over :func:`probe_spans`'s own spans, trimming whitespace too changes nothing.
+
+    ``narrowest`` trims every non-alphanumeric character; the private rule it
+    replaced trimmed punctuation only. Those agree on every span a default
+    scan yields, because a window starts and ends on a token and an extension
+    never crosses whitespace -- measured here rather than argued.
+    """
+    rng = random.Random(293)
+    checked = 0
+    for _ in range(2000):
+        text = "".join(rng.choice(_ALPHABET) for _ in range(rng.randint(0, 24)))
+        for edge in (0, 1, 2, None):
+            for span in probe_spans(text, 4, edge=edge):
+                assert _core(text, span) == _punctuation_core(text, span), (text, span)
+                checked += 1
+    assert checked > 10_000

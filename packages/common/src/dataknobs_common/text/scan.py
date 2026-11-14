@@ -34,6 +34,13 @@ reach on a form, :func:`edge_extensions` applies it to one span, and
 here is a character that is neither alphanumeric nor whitespace, so an
 extension never crosses a word and never crosses a space.
 
+**The token half is the caller's to replace.** :func:`probe_spans` takes the
+tokens it enumerates over, so a caller whose units are not runs of
+alphanumerics -- a currency sign, a grouped number, a script written without
+spaces -- drives the same enumeration over their own. :func:`narrowest` is the
+rule that keeps one piece of evidence per window once extensions or a fold
+make several spans reach the same thing, and it is exact over any tokens.
+
 Dependency-free on purpose: it imports nothing, so anything may import it.
 The package's other half, :mod:`dataknobs_common.text.variants`, imports
 :mod:`dataknobs_common.registry` and :mod:`dataknobs_common.exceptions`, which
@@ -43,19 +50,22 @@ edge back into the subpackages that import it.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
 
 __all__ = [
     "content_span",
     "default_normalizer",
     "edge_extensions",
+    "narrowest",
     "probe_spans",
     "punctuation_edges",
     "token_spans",
 ]
+
+_Hit = TypeVar("_Hit")
 
 
 def default_normalizer(form: str) -> str:
@@ -209,8 +219,9 @@ def edge_extensions(
 
     Args:
         text: The string ``span`` indexes.
-        span: A half-open span into ``text``, normally one
-            :func:`token_spans` produced or two of them joined.
+        span: A half-open span into ``text``: one token, or a run of them
+            joined, whether the tokens are :func:`token_spans`'s or the
+            caller's own.
         limit: The most characters to absorb on each side, or ``None`` for
             the whole adjacent run. ``0`` extends nothing.
 
@@ -246,8 +257,56 @@ def edge_extensions(
     return tuple((start - before, end + after) for before, after in widened if before or after)
 
 
+def _checked_tokens(text: str, tokens: Sequence[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
+    """``tokens`` as a tuple, having refused one no window could be built on.
+
+    A window is sliced from its first token's start to its last token's end,
+    so the enumeration is only true of ``text`` if every token is a non-empty
+    span inside it and each one starts where the previous one has ended or
+    later. Spans that **touch** are accepted, because a caller's units may
+    abut: ``$`` and ``5`` in ``$5``. Spans that overlap or arrive out of order
+    are refused rather than sorted, because a tokenizer producing them has a
+    bug a sort would hide.
+
+    Raises:
+        ValueError: For a span that is not a pair of ints, an empty one, one
+            outside ``text``, or one starting before the previous one ends.
+            The message names the span's index.
+    """
+    checked: list[tuple[int, int]] = []
+    previous_end = 0
+    for index, token in enumerate(tokens):
+        if (
+            not isinstance(token, tuple | list)
+            or len(token) != 2
+            or not all(isinstance(bound, int) and not isinstance(bound, bool) for bound in token)
+        ):
+            raise ValueError(f"token {index} must be a (start, end) pair of ints, got {token!r}")
+        start, end = token
+        if start >= end:
+            raise ValueError(
+                f"token {index} is {token!r}, which is empty; a token is a "
+                f"half-open span with start < end"
+            )
+        if start < 0 or end > len(text):
+            raise ValueError(f"token {index} is {token!r}, outside a text of length {len(text)}")
+        if start < previous_end:
+            raise ValueError(
+                f"token {index} is {token!r} and starts before token {index - 1} "
+                f"ends at {previous_end}; tokens must be in order and must not "
+                f"overlap"
+            )
+        checked.append((start, end))
+        previous_end = end
+    return tuple(checked)
+
+
 def probe_spans(
-    text: str, longest: int | None, *, edge: int | None = 0
+    text: str,
+    longest: int | None,
+    *,
+    edge: int | None = 0,
+    tokens: Sequence[tuple[int, int]] | None = None,
 ) -> Iterator[tuple[int, int]]:
     """Every span a scan looks up: token windows, longest first, each with its extensions.
 
@@ -274,15 +333,134 @@ def probe_spans(
     asynchronous one and any other scan over a vocabulary each drive it with
     their own lookup and cannot drift on what was enumerated.
 
+    **The tokens may be the caller's.** ``tokens=None`` enumerates over
+    :func:`token_spans`, which has no token for a character that is neither a
+    letter nor a digit -- so a form like ``$`` is never a window, and a
+    grouped number such as ``1,234.50`` is three tokens rather than one. A
+    caller whose units differ passes their own spans and gets the same
+    enumeration over them. Two things change with that:
+
+    - ``longest`` counts **the caller's** tokens. A vocabulary's
+      ``longest_form_tokens()`` and ``form_edge`` are measured in
+      :func:`token_spans` terms, so they bound only a scan over the default
+      tokens; a caller passing their own derives their own bounds or
+      passes ``None``.
+    - Tokens that already include punctuation need no extension over it, and
+      such a caller passes ``edge=0``. Nothing checks this: an extension over
+      tokens that cover the punctuation finds no run to extend over and costs
+      nothing, but one that partly covers it can produce spans no token
+      boundary justifies.
+
+    Pair it with :func:`narrowest` wherever extensions or a fold can make
+    several spans reach the same thing.
+
+    Args:
+        text: The string to enumerate spans of.
+        longest: The most tokens a window may span, or ``None`` for every
+            window.
+        edge: The most punctuation characters an extension absorbs on each
+            side, ``0`` for none, or ``None`` for the whole adjacent run.
+        tokens: Half-open spans into ``text``, in order and not overlapping
+            (touching is allowed), or ``None`` for :func:`token_spans`.
+
     Raises:
-        ValueError: For a negative ``edge``.
+        ValueError: For a negative ``edge``, or for ``tokens`` that are not
+            in-order, non-overlapping, non-empty spans inside ``text``.
     """
     edge = _checked_limit(edge)
-    tokens = token_spans(text)
-    widest = len(tokens) if longest is None else min(longest, len(tokens))
+    units = token_spans(text) if tokens is None else _checked_tokens(text, tokens)
+    widest = len(units) if longest is None else min(longest, len(units))
     for length in range(widest, 0, -1):
-        for first in range(len(tokens) - length + 1):
-            window = (tokens[first][0], tokens[first + length - 1][1])
+        for first in range(len(units) - length + 1):
+            window = (units[first][0], units[first + length - 1][1])
             if edge != 0:
                 yield from edge_extensions(text, window, edge)
             yield window
+
+
+def _core(text: str, span: tuple[int, int]) -> tuple[int, int]:
+    """``span`` with every non-alphanumeric character trimmed off both ends.
+
+    Whitespace goes with the punctuation, so ``", TX"`` and ``"TX"`` share a
+    core. A span with no alphanumeric character in it has the empty core at
+    its start, which keeps it distinct from a neighbour that has one and
+    never produces a start past its own end.
+    """
+    start, end = span
+    while start < end and not text[start].isalnum():
+        start += 1
+    if start == end:
+        return (span[0], span[0])
+    while not text[end - 1].isalnum():
+        end -= 1
+    return (start, end)
+
+
+def narrowest(
+    text: str,
+    hits: Iterable[_Hit],
+    *,
+    span: Callable[[_Hit], tuple[int, int]],
+    key: Callable[[_Hit], Hashable],
+) -> list[_Hit]:
+    """One hit per key per window: the narrowest span that reached it.
+
+    **Why a scan needs it.** An extension widens a window over the
+    punctuation beside it, and a fold that strips punctuation then makes every
+    extension of ``beagle`` reach the key the bare window reaches -- in
+    ``"(beagle)"`` one entity would be reported at four nested places. The
+    punctuation took no part in that match, so the evidence is the narrowest
+    span around it. Where the punctuation *is* the match -- ``(beagle)``
+    declared -- the bare window misses and the extended span is the only one
+    there is, so it is kept.
+
+    **The core.** Hits are grouped by the span left after trimming every
+    character that is not a letter or a digit off both ends, whitespace
+    included -- so over a caller's tokens that include ``,`` and a space,
+    ``TX``, ``, TX`` and ``, TX,`` in ``Austin, TX, USA`` share one core and
+    one is kept, at ``TX``. Over :func:`token_spans` and :func:`probe_spans`'s
+    extensions the trimming is exactly the extension undone, because a window
+    starts and ends on a token and an extension adds only punctuation.
+
+    **A hit with no letter or digit in it** -- ``$`` reached over a caller's
+    tokens -- has the empty core at its own start, so it stays apart from a
+    ``$5`` beside it that reached the same key.
+
+    **Order.** One hit is kept per ``(core, key(hit))``: the one with the
+    smallest ``end - start``, and the first on a tie. Each kept hit sits
+    where the first hit for its pair arrived, so the result is in the order
+    the hits were given -- a scan's enumeration order survives.
+
+    ``ScanningSignal`` and its asynchronous twin call it over the
+    ``FormHit`` objects they collect; a second scanner over :func:`probe_spans` calls it over
+    its own hits, which need only expose a span and a key::
+
+        >>> text = "a (beagle) here"
+        >>> hits = [((2, 10), "beagle"), ((2, 9), "beagle"), ((3, 9), "beagle")]
+        >>> narrowest(text, hits, span=lambda h: h[0], key=lambda h: h[1])
+        [((3, 9), 'beagle')]
+
+    Args:
+        text: The string the spans index.
+        hits: The hits, in the order to preserve.
+        span: Reads a hit's half-open span into ``text``.
+        key: Reads what a hit reached -- an entity id, say. Hits at one core
+            with different keys are all kept.
+
+    Returns:
+        The kept hits, in first-arrival order.
+    """
+    kept: list[_Hit] = []
+    at: dict[tuple[tuple[int, int], Hashable], int] = {}
+    for hit in hits:
+        start, end = span(hit)
+        group = (_core(text, (start, end)), key(hit))
+        index = at.get(group)
+        if index is None:
+            at[group] = len(kept)
+            kept.append(hit)
+        else:
+            held_start, held_end = span(kept[index])
+            if end - start < held_end - held_start:
+                kept[index] = hit
+    return kept

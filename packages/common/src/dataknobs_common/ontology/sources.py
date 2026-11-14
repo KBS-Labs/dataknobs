@@ -595,6 +595,9 @@ class _EntityIndex:
         ``0`` for a form with no token as written: no window starts on one, so
         no extension reaches it, and counting ``:-)`` would make every
         punctuated window of every query pay for a form it can never find.
+        Such a form loads and is never found by a scan over the default
+        tokens; :class:`~dataknobs_common.entity_resolution.ScanningSignal`
+        says which rungs do reach it.
 
         **Seen, not proven**, as :meth:`_merges_tokens` is: a fold turning
         ``+`` into ``plus`` lets a query spell ``C+`` for a form declared

@@ -2047,10 +2047,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every prefix of the run, so an extension never crosses a word or a space.
   `punctuation_edges(form)` measures how far a form's own punctuation reaches
   (`"(beagle)"` is `(1, 1)`); `edge_extensions(text, span, limit)` is one
-  span's extensions, widest first; and `probe_spans(text, longest, edge=0)` is
-  the whole enumeration a scan runs, windows longest first and each preceded
-  by its extensions. It looks nothing up, so a synchronous scan, an
-  asynchronous one and a consumer's own each drive it with their own lookup.
+  span's extensions, widest first; and
+  `probe_spans(text, longest, edge=0, tokens=None)` is the whole enumeration a
+  scan runs, windows longest first and each preceded by its extensions. It
+  looks nothing up, so a synchronous scan, an asynchronous one and a
+  consumer's own each drive it with their own lookup. `tokens` takes the
+  caller's own tokens — in order, not overlapping, touching allowed, refused
+  with `ValueError` naming the bad one — so a vocabulary of symbols, grouped
+  numbers or an unspaced script is enumerated over units that reach it; `None`
+  is `token_spans(text)`.
+
+- **`narrowest(text, hits, *, span, key)`, in `dataknobs_common.text`** and on
+  the same two doors: one hit per key per window, the narrowest span that
+  reached it, in the order the hits arrived. An extension and a fold that
+  strips punctuation make one entity reachable at several nested spans, and
+  this keeps the one where the punctuation took no part. Hits are grouped by
+  the span left after trimming every non-alphanumeric character, whitespace
+  included, so it is exact over a caller's tokens as well as the default ones;
+  a hit with no alphanumeric character keeps the empty core at its start and
+  stays apart from its neighbours. Generic over the hit type: `ScanningSignal`
+  calls it over `FormHit`s, and a second scanner over `probe_spans` calls it
+  over its own.
 
 - **`SourceDescription.form_edge: int | None`, with no default**, for the
   reason `declares` has none. How many punctuation characters the widest edge

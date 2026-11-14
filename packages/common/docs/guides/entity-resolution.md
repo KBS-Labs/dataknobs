@@ -880,7 +880,8 @@ tokens, widened over the punctuation touching it as far as the vocabulary's
 own forms reach — so `(beagle)` and `C.D.C.` are found, at `(2, 10)` in
 `a (beagle), here` — but a declared form with **no** alphanumeric character in
 it — `:-)`, `<3` — has no token for a probe to start on, and is never probed at
-all. A vocabulary carrying forms like those wants a different boundary:
+all. Such a form loads without complaint and is simply never found by a scan.
+A vocabulary carrying forms like those wants a different boundary:
 
 <!-- worked-rung -->
 ```python
@@ -932,6 +933,16 @@ which is what a whole-string lookup wants and is not what stops a scan finding
 `beagle` inside `unbeagleable`. Whichever boundary a rung picks, probe the
 **slice** rather than a join, so no offset ever points at a string the text does
 not contain.
+
+**A second scanner reuses the enumeration rather than copying it.**
+`probe_spans(text, longest, edge=..., tokens=...)` yields every span the
+shipped scan looks up — token windows longest first, each preceded by its
+punctuation extensions — over the default tokens or the caller's, and looks
+nothing up, so a scan over any lookup drives it. `narrowest(text, hits,
+span=..., key=...)` is the rule the shipped scan applies to what came back:
+one hit per key per window, the narrowest span that reached it, so an
+extension and a fold do not report one entity at four nested places. Both are
+in `dataknobs_common.text`.
 
 Overlapping forms are all returned. `"my golden retriever has been limping"`
 hits `golden_retriever` at `(3, 19)` and `retriever` at `(10, 19)` — the same

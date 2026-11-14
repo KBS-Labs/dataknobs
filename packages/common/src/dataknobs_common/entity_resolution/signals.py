@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 from difflib import SequenceMatcher
 from math import ceil
+from operator import attrgetter
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from dataknobs_common.callbacks import is_async_callable
@@ -54,8 +55,8 @@ from dataknobs_common.entity_resolution.values import (
 from dataknobs_common.text import (
     content_span,
     default_normalizer,
+    narrowest,
     probe_spans,
-    punctuation_edges,
     token_spans,
 )
 
@@ -534,38 +535,17 @@ def _checked_max_edge(max_edge: int | None) -> int | None:
     return max_edge
 
 
-def _narrowest(query: str, found: Sequence[FormHit]) -> list[FormHit]:
-    """One piece of evidence per entity per window: the narrowest span that reached it.
+def _evidence(query: str, found: Sequence[FormHit]) -> list[FormHit]:
+    """One hit per entity per window, at the narrowest span that reached it.
 
-    An extension widens a window over punctuation, and a fold that strips
-    punctuation makes every extension of ``beagle`` reach the key the bare
-    window reaches -- ``"(beagle)"`` would otherwise report one entity at four
-    nested places. The punctuation took no part in that match, so the
-    evidence is the narrowest span around it; where the punctuation *is* the
-    match -- ``(beagle)`` declared -- the bare window misses and the extended
-    span is the only one there is.
-
-    The window an extension came from is recovered by trimming the
-    punctuation off its ends, which is exact: a window starts and ends on a
-    token, and an extension adds only punctuation. Each kept hit stays where
-    the first hit for that entity and window arrived, so the published order
-    is the enumeration's.
-
-    Shared by both flavours for :func:`_window_bound`'s reason.
+    :func:`~dataknobs_common.text.narrowest` over a scan's hits, shared by
+    both flavours for :func:`_window_bound`'s reason.
     """
-    kept: list[FormHit] = []
-    at: dict[tuple[tuple[int, int], Any], int] = {}
-    for hit in found:
-        start, end = hit.span
-        leading, trailing = punctuation_edges(query[start:end])
-        key = ((start + leading, end - trailing), hit.entity_id)
-        index = at.get(key)
-        if index is None:
-            at[key] = len(kept)
-            kept.append(hit)
-        elif end - start < kept[index].span[1] - kept[index].span[0]:
-            kept[index] = hit
-    return kept
+    return narrowest(query, found, span=_SPAN, key=_ENTITY)
+
+
+_SPAN = attrgetter("span")
+_ENTITY = attrgetter("entity_id")
 
 
 def _hits_at(span: tuple[int, int], ids: Sequence[str]) -> list[FormHit]:
@@ -1328,7 +1308,14 @@ class ScanningSignal(DeclaredSignal):
     reach one entity -- a fold that strips punctuation makes ``(beagle)``,
     ``(beagle`` and ``beagle`` all reach ``beagle`` -- the entity is reported
     once for that window, at the narrowest of them: the punctuation took no
-    part in the match. See :func:`_narrowest`.
+    part in the match. See :func:`~dataknobs_common.text.narrowest`.
+
+    **A form with no letter or digit in it is never found by a scan.** ``$``,
+    ``:-)`` and ``--`` load without complaint, and no window ever reaches
+    them: :func:`~dataknobs_common.text.token_spans` has no token for a
+    character that is neither, so there is nothing for a window to start on,
+    and an extension only widens a window that exists. Such a form is reached
+    by a rung comparing the whole query -- :class:`ExactNormalizedSignal`.
 
     **Overlapping forms are all returned.** ``"my golden retriever has been
     limping"`` yields ``golden_retriever`` at ``(3, 19)`` and ``retriever`` at
@@ -1417,7 +1404,7 @@ class ScanningSignal(DeclaredSignal):
         for span in probe_spans(query, bound, edge=edge):
             hits = self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
-        return _narrowest(query, found)
+        return _evidence(query, found)
 
 
 class LexicalSignal(DeclaredSignal):
@@ -1856,7 +1843,7 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
         for span in probe_spans(query, bound, edge=edge):
             hits = await self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
-        return _narrowest(query, found)
+        return _evidence(query, found)
 
 
 class AsyncLexicalSignal(AsyncDeclaredSignal):
