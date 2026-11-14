@@ -4,6 +4,7 @@
 """Optional object construction and caching functionality."""
 
 import copy
+import inspect
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.imports import resolve_dotted
@@ -12,6 +13,25 @@ if TYPE_CHECKING:
     from .config import Config
 
 from .exceptions import ConfigError
+
+_FACTORY_METHODS = ("create", "create_async", "build")
+
+
+def _is_consumer_class(obj: Any) -> bool:
+    """Whether ``obj`` is a class to build through ``from_config``.
+
+    A class exposing the consumer protocol (``from_config``) and none of the
+    factory protocol is the thing ``factory:`` builds, not a factory to
+    instantiate first. Calling it with no arguments would construct it from
+    an empty config: a throwaway instance at best, and a refusal of the
+    empty config -- naming fields the real config does supply -- whenever
+    its config has required fields.
+    """
+    return (
+        inspect.isclass(obj)
+        and hasattr(obj, "from_config")
+        and not any(hasattr(obj, method) for method in _FACTORY_METHODS)
+    )
 
 
 class ObjectBuilder:
@@ -138,6 +158,9 @@ class ObjectBuilder:
             return self._config._registered_factories.get(factory_path)
         # Fall back to loading as a module path
         factory_cls = self._load_class(factory_path)
+        if _is_consumer_class(factory_cls):
+            # Decided by inspection: the probe below would construct it.
+            return factory_cls
         # Create factory instance
         try:
             return factory_cls()
@@ -167,6 +190,10 @@ class ObjectBuilder:
             return factory.create(**config)
         elif hasattr(factory, "build"):
             return factory.build(**config)
+        # A consumer class takes the whole config through its own entry
+        # point; checked before ``callable`` because a class always is.
+        elif _is_consumer_class(factory):
+            return factory.from_config(config)
         elif callable(factory):
             return factory(**config)
         # A StructuredConfigConsumer (or any class) referenced via
@@ -269,6 +296,10 @@ class ObjectBuilder:
             return factory.create(**config)
         if hasattr(factory, "build"):
             return factory.build(**config)
+        if _is_consumer_class(factory):
+            if hasattr(factory, "from_config_async"):
+                return await factory.from_config_async(config)
+            return factory.from_config(config)
         if callable(factory):
             return factory(**config)
         # Consumer protocol, checked after the factory protocol so a

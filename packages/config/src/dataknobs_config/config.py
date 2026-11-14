@@ -788,14 +788,17 @@ class Config:
         """Get a factory instance for a configuration.
 
         This method lazily instantiates and caches factory instances defined
-        in configurations with a 'factory' attribute.
+        in configurations with a 'factory' attribute. A config consumer class
+        (one exposing ``from_config`` and no ``create``/``create_async``/
+        ``build``) is the thing the factory builds rather than a factory, and
+        is returned uninstantiated.
 
         Args:
             type_name: Type name
             name_or_index: Configuration name or index
 
         Returns:
-            Factory instance
+            The factory: an instance, or a class or callable used as is
 
         Raises:
             ConfigError: If no factory is defined for the configuration
@@ -821,19 +824,9 @@ class Config:
         # Load and instantiate the factory
         factory_path = config["factory"]
 
-        # Check if it's a registered factory first
-        if self._registered_factories.has(factory_path):
-            factory = self._registered_factories.get(factory_path)
-        else:
-            # Try to load as a module path
-            factory_cls = self._object_builder._load_class(factory_path)
-
-            # Create factory instance
-            try:
-                factory = factory_cls()
-            except TypeError:
-                # Factory might be a module-level function or callable class
-                factory = factory_cls
+        # The builder's resolution, so the two cannot drift in how a
+        # factory is located or whether a class is instantiated.
+        factory = self._object_builder._load_factory(factory_path)
 
         # Cache the factory instance
         self._object_builder._cache[factory_ref] = factory

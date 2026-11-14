@@ -1683,13 +1683,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **`OntologyRegistry` refuses a malformed document top level as the loader
-  does.** The constructor and `load()` raise a `ValidationError` for a
-  document with no `id:` (a `ConfigFieldError`, rather than the constructor's
-  `TypeError`), and `load()` refuses a non-string or empty `id:`, a non-string
-  `version:`, and a misspelt top-level section by name. A loaded document can
-  no longer claim the empty id the registry uses for *no document
-  configured*. An `event_bus:` block that is not a mapping is refused naming
-  the block, before any bus is built, instead of raising a bare `TypeError`.
+  does, on every door.** A document with no `id:` raises a `ConfigFieldError`
+  (a `ValidationError`) rather than the constructor's `TypeError`; a null,
+  non-string or empty `id:`, a non-string `version:` and a misspelt top-level
+  section are refused by name. `from_config_async` refuses these as `load()`
+  does, where a document with a falsy `id:` used to construct an empty
+  registry and load nothing; a registry is empty only when it was constructed
+  with no document. A loaded document can no longer claim the empty id the
+  registry uses for *no document configured*.
+- **A refused document leaves no event bus behind.** A bus an `event_bus:`
+  block configures is built before any store is opened, and is the
+  registry's only once the document has loaded; a document refused after it
+  is built has it closed. The registry used to keep the refused document's
+  bus, and pass over the next document's own `event_bus:` block. An
+  `event_bus:` block that is not a mapping, or that names a backend nothing
+  registered, is refused naming the block, instead of raising a bare
+  `TypeError` or `ValueError`.
 - **Async SQLite's `close` refuses what has not started and waits for what
   has.** It closed the connection before it refused anything, so an operation
   racing it failed partway with the driver's own `ProgrammingError` or

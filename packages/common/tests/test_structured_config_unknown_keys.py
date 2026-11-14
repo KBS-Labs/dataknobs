@@ -320,3 +320,29 @@ class TestTheSuggestionIsUseful:
         with pytest.raises(ValueError) as excinfo:
             StrictConfig.from_dict({"": 1})
         assert "did you mean" not in str(excinfo.value)
+
+
+class TestANonStringKey:
+    """A key that is not a string is refused by name, not by ``sorted``.
+
+    YAML 1.1 reads an unquoted ``yes:`` or ``on:`` as ``True`` and ``null:``
+    as ``None``, so a closed class meets such a key from any document. The
+    check used to sort and fuzzy-match the keys, and both fail on a mixed or
+    non-string key with a ``TypeError`` in their own words.
+    """
+
+    @pytest.mark.parametrize(
+        "document",
+        [{"host": "h", 1: "x"}, {1: "x"}, {True: "x"}, {None: "x"}],
+        ids=["mixed", "int-alone", "bool", "null"],
+    )
+    def test_it_is_refused_as_a_config_field_error(self, document: dict[Any, Any]) -> None:
+        from dataknobs_common.exceptions import ConfigFieldError
+
+        with pytest.raises(ConfigFieldError, match="not a string") as excinfo:
+            StrictConfig.from_dict(document)
+        (key,) = (k for k in document if not isinstance(k, str))
+        assert excinfo.value.context["non_string_keys"] == [repr(key)]
+
+    def test_the_lenient_default_still_drops_it(self) -> None:
+        assert LenientConfig.from_dict({"host": "h", 1: "x"}).host == "h"

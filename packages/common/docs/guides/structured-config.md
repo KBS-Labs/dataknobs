@@ -282,9 +282,17 @@ except ConfigFieldError as e:
 ```
 
 Both checks run after `_normalize_dict`, so a required field supplied through
-an alias the normalizer translates is not missing. The unknown-key check runs
-first, so a misspelt required field is reported as the misspelling, with the
-field it was near.
+an alias the normalizer translates is not missing. On a class with
+`_UNKNOWN_KEYS = "raise"` the unknown-key check runs first, so a misspelt
+required field is reported as the misspelling, with the field it was near. On
+a class that ignores unknown keys, the misspelling is dropped and the field is
+reported missing.
+
+On a class with `_UNKNOWN_KEYS = "raise"`, a key that is not a string is
+refused the same way, before the unknown-key check, with `non_string_keys` in
+its `context`. YAML 1.1 reads an unquoted `yes:` or `on:` as `True` and
+`null:` as `None`, so a closed class meets such a key from any document; the
+remedy is to quote it.
 
 A required field written as `None` is **supplied**, not missing: some required
 fields are legitimately optional-typed, and only a caller knows whether `None`
@@ -295,6 +303,11 @@ naming the nested class rather than the path to it.
 
 `from_components()` called with no `config` on a `CONFIG_CLS` that has
 required fields raises the same type, naming them.
+
+The check reads the dataclass's own fields, so it runs before any `__init__`.
+A subclass that writes its own `__init__` to give a declared field a default
+is refused for that field before its `__init__` runs; declare the default on
+the field instead.
 
 ### Misdeclaring a policy is refused at class definition
 

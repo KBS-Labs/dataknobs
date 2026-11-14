@@ -76,6 +76,34 @@ class _NullableRequired(StructuredConfig):
     parent: str | None
 
 
+@dataclass(frozen=True)
+class _StrictRequired(StructuredConfig):
+    """Closed and required: the refusal that runs first is the one reported."""
+
+    host: str
+
+    _UNKNOWN_KEYS: ClassVar[Literal["ignore", "raise"]] = "raise"
+
+
+@dataclass(frozen=True)
+class _DerivedRequired(_TwoRequired):
+    """Inherits two required fields and adds one."""
+
+    region: str = "eu"
+    zone: str = field(kw_only=True)
+
+
+@dataclass(frozen=True)
+class _WithComputed(StructuredConfig):
+    """A field outside ``__init__`` is never something a mapping must supply."""
+
+    name: str
+    derived: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "derived", self.name.upper())
+
+
 class _Consumer(StructuredConfigConsumer[_TwoRequired]):
     CONFIG_CLS: ClassVar[type[_TwoRequired]] = _TwoRequired
 
@@ -116,7 +144,8 @@ class TestAMissingField:
         with pytest.raises(ConfigFieldError) as excinfo:
             _TwoRequired.from_dict({"name": "n"})
         assert excinfo.value.context["missing"] == ["secret"]
-        assert "retries" not in str(excinfo.value).split("Accepted")[0]
+        assert "retries" not in str(excinfo.value)
+        assert "tags" not in str(excinfo.value)
 
     def test_no_value_the_caller_wrote_reaches_the_message(self) -> None:
         with pytest.raises(ConfigFieldError) as excinfo:
@@ -131,6 +160,26 @@ class TestAMissingField:
 
     def test_a_required_field_written_as_null_is_not_missing_at_the_base(self) -> None:
         assert _NullableRequired.from_dict({"parent": None}).parent is None
+
+    def test_inherited_and_keyword_only_required_fields_are_named(self) -> None:
+        with pytest.raises(ConfigFieldError) as excinfo:
+            _DerivedRequired.from_dict({"name": "n"})
+        assert excinfo.value.context["missing"] == ["secret", "zone"]
+
+    def test_a_field_outside_init_is_never_required(self) -> None:
+        assert _WithComputed.from_dict({"name": "n"}).derived == "N"
+        with pytest.raises(ConfigFieldError) as excinfo:
+            _WithComputed.from_dict({})
+        assert excinfo.value.context["missing"] == ["name"]
+
+    def test_a_misspelt_required_field_of_a_closed_class_is_reported_as_the_misspelling(
+        self,
+    ) -> None:
+        """The unknown-key check runs first, so the author sees the near miss."""
+        with pytest.raises(ConfigFieldError, match="did you mean 'host'") as excinfo:
+            _StrictRequired.from_dict({"hots": "h"})
+        assert "missing" not in excinfo.value.context
+        assert excinfo.value.context["unknown"] == ["hots"]
 
     def test_a_missing_field_in_a_nested_section_names_the_nested_class(self) -> None:
         with pytest.raises(ConfigFieldError) as excinfo:

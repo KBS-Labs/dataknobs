@@ -151,6 +151,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# What a registry constructed with no document holds: the mixin requires
+# *a* config, and `id` is the one field an ontology cannot do without, so
+# an empty id with nothing beside it is how "none was configured" is
+# spelled. `OntologyRegistry._configures_nothing` compares against this
+# value, not against the id alone.
+_NOTHING_CONFIGURED = OntologyConfig(id="")
+
 #: The vocabulary's own two type declarations, answerable without a load.
 #:
 #: ``dk`` is the reserved ontology id every document is refused for claiming,
@@ -441,12 +448,11 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         self._owns_event_bus = False
         # A registry may hold no document at all -- `OntologyRegistry()` then
         # `await registry.load(stored)` is the shape a deployment reading from
-        # a backend has. The mixin requires *a* config, and `id` is the one
-        # field an ontology cannot do without, so the empty id is what "none
-        # was configured" is spelled as: no document can claim it, which is
-        # exactly what makes it available to mean this.
+        # a backend has. See `_NOTHING_CONFIGURED` for how that is spelled;
+        # no loaded document can claim the empty id, which is what makes it
+        # available to mean this.
         super().__init__(
-            OntologyConfig(id="") if config is None else config,
+            _NOTHING_CONFIGURED if config is None else config,
             _components=collaborators or None,
             **kwargs,
         )
@@ -532,9 +538,20 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         them and a hook that narrows its own delivery is a hook the framework
         cannot call with what it has.
         """
-        if self._prebuilt or not self._config.id:
+        if self._prebuilt or self._configures_nothing():
             return
         await self._load_resolved(self._config)
+
+    def _configures_nothing(self) -> bool:
+        """Whether this registry was constructed with no document.
+
+        The placeholder :meth:`__init__` substitutes for ``config=None`` --
+        an empty id and nothing else -- and not *any* config with a falsy
+        id. A document writing ``id: null``, ``id: 0`` or ``id: ""`` beside
+        its sections is a document, and is refused the way :meth:`load`
+        refuses it, rather than read as the absence of one.
+        """
+        return self._config == _NOTHING_CONFIGURED
 
     # ------------------------------------------------------------ the config
 
@@ -606,7 +623,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             ResourceNotFoundError: When a ``$resource`` names a resource this
                 environment does not define and the effective level is strict
         """
-        if config is None and not self._config.id:
+        if config is None and self._configures_nothing():
             raise ValidationError(
                 "load() with no argument loads the document this registry was "
                 "constructed with, and this one was constructed with none. Pass "
@@ -1022,22 +1039,6 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         typed = (
             config if isinstance(config, OntologyConfig) else OntologyConfig.from_dict(dict(config))
         )
-        if typed.event_bus is not None:
-            # Refused before anything is built, and whether or not a bus is
-            # already held: a block that would not have been applied is still
-            # a block the document got wrong.
-            if not isinstance(typed.event_bus, Mapping):
-                raise ValidationError(
-                    f"ontology {typed.id!r} declares `event_bus:` as "
-                    f"{type(typed.event_bus).__name__}; `event_bus:` must be a mapping "
-                    f"naming the bus's backend and its settings",
-                    context={
-                        "ontology_id": typed.id,
-                        "section": "event_bus",
-                        "value": typed.event_bus,
-                    },
-                )
-            await self._event_bus_from(typed.event_bus, ontology_id=typed.id)
         parts = build_ontology(typed)
         if parts.id in self._ontologies and not replace:
             raise ValidationError(
@@ -1046,38 +1047,51 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 f"the registry instance is the unit of sharing",
                 context={"ontology_id": parts.id},
             )
+        # Built here, before any store is opened, so a bus that cannot be
+        # built strands nothing -- and *held aside* until the load succeeds,
+        # so a document refused below leaves no bus behind. Adopting it here
+        # instead made the refused document's bus the registry's, and the
+        # next document's own `event_bus:` the one passed over.
+        pending_bus = await self._event_bus_from(typed.event_bus, ontology_id=parts.id)
         replaced = self._ontologies.get(parts.id)
         before = self._parts.get(parts.id)
         was_populated = self._populations.get(parts.id, {})
-        bound = await self._bind_sources(typed, parts)
-        ontology = await assemble_async_ontology(
-            parts,
-            entities=bound.entities,
-            assertions=AsyncMappingAssertionSource(parts.declared_assertions),
-            describes=bound.describes,
-            structures=await self._bind_taxonomies(parts, bound.live),
-            variants=bound.variants,
-        )
-        now_populated = await self._axis_populations(ontology)
-        # After the vocabulary is assembled, because the index is over it:
-        # the adapter takes the ontology, so there is nothing to build until
-        # there is one. Before the announcement, for the bus's reason -- a
-        # subscriber reading the registry on the arrival event finds what
-        # arrived, index included.
-        # Before the store is opened, which is the ordering `_index_from`
-        # states for its own refusals and the one this reader was outside of:
-        # every way a `resolver:` section can be unreadable is a property of
-        # the document and the registry, and refusing after a handle is open
-        # strands it -- `from_config_async` has not returned the object whose
-        # `close()` would release it.
-        self._refuse_an_unbuildable_resolver_section(typed)
-        index = await self._index_from(typed, ontology)
-        # After the index, because a semantic rung is constructed over the one
-        # that call just built -- which is also why the two readers cannot
-        # land in different releases. Before the announcement, for the index's
-        # reason: a subscriber reading the registry on the arrival event finds
-        # what arrived, cascade included.
-        resolved = await self._resolver_from(typed, ontology, index)
+        try:
+            bound = await self._bind_sources(typed, parts)
+            ontology = await assemble_async_ontology(
+                parts,
+                entities=bound.entities,
+                assertions=AsyncMappingAssertionSource(parts.declared_assertions),
+                describes=bound.describes,
+                structures=await self._bind_taxonomies(parts, bound.live),
+                variants=bound.variants,
+            )
+            now_populated = await self._axis_populations(ontology)
+            # After the vocabulary is assembled, because the index is over it:
+            # the adapter takes the ontology, so there is nothing to build until
+            # there is one. Before the announcement, for the bus's reason -- a
+            # subscriber reading the registry on the arrival event finds what
+            # arrived, index included.
+            # Before the store is opened, which is the ordering `_index_from`
+            # states for its own refusals and the one this reader was outside of:
+            # every way a `resolver:` section can be unreadable is a property of
+            # the document and the registry, and refusing after a handle is open
+            # strands it -- `from_config_async` has not returned the object whose
+            # `close()` would release it.
+            self._refuse_an_unbuildable_resolver_section(typed)
+            index = await self._index_from(typed, ontology)
+            # After the index, because a semantic rung is constructed over the one
+            # that call just built -- which is also why the two readers cannot
+            # land in different releases. Before the announcement, for the index's
+            # reason: a subscriber reading the registry on the arrival event finds
+            # what arrived, cascade included.
+            resolved = await self._resolver_from(typed, ontology, index)
+        except BaseException:
+            await close_if_owned(pending_bus, True, on_error=self._teardown_failed)
+            raise
+        if pending_bus is not None:
+            self._event_bus = pending_bus
+            self._owns_event_bus = True
         # Announced before the swap, so a subscriber reading the registry on
         # the departure event still sees what departed -- and in this order,
         # rather than as a third event meaning both, because a subscriber who
@@ -2357,8 +2371,13 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             return
         await bus.publish(topic, Event(type=event_type, topic=topic, payload=payload))
 
-    async def _event_bus_from(self, block: Mapping[str, Any], *, ontology_id: str) -> None:
-        """Build the bus a document configured, and own it.
+    async def _event_bus_from(self, block: Any, *, ontology_id: str) -> EventBus | None:
+        """Build the bus a document configured, for the caller to adopt.
+
+        **Returned rather than recorded.** :meth:`_load_resolved` adopts it
+        only once the document has loaded, and closes it if the document is
+        refused after this, so a refused document leaves no bus behind. None
+        when the document declares no ``event_bus:`` or a bus is already held.
 
         **The first bus wins, whatever built it, and a later block is
         reported rather than applied.** An injected bus always wins and is
@@ -2392,6 +2411,15 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
         collaborator :attr:`OPTIONAL_COMPONENTS` names, and an injected bus
         wins over a configured one at the line above.
         """
+        if block is None:
+            return None
+        if not isinstance(block, Mapping):
+            raise ValidationError(
+                f"ontology {ontology_id!r} declares `event_bus:` as "
+                f"{type(block).__name__}; `event_bus:` must be a mapping "
+                f"naming the bus's backend and its settings",
+                context={"ontology_id": ontology_id, "section": "event_bus", "value": block},
+            )
         if self._event_bus is not None:
             logger.info(
                 "Ontology %r declares `event_bus:` and this registry already holds "
@@ -2400,11 +2428,20 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 ontology_id,
                 "an injected" if not self._owns_event_bus else "a configured",
             )
-            return
-        bus = await asyncio.to_thread(create_event_bus, dict(block))
+            return None
+        try:
+            bus = await asyncio.to_thread(create_event_bus, dict(block))
+        except ValueError as exc:
+            # The one ValueError `create_event_bus` documents is a backend
+            # nothing registered: a property of the document, so refused as
+            # every other section's is.
+            raise ValidationError(
+                f"ontology {ontology_id!r} declares an `event_bus:` block this "
+                f"process cannot build: {exc}",
+                context={"ontology_id": ontology_id, "section": "event_bus"},
+            ) from exc
         await self._connect_or_close(bus)
-        self._event_bus = bus
-        self._owns_event_bus = True
+        return bus
 
 
 def _three_sets(

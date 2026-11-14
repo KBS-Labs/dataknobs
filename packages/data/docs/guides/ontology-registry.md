@@ -745,6 +745,13 @@ One level and one reader: the block sits in the ontology section, where
 connected before the load it announces. An injected bus always wins, and is
 never closed by the registry.
 
+The bus is the registry's only once the document has loaded. A document
+refused after its bus is built — a source nothing binds, an `index:` or
+`resolver:` section that does not hold up — has that bus closed, so the next document's
+own `event_bus:` block is the one that takes effect. A block that is not a
+mapping, or names a backend nothing registered, is refused as a
+`ValidationError` naming `event_bus:`.
+
 The block is built **off the event loop**, for the reason a handle is: every
 backend factory imports its driver — `asyncpg`, `redis`, `aioboto3` — inside
 the factory call, so that a base install pulls none of them, and an import is

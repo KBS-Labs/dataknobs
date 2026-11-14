@@ -20,15 +20,15 @@ from dataknobs_common.ontology import async_load_ontology, load_ontology
 from dataknobs_common.ontology.config import OntologyConfig
 
 
-def _sync_door(document: Mapping[str, Any]) -> None:
-    load_ontology(document)
+def _sync_door(document: Mapping[str, Any]) -> Any:
+    return load_ontology(document)
 
 
-def _async_door(document: Mapping[str, Any]) -> None:
-    asyncio.run(async_load_ontology(document))
+def _async_door(document: Mapping[str, Any]) -> Any:
+    return asyncio.run(async_load_ontology(document))
 
 
-Door = Callable[[Mapping[str, Any]], None]
+Door = Callable[[Mapping[str, Any]], Any]
 
 DOORS = pytest.mark.parametrize(
     "door", [_sync_door, _async_door], ids=["load_ontology", "async_load_ontology"]
@@ -59,8 +59,9 @@ def test_a_numeric_id_is_refused_with_a_hint_to_quote_it(door: Door) -> None:
 
 @DOORS
 def test_an_empty_id_is_refused_since_the_registry_reserves_it(door: Door) -> None:
-    with pytest.raises(ValidationError, match="`id:`"):
+    with pytest.raises(ValidationError, match="`id:` is the empty string") as excinfo:
         door({"id": ""})
+    assert excinfo.value.context == {"section": "id", "value": ""}
 
 
 @DOORS
@@ -94,7 +95,9 @@ def test_an_overlay_section_is_refused_as_a_key_nothing_reads(door: Door) -> Non
 
 @DOORS
 def test_a_well_formed_top_level_still_loads(door: Door) -> None:
-    door({"id": "o", "version": "1.10"})
+    ontology = door({"id": "o", "version": "1.10"})
+    assert ontology.id == "o"
+    assert ontology.version == "1.10"
 
 
 def test_the_config_declares_a_closed_key_set() -> None:
@@ -105,3 +108,19 @@ def test_the_config_declares_a_closed_key_set() -> None:
 def test_the_wrapped_form_is_still_unwrapped_before_the_key_check() -> None:
     """``ontology:`` wraps the document in a file that carries other blocks."""
     load_ontology({"ontology": {"id": "o"}})
+
+
+@DOORS
+@pytest.mark.parametrize("value", [["o"], {"o": 1}, True], ids=["list", "mapping", "bool"])
+def test_a_non_scalar_id_is_refused_without_a_hint_to_quote_it(door: Door, value: Any) -> None:
+    """Quoting is the remedy for a number only; a list quoted is still not an id."""
+    with pytest.raises(ValidationError, match="not a string") as excinfo:
+        door({"id": value})
+    assert "quote it" not in str(excinfo.value)
+
+
+def test_a_float_version_is_not_rendered_back_into_the_hint() -> None:
+    """``version: 1.10`` arrives as ``1.1``; suggesting ``'1.1'`` would mislead."""
+    with pytest.raises(ValidationError, match="quote it as written") as excinfo:
+        load_ontology({"id": "o", "version": 1.1})
+    assert "`version: '1.1'`" not in str(excinfo.value)

@@ -624,10 +624,26 @@ _VERSION_DEFAULT = next(
 def _refuse_a_bare_scalar(key: str, value: Any) -> None:
     if not isinstance(value, str):
         raise ValidationError(
-            f"`{key}:` declares {value!r}, which is not a string; quote it, so the "
-            f"text is the one written rather than what a YAML reader made of it",
+            f"`{key}:` declares {value!r}, which is not {_a_string_wanted(key, value)}",
             context={"section": key, "value": value},
         )
+
+
+def _a_string_wanted(key: str, value: Any) -> str:
+    """What a refusal says a non-string label should have been.
+
+    The quoting hint only for a number, the one shape quoting repairs: YAML
+    read the author's text as a number, and quoted it reads as that text. A
+    list or a mapping quoted is still not the label, and a boolean's quoted
+    form is rarely what was meant.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return "a string"
+    if isinstance(value, int):
+        return f"a string; quote it -- `{key}: {str(value)!r}`"
+    # Not rendered back: a float has already lost the author's text (YAML
+    # reads `1.10` as `1.1`), so the one to quote is the one they wrote.
+    return "a string; quote it as written, since YAML has already read it as a number"
 
 
 def _refuse_reserved_id(ontology_id: str) -> None:
@@ -1477,9 +1493,7 @@ def _row_str(
     """
     value = row.get(key)
     if value is not None and not isinstance(value, str):
-        wants = "a string"
-        if isinstance(value, int | float) and not isinstance(value, bool):
-            wants += f"; quote it -- `{key}: {str(value)!r}`"
+        wants = _a_string_wanted(key, value)
         _refuse_row_value(section, row, key, value, wants, handle=handle, context=context)
     return value
 

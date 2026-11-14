@@ -46,6 +46,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A config consumer named by `factory:` is built from the config.** Resolving
+  `factory:` called the class with no arguments to learn whether it was a
+  factory to instantiate, and read a `TypeError` as *no*. A
+  `StructuredConfigConsumer` whose config has required fields now refuses that
+  empty construction with `ConfigFieldError`, which escaped as the build's
+  error, naming a field the config does supply; one with no required fields
+  was constructed once for nothing. A class exposing `from_config` and none of
+  `create`, `create_async` or `build` is now recognised by inspection and
+  built through `from_config` (`from_config_async` on the async path), and
+  `Config.get_factory` hands back the class itself. The sync and async builds
+  and `get_factory` share one resolution.
+
 - **An environment override naming a nested value now reaches it, or is
   refused.** The attribute field of a `DATAKNOBS_` variable is everything past
   the second separator, so

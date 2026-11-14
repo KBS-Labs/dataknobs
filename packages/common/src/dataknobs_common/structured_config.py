@@ -1426,6 +1426,18 @@ class StructuredConfig:
             # becomes a field name. Checking the caller's dict instead would
             # reject every spelling ``_normalize_dict`` exists to translate.
             accepted = _accepted_keys(cls)  # type: ignore[arg-type]  # see _redacted_repr
+            # Before the sort and the suggestion, both of which fail on a key
+            # that is not a string -- and YAML 1.1 hands one over for an
+            # unquoted `yes:`, `on:` or `null:`.
+            non_string = [repr(key) for key in normalized if not isinstance(key, str)]
+            if non_string:
+                raise ConfigFieldError(
+                    f"{cls.__name__} reads string keys, and the config carries "
+                    f"{len(non_string)} key(s) that are not a string: "
+                    f"{', '.join(non_string)}. YAML reads an unquoted `yes:`, `on:` "
+                    f"or `null:` as a boolean or null; quote the key.",
+                    context={"config_class": cls.__name__, "non_string_keys": non_string},
+                )
             unknown = sorted(
                 key for key in normalized if key not in accepted and key not in _ROUTING_KEYS
             )
