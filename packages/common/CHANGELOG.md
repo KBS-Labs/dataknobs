@@ -1382,7 +1382,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where a caller who knows their own queries supplies the number the
   vocabulary could not. Below one is refused rather than clamped — a scan that
   probes nothing reports an empty result for every query, which is
-  indistinguishable from a vocabulary that matches nothing.
+  indistinguishable from a vocabulary that matches nothing. A value that is
+  not a whole number — `"4"`, `2.5`, `true` — is refused with a
+  `ValidationError` naming the key, here and for `max_edge` and
+  `max_query_tokens`, as is a `threshold` that is not a number.
 
   A rung handed its own `normalizer` does not ask the source for a bound at
   all. The source measured its keys before that rung existed and cannot see
@@ -1424,13 +1427,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 363,
-  the twenty-three beyond them being the operation family, the near-spelling rung,
-  the surface-form catalogue, the index-source family, the edge rule's three
-  functions, `aclosing_iter`, `PluginConfig`, `naming_refusals`,
-  `fingerprint_value`, `freeze_structure`, `thaw_structure`,
-  `FrozenMapping` and `ConfigFieldError`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond
-  them, which is what took that figure from 133.
+  the resolution cascade — 134 names, taking the package's `__all__` to 367,
+  the twenty-seven beyond them being the operation family, the near-spelling
+  rung, the surface-form catalogue, the index-source family, the edge rule's
+  three functions, `narrowest`, the tokenizer family (`Tokenizer`,
+  `TOKENIZERS`, `tokenizer_from_config`), `aclosing_iter`, `PluginConfig`,
+  `naming_refusals`, `fingerprint_value`, `freeze_structure`,
+  `thaw_structure`, `FrozenMapping` and `ConfigFieldError`, each added by its
+  own entry. `declared_candidates` is inside the 134 rather than beyond them,
+  which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to
   work. Nothing is renamed and nothing shadows an existing
@@ -2047,10 +2052,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every prefix of the run, so an extension never crosses a word or a space.
   `punctuation_edges(form)` measures how far a form's own punctuation reaches
   (`"(beagle)"` is `(1, 1)`); `edge_extensions(text, span, limit)` is one
-  span's extensions, widest first; and `probe_spans(text, longest, edge=0)` is
-  the whole enumeration a scan runs, windows longest first and each preceded
-  by its extensions. It looks nothing up, so a synchronous scan, an
-  asynchronous one and a consumer's own each drive it with their own lookup.
+  span's extensions, widest first; and
+  `probe_spans(text, longest, edge=0, tokens=None)` is the whole enumeration a
+  scan runs, windows longest first and each preceded by its extensions. It
+  looks nothing up, so a synchronous scan, an asynchronous one and a
+  consumer's own each drive it with their own lookup. `tokens` takes the
+  caller's own tokens — in order, not overlapping, touching allowed, refused
+  with `ValueError` naming the bad one — so a vocabulary of symbols, grouped
+  numbers or an unspaced script is enumerated over units that reach it; `None`
+  is `token_spans(text)`.
+
+- **`narrowest(text, hits, *, span, key)`, in `dataknobs_common.text`** and on
+  the same two doors: one hit per key per window, the narrowest span that
+  reached it, in the order the hits arrived. An extension and a fold that
+  strips punctuation make one entity reachable at several nested spans, and
+  this keeps the one where the punctuation took no part. Hits are grouped by
+  the span left after trimming every non-alphanumeric character, whitespace
+  included, so it is exact over a caller's tokens as well as the default ones;
+  a hit with no alphanumeric character keeps the empty core at its start and
+  stays apart from its neighbours. Generic over the hit type: `ScanningSignal`
+  calls it over `FormHit`s, and a second scanner over `probe_spans` calls it
+  over its own.
+
+- **A tokenizer for the scanning rungs: `tokenizer=` on `ScanningSignal`,
+  `LexicalSignal` and their async twins, with `Tokenizer`, `TOKENIZERS` and
+  `tokenizer_from_config`** in `dataknobs_common.text` and on both doors. A
+  tokenizer is any callable returning a string's tokens as spans; the rung's
+  windows start and end on its tokens. A document names one under
+  `tokenizer:` on a `kind: scan` or `kind: lexical` rung — a name in
+  `TOKENIZERS`, or `{name: ..., <params>}` — and an unknown name is refused
+  with `ValidationError` listing the registered ones. `default` is registered
+  and is `token_spans` itself. A scan with any other tokenizer does not take
+  its window or edge bound from the source, whose counts are in default
+  tokens, so `max_window` and `max_edge` are its only caps — as for a rung with
+  its own `normalizer`. `LexicalSignal`'s bound is in characters and is
+  unchanged by a tokenizer; its `max_query_tokens` counts the tokenizer's
+  tokens.
+
+- **`ScanningSignal.window_bounded(spec, longest_form_tokens)`** and its async
+  twin's: whether a rung built from a configuration spec bounds its window
+  over a source reporting that count — the rung's own rule, asked before it is
+  built. `declared_signal_metadata` publishes it as `window_bounded` in a
+  rung's registry metadata when the class defines it, so a door refusing an
+  unbounded scan asks the rung rather than restating which keys bound it. A
+  consumer's rung declaring `bounded_by_longest_form` opts in by defining the
+  same classmethod on its own class: the answer is not inherited, because a
+  subclass's factory may read the spec differently, so a subclass that wants
+  to be asked defines it and delegates to `super()`.
 
 - **`SourceDescription.form_edge: int | None`, with no default**, for the
   reason `declares` has none. How many punctuation characters the widest edge

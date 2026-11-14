@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 from difflib import SequenceMatcher
 from math import ceil
+from operator import attrgetter
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from dataknobs_common.callbacks import is_async_callable
@@ -54,15 +55,18 @@ from dataknobs_common.entity_resolution.values import (
 from dataknobs_common.text import (
     content_span,
     default_normalizer,
+    narrowest,
     probe_spans,
-    punctuation_edges,
     token_spans,
 )
+from dataknobs_common.text.scan import _checked_tokens
+from dataknobs_common.text.tokenizers import tokenizer_from_config
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Sequence, Set as AbstractSet
+    from collections.abc import Callable, Iterator, Mapping, Sequence, Set as AbstractSet
 
     from dataknobs_common.ontology.sources import AsyncEntitySource, EntitySource
+    from dataknobs_common.text import Tokenizer
 
 __all__ = [
     "AliasSignal",
@@ -322,9 +326,28 @@ def _whole_string(query: str, ids: Sequence[str]) -> tuple[FormHit, ...]:
     return tuple(FormHit(entity_id=entity_id, span=span) for entity_id in ids)
 
 
+def _source_measures_probes(
+    normalizer: Callable[[str], str] | None, tokenizer: Callable[..., Any] | None
+) -> bool:
+    """Whether a rung probes what its source measured, so the source's bounds hold.
+
+    A source measures its own keys, in :func:`~dataknobs_common.text.token_spans`
+    tokens, before any rung exists. A rung that folds again before the source
+    does, or that puts window boundaries somewhere else, probes strings that
+    measurement never saw, and no source-side number answers anything about
+    them. Only a rung with neither -- no ``normalizer``, and no tokenizer or
+    :func:`~dataknobs_common.text.token_spans` itself -- may ask.
+
+    The one rule :func:`_window_bound`, :func:`_edge_bound` and
+    :func:`_window_bounded` all read, so a rung's bounds and the registry's
+    answer about them cannot disagree.
+    """
+    return normalizer is None and tokenizer in (None, token_spans)
+
+
 def _window_bound(
     entities: EntitySource | AsyncEntitySource,
-    normalizer: Callable[[str], str] | None,
+    measured: bool,
     max_window: int | None,
 ) -> int | None:
     """How many tokens a probe may span, or ``None`` to enumerate every window.
@@ -358,18 +381,22 @@ def _window_bound(
     identically is the property, and one function is how it is held rather
     than asserted.
 
-    The source's number describes the source's own fold. A rung handed a
-    ``normalizer`` folds again before the source does, so the window that
-    reaches a key may carry more tokens than the key does, and the source's
-    number was never an answer to that question -- it measured its keys before
-    this rung existed and cannot see the extra fold. No source-side
-    measurement can, so such a rung does not ask.
+    The source's number describes the source's own fold and its own tokens --
+    ``measured`` says whether this rung shares both, see
+    :func:`_source_measures_probes`. A rung handed a ``normalizer`` folds again
+    before the source does, so the window that reaches a key may carry more
+    tokens than the key does, and the source's number was never an answer to
+    that question -- it measured its keys before this rung existed and cannot
+    see the extra fold. A rung handed a tokenizer other than the default puts
+    window boundaries where the source never counted, so a window of four of
+    its tokens may be one of the source's, or forty. No source-side
+    measurement can see either, so such a rung does not ask.
 
     ``max_window`` caps whatever that leaves, including nothing. It is the one
     number here a caller chose rather than the vocabulary implied, so it is
     the only one that can cost an answer -- see :class:`ScanningSignal`.
     """
-    derived = None if normalizer is not None else entities.longest_form_tokens()
+    derived = entities.longest_form_tokens() if measured else None
     if max_window is None:
         return derived
     return max_window if derived is None else min(derived, max_window)
@@ -377,7 +404,7 @@ def _window_bound(
 
 def _edge_bound(
     entities: EntitySource | AsyncEntitySource,
-    normalizer: Callable[[str], str] | None,
+    measured: bool,
     max_edge: int | None,
 ) -> int | None:
     """How far a probe may extend over punctuation, or ``None`` for the whole run.
@@ -395,7 +422,11 @@ def _edge_bound(
     A rung with a ``normalizer`` does not ask, because the source measured
     its own keys and the rung's fold is another: one that spells ``#`` out
     makes the two-character window ``C#`` reach a key with no punctuation in
-    it, and an edge of ``0`` would never probe that window.
+    it, and an edge of ``0`` would never probe that window. Nor does a rung
+    with a tokenizer other than the default: the edge was measured beside
+    :func:`~dataknobs_common.text.token_spans` tokens, and the punctuation
+    beside the rung's own tokens is a different run. ``measured`` carries
+    both, from :func:`_source_measures_probes`.
 
     ``max_edge`` caps whatever that leaves, as ``max_window`` caps the token
     bound, and for the same reason it is the one number here that can cost
@@ -405,10 +436,66 @@ def _edge_bound(
     side -- and ``None`` is what a rung that folds for itself always gets, and
     what a live table declaring no ``form_edge`` reports.
     """
-    derived = None if normalizer is not None else entities.describe().form_edge
+    derived = entities.describe().form_edge if measured else None
     if max_edge is None:
         return derived
     return max_edge if derived is None else min(derived, max_edge)
+
+
+def _window_bounded(spec: Mapping[str, Any], longest_form_tokens: int | None) -> bool:
+    """Whether a scan built from ``spec`` bounds its window over such a source.
+
+    :func:`_window_bound`'s decision asked of a configuration rather than of
+    a built rung, for a door that has to refuse a composition before anything
+    is constructed -- a binding whose every probe is a round trip cannot
+    afford a scan that enumerates every window, and has only the spec and
+    the number the binding declares to go on. Bounded when the spec caps the
+    window itself, or when the rung would trust the source's count and the
+    source has one.
+
+    Reads ``max_window``, then ``normalizer`` and ``tokenizer``, as the
+    shipped factories do and through the same checks, and
+    :func:`_source_measures_probes` is the one rule both consult, so for a
+    rung built by those factories the answer and the rung cannot disagree. A
+    ``max_window`` settles the answer, so the other two are not read when one
+    is set; the factory still checks them when it builds. A subclass whose
+    factory reads its spec differently answers for itself -- see
+    :func:`~dataknobs_common.entity_resolution.declared_signal_metadata`.
+
+    Raises:
+        ValidationError: For a ``max_window`` that is not a whole number of at
+            least one; and, when no ``max_window`` is set, for a
+            ``normalizer`` that is not callable or a ``tokenizer`` the
+            registry cannot build.
+    """
+    if _checked_max_window(spec.get("max_window")) is not None:
+        return True
+    normalizer = _checked_callable(spec.get("normalizer"), "normalizer")
+    tokenizer = tokenizer_from_config(spec.get("tokenizer"))
+    return _source_measures_probes(normalizer, tokenizer) and longest_form_tokens is not None
+
+
+def _checked_count(value: object, name: str, at_least: int, consequence: str) -> int | None:
+    """``value`` as given, when it is ``None`` or a whole number of at least ``at_least``.
+
+    Every integer cap the rungs take is refused through here, so they all
+    refuse alike. These values arrive from documents, so they are external
+    input: a string or a float is refused here, naming the key, rather than
+    failing later in a comparison or inside ``range``. A bool is refused too,
+    although Python counts it as an ``int``, because ``true`` written for a cap
+    is a mistake rather than the number one.
+
+    Raises:
+        ValidationError: For a value that is not a whole number, or one below
+            ``at_least``; ``consequence`` says what the second would build.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValidationError(f"{name} must be a whole number, got {value!r}")
+    if value < at_least:
+        raise ValidationError(f"{name} must be at least {at_least}, got {value}. {consequence}")
+    return value
 
 
 def _checked_query_tokens(max_query_tokens: int | None) -> int | None:
@@ -420,19 +507,26 @@ def _checked_query_tokens(max_query_tokens: int | None) -> int | None:
     indistinguishable from a vocabulary that matches nothing.
 
     Raises:
-        ValidationError: For a ``max_query_tokens`` below one.
+        ValidationError: For a ``max_query_tokens`` that is not a whole
+            number, or is below one.
     """
-    if max_query_tokens is not None and max_query_tokens < 1:
-        raise ValidationError(
-            f"max_query_tokens must be at least 1, got {max_query_tokens}. A "
-            f"rung that may probe no tokens reports an empty result for every "
-            f"query, which is what a vocabulary matching nothing looks like."
-        )
-    return max_query_tokens
+    return _checked_count(
+        max_query_tokens,
+        "max_query_tokens",
+        1,
+        "A rung that may probe no tokens reports an empty result for every "
+        "query, which is what a vocabulary matching nothing looks like.",
+    )
 
 
-def _checked_query(query: str, max_query_tokens: int | None) -> None:
+def _checked_query(tokens: Sequence[tuple[int, int]], max_query_tokens: int | None) -> None:
     """Refuse a query with more tokens than this rung agreed to probe.
+
+    ``tokens`` are the query's tokens **as the rung's tokenizer found them** --
+    the units it enumerates windows over -- so the cap counts what the work
+    is proportional to. A sentence in a script written without spaces is one
+    :func:`~dataknobs_common.text.token_spans` token and may be forty of a
+    segmenter's.
 
     **Refused rather than truncated.** Probing the first *n* tokens and
     answering from them is a plausible-looking answer to a question nobody
@@ -447,10 +541,9 @@ def _checked_query(query: str, max_query_tokens: int | None) -> None:
     """
     if max_query_tokens is None:
         return
-    tokens = len(token_spans(query))
-    if tokens > max_query_tokens:
+    if len(tokens) > max_query_tokens:
         raise ValidationError(
-            f"this query carries {tokens} tokens and max_query_tokens is "
+            f"this query carries {len(tokens)} tokens and max_query_tokens is "
             f"{max_query_tokens}. A near-spelling rung scores every window "
             f"against every declared form, so the work grows with the "
             f"caller's own text -- chunk the text, or raise the cap for a "
@@ -505,15 +598,16 @@ def _checked_max_window(max_window: int | None) -> int | None:
     A caller who wants a rung that never fires leaves it out of the cascade.
 
     Raises:
-        ValidationError: For a ``max_window`` below one.
+        ValidationError: For a ``max_window`` that is not a whole number, or
+            is below one.
     """
-    if max_window is not None and max_window < 1:
-        raise ValidationError(
-            f"max_window must be at least 1, got {max_window}. A scan with a "
-            f"window narrower than one token probes nothing and would report "
-            f"an empty result for every query."
-        )
-    return max_window
+    return _checked_count(
+        max_window,
+        "max_window",
+        1,
+        "A scan with a window narrower than one token probes nothing and "
+        "would report an empty result for every query.",
+    )
 
 
 def _checked_max_edge(max_edge: int | None) -> int | None:
@@ -524,48 +618,45 @@ def _checked_max_edge(max_edge: int | None) -> int | None:
     and still answers every form whose edges are alphanumeric.
 
     Raises:
-        ValidationError: For a ``max_edge`` below zero.
+        ValidationError: For a ``max_edge`` that is not a whole number, or is
+            below zero.
     """
-    if max_edge is not None and max_edge < 0:
-        raise ValidationError(
-            f"max_edge must be at least 0, got {max_edge}. It counts the "
-            f"punctuation characters a probe may be widened over on each side."
-        )
-    return max_edge
+    return _checked_count(
+        max_edge,
+        "max_edge",
+        0,
+        "It counts the punctuation characters a probe may be widened over on each side.",
+    )
 
 
-def _narrowest(query: str, found: Sequence[FormHit]) -> list[FormHit]:
-    """One piece of evidence per entity per window: the narrowest span that reached it.
+def _query_tokens(tokenizer: Tokenizer, query: str) -> tuple[tuple[int, int], ...]:
+    """The query's tokens by ``tokenizer``, checked once where they are not the default's.
 
-    An extension widens a window over punctuation, and a fold that strips
-    punctuation makes every extension of ``beagle`` reach the key the bare
-    window reaches -- ``"(beagle)"`` would otherwise report one entity at four
-    nested places. The punctuation took no part in that match, so the
-    evidence is the narrowest span around it; where the punctuation *is* the
-    match -- ``(beagle)`` declared -- the bare window misses and the extended
-    span is the only one there is.
+    :func:`~dataknobs_common.text.token_spans` produces valid spans by
+    construction, so its output is not re-checked on every query; a caller's
+    tokenizer is checked here, where the failure can say which token was
+    wrong, rather than surfacing as a slice that is not the window it claims.
 
-    The window an extension came from is recovered by trimming the
-    punctuation off its ends, which is exact: a window starts and ends on a
-    token, and an extension adds only punctuation. Each kept hit stays where
-    the first hit for that entity and window arrived, so the published order
-    is the enumeration's.
-
-    Shared by both flavours for :func:`_window_bound`'s reason.
+    Raises:
+        ValueError: For tokens that are not in-order, non-overlapping,
+            non-empty spans inside ``query``.
     """
-    kept: list[FormHit] = []
-    at: dict[tuple[tuple[int, int], Any], int] = {}
-    for hit in found:
-        start, end = hit.span
-        leading, trailing = punctuation_edges(query[start:end])
-        key = ((start + leading, end - trailing), hit.entity_id)
-        index = at.get(key)
-        if index is None:
-            at[key] = len(kept)
-            kept.append(hit)
-        elif end - start < kept[index].span[1] - kept[index].span[0]:
-            kept[index] = hit
-    return kept
+    if tokenizer is token_spans:
+        return token_spans(query)
+    return _checked_tokens(query, tokenizer(query))
+
+
+def _evidence(query: str, found: Sequence[FormHit]) -> list[FormHit]:
+    """One hit per entity per window, at the narrowest span that reached it.
+
+    :func:`~dataknobs_common.text.narrowest` over a scan's hits, shared by
+    both flavours for :func:`_window_bound`'s reason.
+    """
+    return narrowest(query, found, span=_SPAN, key=_ENTITY)
+
+
+_SPAN = attrgetter("span")
+_ENTITY = attrgetter("entity_id")
 
 
 def _hits_at(span: tuple[int, int], ids: Sequence[str]) -> list[FormHit]:
@@ -763,7 +854,10 @@ def _window_chars(forms: Sequence[str], threshold: float) -> int:
 
 
 def _scored_probe_spans(
-    query: str, max_chars: int, fold: Callable[[str], str]
+    query: str,
+    max_chars: int,
+    fold: Callable[[str], str],
+    tokens: Sequence[tuple[int, int]],
 ) -> Iterator[tuple[tuple[int, int], str]]:
     """Every span of consecutive tokens whose **folded** width fits ``max_chars``.
 
@@ -801,11 +895,14 @@ def _scored_probe_spans(
     enumeration order is therefore free, and growing spans is what lets the
     loop break.
 
+    ``tokens`` are the rung's, already checked by the caller. The bound is in
+    folded characters, so a tokenizer changes where windows start and end
+    and not how wide one may be.
+
     Yields:
         ``(span, window)`` -- the half-open extent in the **query**, and what
         the fold made of the slice it points at.
     """
-    tokens = token_spans(query)
     for first in range(len(tokens)):
         for last in range(first, len(tokens)):
             span = (tokens[first][0], tokens[last][1])
@@ -834,9 +931,16 @@ def _checked_threshold(threshold: float) -> float:
     of silence this family refuses to ship. One exactly is a real request --
     *only an exact fold* -- and is kept.
 
+    A value that is not a number -- a string, or a bool, which Python would
+    compare as ``1`` -- is refused by name, for :func:`_checked_count`'s
+    reason.
+
     Raises:
-        ValidationError: For a threshold outside ``(0, 1]``.
+        ValidationError: For a threshold that is not a number, or is outside
+            ``(0, 1]``.
     """
+    if isinstance(threshold, bool) or not isinstance(threshold, int | float):
+        raise ValidationError(f"threshold must be a number, got {threshold!r}")
     if not 0.0 < threshold <= 1.0:
         raise ValidationError(
             f"threshold must be greater than 0 and at most 1, got {threshold}. "
@@ -854,6 +958,7 @@ def _near_forms(
     threshold: float,
     scorer: Callable[[str, str], float],
     fold: Callable[[str], str],
+    tokens: Sequence[tuple[int, int]],
 ) -> list[tuple[str, tuple[int, int], float]]:
     """Each form a window of ``query`` scored at or above ``threshold``.
 
@@ -885,7 +990,7 @@ def _near_forms(
     """
     folded = [(form, fold(form)) for form in forms]
     bound = _window_chars([shape for _form, shape in folded], threshold)
-    windows = list(_scored_probe_spans(query, bound, fold))
+    windows = list(_scored_probe_spans(query, bound, fold, tokens))
     # The catalogue is folded and measured on every query rather than cached
     # against the source, and that is a ruling rather than an omission: the
     # asynchronous twin re-reads because a source's contents can change under
@@ -1307,9 +1412,22 @@ class ScanningSignal(DeclaredSignal):
     is cut at the longest form there is, which is what keeps the cost linear in
     the query rather than quadratic in it. See
     :func:`~dataknobs_common.text.probe_spans` for the enumeration,
-    :func:`_window_bound` and :func:`_edge_bound` for its two bounds, and
-    :func:`~dataknobs_common.text.token_spans` for the boundary policy that
-    stops it finding ``beagle`` inside ``unbeagleable``.
+    :func:`_window_bound` and :func:`_edge_bound` for its two bounds, and the
+    rung's tokenizer -- :func:`~dataknobs_common.text.token_spans` unless given
+    one -- for the boundary policy that stops it finding ``beagle`` inside
+    ``unbeagleable``.
+
+    **The tokens can be the caller's.** ``tokenizer`` takes any callable
+    returning a string's tokens as in-order spans, and a configuration names
+    one registered in :data:`~dataknobs_common.text.TOKENIZERS`. That is how
+    a vocabulary of symbols, grouped numbers or an unspaced script is
+    scanned over units that reach its forms. It costs the derived bounds:
+    the source measured its forms in default tokens, so a rung with another
+    tokenizer does not ask it how wide a window or an edge can be, and
+    ``max_window`` and ``max_edge`` are the only caps it has -- as for a rung
+    with its own ``normalizer``. ``tokenizer=token_spans`` is the default and
+    keeps them. A tokenizer returning spans that overlap, arrive out of
+    order, or fall outside the query makes a query raise ``ValueError``.
 
     **A form whose edge is punctuation is found too.** A window starts and
     ends on a token, so on its own it never reaches the parentheses of
@@ -1328,7 +1446,16 @@ class ScanningSignal(DeclaredSignal):
     reach one entity -- a fold that strips punctuation makes ``(beagle)``,
     ``(beagle`` and ``beagle`` all reach ``beagle`` -- the entity is reported
     once for that window, at the narrowest of them: the punctuation took no
-    part in the match. See :func:`_narrowest`.
+    part in the match. See :func:`~dataknobs_common.text.narrowest`.
+
+    **A form with no letter or digit in it is never found by a scan over the
+    default tokens.** ``$``, ``:-)`` and ``--`` load without complaint, and no
+    window ever reaches them: :func:`~dataknobs_common.text.token_spans` has
+    no token for a character that is neither, so there is nothing for a
+    window to start on, and an extension only widens a window that exists.
+    Such a form is reached by a rung comparing the whole query --
+    :class:`ExactNormalizedSignal` -- or by this rung over tokens that
+    include it, through ``tokenizer``.
 
     **Overlapping forms are all returned.** ``"my golden retriever has been
     limping"`` yields ``golden_retriever`` at ``(3, 19)`` and ``retriever`` at
@@ -1379,6 +1506,7 @@ class ScanningSignal(DeclaredSignal):
         normalizer: Callable[[str], str] | None = None,
         max_window: int | None = None,
         max_edge: int | None = None,
+        tokenizer: Tokenizer | None = None,
     ) -> None:
         """Args:
         entities: The vocabulary to match against.
@@ -1400,24 +1528,64 @@ class ScanningSignal(DeclaredSignal):
             nobody stated -- a rung with its own ``normalizer`` always
             extends over the whole run of punctuation beside a window, and so
             does a scan over a source that cannot say -- because that run is
-            the caller's text, and its cost grows with its square.
+            the caller's text, and its cost grows with its square. A
+            tokenizer whose tokens already include punctuation wants
+            ``max_edge=0``: there is nothing left beside its tokens to widen
+            over that it did not mean to leave out.
+        tokenizer: Where the query's tokens are, or ``None`` for
+            :func:`~dataknobs_common.text.token_spans`. See the class
+            docstring; like ``normalizer``, anything but the default stops
+            this rung asking the source for either bound.
 
         Raises:
-            ValidationError: For a ``max_window`` below one or a ``max_edge``
-                below zero.
+            ValidationError: For a ``max_window`` below one, a ``max_edge``
+                below zero, or a ``normalizer`` or ``tokenizer`` that is not
+                callable.
         """
         super().__init__(entities, normalizer=normalizer)
         self._max_window = _checked_max_window(max_window)
         self._max_edge = _checked_max_edge(max_edge)
+        self._tokenizer: Tokenizer = _checked_callable(tokenizer, "tokenizer") or token_spans
+
+    @classmethod
+    def window_bounded(cls, spec: Mapping[str, Any], longest_form_tokens: int | None) -> bool:
+        """Whether a rung built from ``spec`` bounds its window over such a source.
+
+        The question a door asks before building, where every probe would
+        be a round trip: a source reporting ``longest_form_tokens`` (``None``
+        for one that cannot count) and a rung spec as a document writes it.
+        True when the spec sets ``max_window``, or when it names no
+        ``normalizer`` and no tokenizer but the default and the source has a
+        count -- the same rule the rung applies to itself when it runs.
+
+        **The extension point.** The signal registry publishes this under
+        ``window_bounded`` in a rung's metadata, and a consumer's rung that
+        declares ``bounded_by_longest_form`` opts in by defining the same
+        classmethod. One that does not is treated as bounded exactly when the
+        source declares a count, which is what a door assumed before the
+        question could be asked.
+
+        A subclass of this class is one that does not, unless its own body
+        defines the classmethod: this answer reads a spec as the shipped
+        factory does, and a subclass's factory may read it otherwise. One
+        whose factory reads it the same way defines it and returns
+        ``super().window_bounded(spec, longest_form_tokens)``.
+
+        Raises:
+            ValidationError: For a spec the factory would refuse.
+        """
+        return _window_bounded(spec, longest_form_tokens)
 
     def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
-        bound = _window_bound(self._entities, self._normalizer, self._max_window)
-        edge = _edge_bound(self._entities, self._normalizer, self._max_edge)
-        for span in probe_spans(query, bound, edge=edge):
+        measured = _source_measures_probes(self._normalizer, self._tokenizer)
+        bound = _window_bound(self._entities, measured, self._max_window)
+        edge = _edge_bound(self._entities, measured, self._max_edge)
+        tokens = None if self._tokenizer is token_spans else self._tokenizer(query)
+        for span in probe_spans(query, bound, edge=edge, tokens=tokens):
             hits = self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
-        return _narrowest(query, found)
+        return _evidence(query, found)
 
 
 class LexicalSignal(DeclaredSignal):
@@ -1454,6 +1622,14 @@ class LexicalSignal(DeclaredSignal):
     index and the index folds it; this one performs the comparison itself, so
     an unfolded window scored against a source-folded form would read a
     capital letter as a misspelling. See :func:`_near_forms`.
+
+    **Its windows start and end on the rung's tokens**,
+    :func:`~dataknobs_common.text.token_spans` unless ``tokenizer`` says
+    otherwise -- so a misspelling inside an unspaced script is reachable once
+    a tokenizer that segments it is given. The probe's bound is in folded
+    characters rather than tokens, so a tokenizer changes where windows fall
+    and not how wide one may be, and ``max_query_tokens`` counts the rung's
+    tokens.
 
     **The evidence is** :attr:`~EvidenceKind.INFERRED` **and**
     :attr:`~Scoring.NATIVE`. The first because the entity was proposed rather
@@ -1501,6 +1677,7 @@ class LexicalSignal(DeclaredSignal):
         scorer: Callable[[str, str], float] | None = None,
         normalizer: Callable[[str], str] | None = None,
         max_query_tokens: int | None = None,
+        tokenizer: Tokenizer | None = None,
     ) -> None:
         """Args:
         entities: The vocabulary to match against. It must also satisfy
@@ -1552,8 +1729,8 @@ class LexicalSignal(DeclaredSignal):
             from a shorter one could stop the probe early. Every
             character-wise fold satisfies this, including the default and
             anything built from ``strip``, ``casefold`` or ``replace``.
-        max_query_tokens: How many tokens a query may carry, or ``None`` --
-            the default -- for no limit.
+        max_query_tokens: How many tokens a query may carry, as this rung's
+            tokenizer counts them, or ``None`` -- the default -- for no limit.
 
             **The one parameter here that can cost an answer**, which is why
             it is off unless asked for, and the reason it exists is that
@@ -1566,12 +1743,16 @@ class LexicalSignal(DeclaredSignal):
 
             A query over the cap is **refused rather than truncated** -- see
             :func:`_checked_query`.
+        tokenizer: Where the query's tokens are, or ``None`` for
+            :func:`~dataknobs_common.text.token_spans`. Windows start and end
+            on its tokens and ``max_query_tokens`` counts them; the probe's
+            bound is in folded characters, so a tokenizer leaves it as it is.
 
         Raises:
             ValidationError: For a ``threshold`` outside ``(0, 1]``, for a
-                ``max_query_tokens`` below one, for a ``scorer`` or
-                ``normalizer`` that is not callable, or for a source that
-                does not publish its forms in this flavour.
+                ``max_query_tokens`` below one, for a ``scorer``,
+                ``normalizer`` or ``tokenizer`` that is not callable, or for
+                a source that does not publish its forms in this flavour.
         """
         super().__init__(entities, normalizer=normalizer or default_normalizer)
         if not isinstance(entities, SurfaceFormCatalog):
@@ -1581,6 +1762,7 @@ class LexicalSignal(DeclaredSignal):
         self._threshold = _checked_threshold(threshold)
         self._scorer = _checked_callable(scorer, "scorer")
         self._max_query_tokens = _checked_query_tokens(max_query_tokens)
+        self._tokenizer: Tokenizer = _checked_callable(tokenizer, "tokenizer") or token_spans
 
     def _located(self, query: str) -> Sequence[FormHit]:
         """Every entity a window of the query came near, best first.
@@ -1596,13 +1778,15 @@ class LexicalSignal(DeclaredSignal):
         hits are all 1.0; here the order is the score's and
         :func:`_ranked` is where it is decided.
         """
-        _checked_query(query, self._max_query_tokens)
+        tokens = _query_tokens(self._tokenizer, query)
+        _checked_query(tokens, self._max_query_tokens)
         found = _near_forms(
             query,
             list(self._catalogue.surface_forms()),
             threshold=self._threshold,
             scorer=_scorer_for(self._scorer, self._threshold),
             fold=self._fold,
+            tokens=tokens,
         )
         return _ranked(
             [
@@ -1832,6 +2016,7 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
         normalizer: Callable[[str], str] | None = None,
         max_window: int | None = None,
         max_edge: int | None = None,
+        tokenizer: Tokenizer | None = None,
     ) -> None:
         """The same constructor as the synchronous twin's, over an asynchronous source.
 
@@ -1842,21 +2027,34 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
         each argument means and for which of them can cost an answer.
 
         Raises:
-            ValidationError: For a ``max_window`` below one or a ``max_edge``
-                below zero.
+            ValidationError: For a ``max_window`` below one, a ``max_edge``
+                below zero, or a ``normalizer`` or ``tokenizer`` that is not
+                callable.
         """
         super().__init__(entities, normalizer=normalizer)
         self._max_window = _checked_max_window(max_window)
         self._max_edge = _checked_max_edge(max_edge)
+        self._tokenizer: Tokenizer = _checked_callable(tokenizer, "tokenizer") or token_spans
+
+    @classmethod
+    def window_bounded(cls, spec: Mapping[str, Any], longest_form_tokens: int | None) -> bool:
+        """:meth:`ScanningSignal.window_bounded`, answered identically.
+
+        Raises:
+            ValidationError: For a spec the factory would refuse.
+        """
+        return _window_bounded(spec, longest_form_tokens)
 
     async def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
-        bound = _window_bound(self._entities, self._normalizer, self._max_window)
-        edge = _edge_bound(self._entities, self._normalizer, self._max_edge)
-        for span in probe_spans(query, bound, edge=edge):
+        measured = _source_measures_probes(self._normalizer, self._tokenizer)
+        bound = _window_bound(self._entities, measured, self._max_window)
+        edge = _edge_bound(self._entities, measured, self._max_edge)
+        tokens = None if self._tokenizer is token_spans else self._tokenizer(query)
+        for span in probe_spans(query, bound, edge=edge, tokens=tokens):
             hits = await self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
-        return _narrowest(query, found)
+        return _evidence(query, found)
 
 
 class AsyncLexicalSignal(AsyncDeclaredSignal):
@@ -1893,6 +2091,7 @@ class AsyncLexicalSignal(AsyncDeclaredSignal):
         scorer: Callable[[str, str], float] | None = None,
         normalizer: Callable[[str], str] | None = None,
         max_query_tokens: int | None = None,
+        tokenizer: Tokenizer | None = None,
     ) -> None:
         """The same constructor as the synchronous twin's, over an asynchronous source.
 
@@ -1909,9 +2108,9 @@ class AsyncLexicalSignal(AsyncDeclaredSignal):
 
         Raises:
             ValidationError: For a ``threshold`` outside ``(0, 1]``, for a
-                ``max_query_tokens`` below one, for a ``scorer`` or
-                ``normalizer`` that is not callable, or for a source that
-                does not publish its forms in this flavour.
+                ``max_query_tokens`` below one, for a ``scorer``,
+                ``normalizer`` or ``tokenizer`` that is not callable, or for
+                a source that does not publish its forms in this flavour.
         """
         super().__init__(entities, normalizer=normalizer or default_normalizer)
         if not isinstance(entities, AsyncSurfaceFormCatalog):
@@ -1921,6 +2120,7 @@ class AsyncLexicalSignal(AsyncDeclaredSignal):
         self._threshold = _checked_threshold(threshold)
         self._scorer = _checked_callable(scorer, "scorer")
         self._max_query_tokens = _checked_query_tokens(max_query_tokens)
+        self._tokenizer: Tokenizer = _checked_callable(tokenizer, "tokenizer") or token_spans
 
     async def _located(self, query: str) -> Sequence[FormHit]:
         """:meth:`LexicalSignal._located` over an asynchronous source.
@@ -1943,7 +2143,8 @@ class AsyncLexicalSignal(AsyncDeclaredSignal):
         to, since the default one is stateful and would otherwise be shared
         across whatever else the loop is running.
         """
-        _checked_query(query, self._max_query_tokens)
+        tokens = _query_tokens(self._tokenizer, query)
+        _checked_query(tokens, self._max_query_tokens)
         found = await asyncio.to_thread(
             _near_forms,
             query,
@@ -1951,6 +2152,7 @@ class AsyncLexicalSignal(AsyncDeclaredSignal):
             threshold=self._threshold,
             scorer=_scorer_for(self._scorer, self._threshold),
             fold=self._fold,
+            tokens=tokens,
         )
         hits: list[FormHit] = []
         for form, span, score in found:

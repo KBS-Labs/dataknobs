@@ -34,6 +34,7 @@ from dataknobs_common.entity_resolution import (
     AliasSignal,
     AsyncCascadingResolver,
     AsyncDeclaredSignal,
+    AsyncLexicalSignal,
     AsyncScanningSignal,
     CascadingResolver,
     CompatibilityVerdict,
@@ -42,16 +43,21 @@ from dataknobs_common.entity_resolution import (
     EvidenceKind,
     ExactNormalizedSignal,
     FormHit,
+    LexicalSignal,
     MatchEvidence,
     ResolutionRef,
     ResolutionResult,
     RunnerUp,
     ScanningSignal,
     Scoring,
+    TOKENIZERS,
+    async_signal_backends,
     content_span,
+    declared_signal_metadata,
+    signal_backends,
     token_spans,
 )
-from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.exceptions import OperationError, ValidationError
 from dataknobs_common.ontology import (
     AsyncMappingEntitySource,
     Entity,
@@ -1674,3 +1680,311 @@ async def test_an_extension_that_adds_nothing_is_not_reported_as_evidence() -> N
     punctuated = _forms("(beagle)")
     found = ScanningSignal(MappingEntitySource(punctuated)).candidates("x (beagle) y", k=5)
     assert [e.span for c in found for e in c.evidence] == [(2, 10)]
+
+
+# ---------------------------------------------------------------------------
+# The caller's own tokens
+# ---------------------------------------------------------------------------
+
+#: An unspaced sentence: "I went to Tokyo Tower". :func:`token_spans` reads it
+#: as one token, so no window is ever the name inside it.
+UNSPACED = "東京タワーに行きました"
+
+#: A segmentation of :data:`UNSPACED`, fixed here rather than computed --
+#: what a segmenter would return, without depending on one.
+_SEGMENTS = {UNSPACED: ((0, 2), (2, 5), (5, 6), (6, 8), (8, 11))}
+
+TOWER = {"tower": Entity(id="tower", type="Landmark", name="東京タワー")}
+
+
+def _segmenter(text: str) -> tuple[tuple[int, int], ...]:
+    """A deterministic test tokenizer: fixed spans for a known string, else the default."""
+    return _SEGMENTS.get(text, token_spans(text))
+
+
+def _same_tokens(text: str) -> tuple[tuple[int, int], ...]:
+    """The default tokens from a callable that is not :func:`token_spans` itself.
+
+    Which is the case the trust rule reads: identity, not output. A rung
+    cannot tell that a tokenizer happens to agree with the source's
+    measurement on every input, so anything but the function itself
+    declines the source's bounds.
+    """
+    return token_spans(text)
+
+
+async def test_every_rung_reaches_a_name_inside_unspaced_text_with_a_tokenizer() -> None:
+    sources = (MappingEntitySource(TOWER), AsyncMappingEntitySource(TOWER))
+    sync_rungs = (ScanningSignal, LexicalSignal)
+    async_rungs = (AsyncScanningSignal, AsyncLexicalSignal)
+
+    for rung in sync_rungs:
+        assert rung(sources[0]).candidates(UNSPACED, k=5) == [], rung.__name__
+        found = rung(sources[0], tokenizer=_segmenter).candidates(UNSPACED, k=5)
+        assert [(c.entity_id, c.evidence[0].span) for c in found] == [("tower", (0, 5))]
+    for rung in async_rungs:
+        assert await rung(sources[1]).candidates(UNSPACED, k=5) == [], rung.__name__
+        found = await rung(sources[1], tokenizer=_segmenter).candidates(UNSPACED, k=5)
+        assert [(c.entity_id, c.evidence[0].span) for c in found] == [("tower", (0, 5))]
+
+
+async def _probes(query: str, **rung: Any) -> int:
+    """How many lookups a scan spends on ``query``, having asserted both twins agree."""
+    sync_source = CountingEntitySource(RETRIEVERS)
+    async_source = AsyncCountingEntitySource(RETRIEVERS)
+    ScanningSignal(sync_source, **rung).candidates(query, k=5)
+    await AsyncScanningSignal(async_source, **rung).candidates(query, k=5)
+    assert sync_source.probes == async_source.probes, "the twins spent differently"
+    return sync_source.probes
+
+
+async def test_a_rung_with_a_tokenizer_does_not_trust_bounds_measured_without_it() -> None:
+    """The source counted its forms in default tokens, and the rung counts its own.
+
+    Mirrors the rung that folds for itself: a window of four of a caller's
+    tokens may be one of the source's or forty, so neither the source's
+    longest form nor its edge says anything about this enumeration. Only the
+    caller's caps do.
+    """
+    query = " ".join(["word"] * 34 + SENTENCE.split())
+    tokens = len(token_spans(query))
+    assert MappingEntitySource(RETRIEVERS).longest_form_tokens() == 2
+
+    assert await _probes(query) == tokens + (tokens - 1)
+    assert await _probes(query, tokenizer=_same_tokens) == tokens * (tokens + 1) // 2
+    assert await _probes(query, tokenizer=_same_tokens, max_window=2) == tokens + (tokens - 1)
+
+    # Three tokens, a window of two, and a declared edge of 0: five probes.
+    # With a tokenizer the edge is no longer the source's, so the run of two
+    # parentheses on each side of ``beagle`` is widened over until max_edge.
+    punctuated = "a ((beagle)) b"
+    assert MappingEntitySource(RETRIEVERS).describe().form_edge == 0
+    assert await _probes(punctuated) == 5
+    capped = {"tokenizer": _same_tokens, "max_window": 2}
+    assert await _probes(punctuated, **capped) > 5
+    assert await _probes(punctuated, **capped, max_edge=0) == 5
+
+
+async def test_the_default_tokenizer_by_identity_keeps_the_derived_bounds() -> None:
+    query = " ".join(["word"] * 34 + SENTENCE.split())
+    assert await _probes(query, tokenizer=token_spans) == await _probes(query)
+    assert await _probes("a ((beagle)) b", tokenizer=token_spans) == await _probes("a ((beagle)) b")
+
+
+def test_max_query_tokens_counts_the_rung_s_tokens() -> None:
+    """One default token is five of the segmenter's, and the cap counts the five."""
+    source = MappingEntitySource(TOWER)
+    assert len(token_spans(UNSPACED)) == 1
+
+    LexicalSignal(source, max_query_tokens=2).candidates(UNSPACED, k=5)
+    with pytest.raises(ValidationError, match="carries 5 tokens"):
+        LexicalSignal(source, tokenizer=_segmenter, max_query_tokens=2).candidates(UNSPACED, k=5)
+
+
+async def test_an_async_lexical_rung_counts_the_same_tokens() -> None:
+    rung = AsyncLexicalSignal(
+        AsyncMappingEntitySource(TOWER), tokenizer=_segmenter, max_query_tokens=2
+    )
+    with pytest.raises(ValidationError, match="carries 5 tokens"):
+        await rung.candidates(UNSPACED, k=5)
+
+
+def test_a_tokenizer_returning_overlapping_spans_raises_naming_the_token() -> None:
+    def overlapping(text: str) -> tuple[tuple[int, int], ...]:
+        return ((0, 3), (2, 5))
+
+    for rung in (ScanningSignal, LexicalSignal):
+        with pytest.raises(ValueError, match="token 1"):
+            rung(MappingEntitySource(TOWER), tokenizer=overlapping).candidates(UNSPACED, k=5)
+
+
+def test_a_tokenizer_that_is_not_callable_is_refused_by_name() -> None:
+    with pytest.raises(ValidationError, match="tokenizer must be callable"):
+        ScanningSignal(MappingEntitySource(TOWER), tokenizer="segmenter")  # type: ignore[arg-type]
+
+
+@pytest.fixture
+def registered_segmenter() -> Any:
+    """``segmenter`` in :data:`TOKENIZERS`, and ``fixed`` taking one parameter."""
+
+    def segmenter(config: Mapping[str, Any]) -> Any:
+        if config:
+            raise ValueError(f"takes no parameters; given {sorted(config)}")
+        return _segmenter
+
+    def fixed(config: Mapping[str, Any]) -> Any:
+        spans = tuple(tuple(span) for span in config["spans"])
+        return lambda text: spans
+
+    TOKENIZERS.register("segmenter", segmenter)
+    TOKENIZERS.register("fixed", fixed)
+    yield
+    TOKENIZERS.unregister("segmenter")
+    TOKENIZERS.unregister("fixed")
+
+
+@pytest.mark.usefixtures("registered_segmenter")
+async def test_a_document_names_a_tokenizer_for_every_rung_kind() -> None:
+    sync_source = MappingEntitySource(TOWER)
+    async_source = AsyncMappingEntitySource(TOWER)
+    for kind in ("scan", "lexical"):
+        built = signal_backends.create(kind, {"entities": sync_source, "tokenizer": "segmenter"})
+        assert [c.entity_id for c in built.candidates(UNSPACED, k=5)] == ["tower"], kind
+        built_async = async_signal_backends.create(
+            kind, {"entities": async_source, "tokenizer": "segmenter"}
+        )
+        found = await built_async.candidates(UNSPACED, k=5)
+        assert [c.entity_id for c in found] == ["tower"], kind
+
+    parameterised = signal_backends.create(
+        "scan", {"entities": sync_source, "tokenizer": {"name": "fixed", "spans": [[0, 5]]}}
+    )
+    assert [c.entity_id for c in parameterised.candidates(UNSPACED, k=5)] == ["tower"]
+
+
+@pytest.mark.usefixtures("registered_segmenter")
+async def test_tokenizer_default_in_a_document_keeps_the_derived_bounds() -> None:
+    query = " ".join(["word"] * 34 + SENTENCE.split())
+    named = CountingEntitySource(RETRIEVERS)
+    signal_backends.create("scan", {"entities": named, "tokenizer": "default"}).candidates(
+        query, k=5
+    )
+    assert named.probes == await _probes(query)
+
+
+@pytest.mark.usefixtures("registered_segmenter")
+def test_an_unknown_tokenizer_name_is_refused_with_the_registered_names() -> None:
+    with pytest.raises(OperationError) as raised:
+        signal_backends.create(
+            "scan", {"entities": MappingEntitySource(TOWER), "tokenizer": "segmentr"}
+        )
+    assert isinstance(raised.value.__cause__, ValidationError)
+    assert re.search(
+        r"unknown tokenizer 'segmentr'.*'default'.*'segmenter'", str(raised.value.__cause__)
+    )
+
+
+_SPECS = [
+    {},
+    {"max_window": 3},
+    {"tokenizer": "default"},
+    {"tokenizer": token_spans},
+    {"tokenizer": _same_tokens},
+    {"tokenizer": _same_tokens, "max_window": 3},
+    {"normalizer": str.casefold},
+    {"normalizer": str.casefold, "max_window": 3},
+]
+
+
+def _spec_id(spec: Mapping[str, Any]) -> str:
+    """A spec's test id, the same in every process.
+
+    ``repr`` of a function carries its address, which differs between xdist
+    workers, and workers that collect different ids abort the run.
+    """
+    parts = [f"{key}={getattr(value, '__name__', None) or value!r}" for key, value in spec.items()]
+    return ",".join(parts) or "empty"
+
+
+@pytest.mark.parametrize("spec", _SPECS, ids=_spec_id)
+@pytest.mark.parametrize("source_fold", [None, _squash], ids=["counted", "uncountable"])
+async def test_window_bounded_answers_what_the_built_rung_does(
+    spec: dict[str, Any], source_fold: Callable[[str], str] | None
+) -> None:
+    """The classmethod's answer, checked against the probes a rung built from the spec spends.
+
+    A door asks ``window_bounded`` before anything is built; the rung decides
+    its bound when it runs. Bounded means fewer probes than every window, so
+    the two are compared by counting rather than by reading either one's
+    code.
+    """
+    query = " ".join(["word"] * 34 + SENTENCE.split())
+    tokens = len(token_spans(query))
+    sync_source = CountingEntitySource(RETRIEVERS, normalizer=source_fold)
+    async_source = AsyncCountingEntitySource(RETRIEVERS, normalizer=source_fold)
+    count = sync_source.longest_form_tokens()
+    assert (count is None) == (source_fold is not None)
+
+    signal_backends.create("scan", {"entities": sync_source, **spec}).candidates(query, k=5)
+    await async_signal_backends.create("scan", {"entities": async_source, **spec}).candidates(
+        query, k=5
+    )
+    assert sync_source.probes == async_source.probes
+    probed_every_window = sync_source.probes == tokens * (tokens + 1) // 2
+
+    answer = ScanningSignal.window_bounded(spec, count)
+    assert AsyncScanningSignal.window_bounded(spec, count) is answer
+    assert signal_backends.get_metadata("scan")["window_bounded"](spec, count) is answer
+    assert answer is not probed_every_window
+
+
+_NOT_A_COUNT = [
+    (ScanningSignal, "max_window", "4"),
+    (ScanningSignal, "max_window", 2.5),
+    (ScanningSignal, "max_window", True),
+    (ScanningSignal, "max_edge", "1"),
+    (ScanningSignal, "max_edge", 0.5),
+    (ScanningSignal, "max_edge", False),
+    (AsyncScanningSignal, "max_window", "4"),
+    (AsyncScanningSignal, "max_edge", 0.5),
+    (LexicalSignal, "max_query_tokens", "8"),
+    (LexicalSignal, "max_query_tokens", 2.5),
+    (LexicalSignal, "threshold", "0.9"),
+    (LexicalSignal, "threshold", True),
+    (AsyncLexicalSignal, "max_query_tokens", True),
+    (AsyncLexicalSignal, "threshold", "0.9"),
+]
+
+
+@pytest.mark.parametrize(
+    ("rung", "key", "value"),
+    _NOT_A_COUNT,
+    ids=[f"{rung.__name__}-{key}-{value!r}" for rung, key, value in _NOT_A_COUNT],
+)
+def test_a_number_of_the_wrong_kind_is_refused_by_name(rung: type, key: str, value: Any) -> None:
+    """A document's ``"4"`` or ``2.5`` is refused where it is read, naming the key.
+
+    These values come from configuration, so they are external input. Before,
+    a string failed later with a bare ``TypeError`` from a comparison, and a
+    float passed and failed on the first query, inside ``range``. A bool is an
+    ``int`` to Python and is refused anyway: ``max_window: true`` is a typo,
+    not one token.
+    """
+    asynchronous = rung in (AsyncScanningSignal, AsyncLexicalSignal)
+    source = AsyncMappingEntitySource(TOWER) if asynchronous else MappingEntitySource(TOWER)
+    with pytest.raises(ValidationError, match=key):
+        rung(source, **{key: value})
+
+
+def test_window_bounded_refuses_a_cap_of_the_wrong_kind() -> None:
+    """The door asks before anything is built, so it is where a bad value surfaces first."""
+    with pytest.raises(ValidationError, match="max_window"):
+        ScanningSignal.window_bounded({"max_window": "4"}, 4)
+    with pytest.raises(ValidationError, match="max_window"):
+        AsyncScanningSignal.window_bounded({"max_window": 2.5}, 4)
+
+
+def test_only_a_class_that_answers_for_itself_publishes_window_bounded() -> None:
+    """The answer is not inherited; the fact that the cost depends on a count is.
+
+    ``window_bounded`` reads a spec the way the shipped factory does. A
+    subclass's factory may read it some other way -- a tokenizer fixed in code
+    and absent from the spec -- so an inherited answer could accept a scan that
+    enumerates every window. A subclass that wants to be asked defines the
+    classmethod itself; one that does not is read as a rung with no answer.
+    """
+
+    class FixedTokens(ScanningSignal):
+        """Registered by a factory that passes a tokenizer the spec never names."""
+
+    class Answers(ScanningSignal):
+        @classmethod
+        def window_bounded(cls, spec: Mapping[str, Any], longest_form_tokens: int | None) -> bool:
+            return spec.get("window") is not None
+
+    inherited = declared_signal_metadata(FixedTokens, {})
+    assert "window_bounded" not in inherited
+    assert inherited["bounded_by_longest_form"] is True
+
+    assert declared_signal_metadata(Answers, {})["window_bounded"]({"window": 3}, None) is True
+    assert declared_signal_metadata(ScanningSignal, {})["window_bounded"]({}, 4) is True

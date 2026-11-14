@@ -50,6 +50,7 @@ from dataknobs_common.entity_resolution.signals import (
 from dataknobs_common.exceptions import OperationError, ValidationError
 from dataknobs_common.ontology import AsyncMappingEntitySource, Entity, MappingEntitySource
 from dataknobs_common.testing import assert_twin_types_agree, assert_twins_agree
+from dataknobs_common.text import token_spans
 
 #: The query the criterion is written around: two typos, one of which sits
 #: inside the other's form. Neither word is in the vocabulary.
@@ -276,7 +277,7 @@ def test_the_probe_stops_widening_rather_than_filtering():
     still have built every one of the *n(n+1)/2* spans before discarding them.
     """
     query = "alpha beta gamma delta"
-    assert [span for span, _window in _scored_probe_spans(query, 10, str)] == [
+    assert [span for span, _window in _scored_probe_spans(query, 10, str, token_spans(query))] == [
         (0, 5),
         (0, 10),
         (6, 10),
@@ -702,7 +703,7 @@ def test_a_probe_span_is_admitted_on_what_the_fold_leaves():
     def deletes_spaces(form: str) -> str:
         return form.replace(" ", "")
 
-    folded = list(_scored_probe_spans("a b c d", 3, deletes_spaces))
+    folded = list(_scored_probe_spans("a b c d", 3, deletes_spaces, token_spans("a b c d")))
 
     assert folded == [
         ((0, 1), "a"),
@@ -715,7 +716,7 @@ def test_a_probe_span_is_admitted_on_what_the_fold_leaves():
         ((4, 7), "cd"),
         ((6, 7), "d"),
     ]
-    raw = [span for span, _window in _scored_probe_spans("a b c d", 3, str)]
+    raw = [span for span, _window in _scored_probe_spans("a b c d", 3, str, token_spans("a b c d"))]
     assert (0, 5) not in raw and (0, 5) in [span for span, _ in folded], (
         "the widest window from the first token is five raw characters and "
         "three folded ones, so which unit the probe counts in decides whether "

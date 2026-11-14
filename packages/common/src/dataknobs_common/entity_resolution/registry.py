@@ -41,6 +41,7 @@ from dataknobs_common.entity_resolution.signals import (
     ScanningSignal,
 )
 from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.text.tokenizers import tokenizer_from_config
 
 __all__ = ["async_signal_backends", "declared_signal_metadata", "signal_backends"]
 
@@ -80,6 +81,7 @@ def _make_scan(config: dict[str, Any]) -> MatchSignal:
         normalizer=config.get("normalizer"),
         max_window=config.get("max_window"),
         max_edge=config.get("max_edge"),
+        tokenizer=tokenizer_from_config(config.get("tokenizer")),
     )
 
 
@@ -98,12 +100,18 @@ def _make_lexical(config: dict[str, Any]) -> MatchSignal:
     # the scan. Resolving a dotted path into the function it names would let
     # a document reach any importable callable, which is a wider decision
     # than this one.
+    #
+    # ``tokenizer`` **is** resolved, on this rung and on the scan, because a
+    # name in :data:`~dataknobs_common.text.TOKENIZERS` reaches only what
+    # was registered there -- the registry is the convention the paragraph
+    # above defers to, and it is narrow by construction.
     return LexicalSignal(
         config["entities"],
         threshold=config.get("threshold", 0.85),
         scorer=config.get("scorer"),
         normalizer=config.get("normalizer"),
         max_query_tokens=config.get("max_query_tokens"),
+        tokenizer=tokenizer_from_config(config.get("tokenizer")),
     )
 
 
@@ -121,6 +129,7 @@ def _make_async_scan(config: dict[str, Any]) -> AsyncMatchSignal:
         normalizer=config.get("normalizer"),
         max_window=config.get("max_window"),
         max_edge=config.get("max_edge"),
+        tokenizer=tokenizer_from_config(config.get("tokenizer")),
     )
 
 
@@ -131,6 +140,7 @@ def _make_async_lexical(config: dict[str, Any]) -> AsyncMatchSignal:
         scorer=config.get("scorer"),
         normalizer=config.get("normalizer"),
         max_query_tokens=config.get("max_query_tokens"),
+        tokenizer=tokenizer_from_config(config.get("tokenizer")),
     )
 
 
@@ -177,6 +187,29 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
     subclasses, a bare-protocol rung sets it itself, and a rung that declares
     nothing gets the reading that refuses nothing.
 
+    **One entry is a question rather than a fact.** ``window_bounded`` is
+    the rung's own classmethod, ``(spec, longest_form_tokens) -> bool``,
+    published here when the class defines one -- see
+    :meth:`~dataknobs_common.entity_resolution.ScanningSignal.window_bounded`.
+    ``bounded_by_longest_form`` says the rung's cost *can* depend on the
+    source's count; whether a particular configuration of it does depends on
+    that configuration (a ``max_window`` caps it, a tokenizer stops it
+    trusting the count), and the class is the only place that rule can live
+    without a door restating it. A rung that defines no such classmethod
+    gets no entry, so its metadata is what it was, and a door reading the
+    key falls back to *bounded exactly when the source declares a count*.
+
+    **Unlike the two facts, it is not inherited.** The answer reads a spec
+    the way the class's own factory does, and a subclass is usually
+    registered with a factory of its own -- one that fixes a tokenizer in
+    code, say, which no spec names -- so an inherited answer could accept a
+    scan that enumerates every window. Only a class whose own body defines
+    ``window_bounded`` publishes it; a subclass that reads its spec as its
+    parent's factory does says so by defining it and delegating to
+    ``super()``.
+    Signal metadata is read through ``get_metadata`` and never serialised,
+    so a callable here travels nowhere.
+
     Args:
         rung: The class whose declarations are read. Not the factory -- a
             factory may be a plain callable, which declares nothing
@@ -185,13 +218,18 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
             so one base can serve both flavours
 
     Returns:
-        A new dict: ``base``, plus each fact read off ``rung``.
+        A new dict: ``base``, plus each fact read off ``rung``, plus
+        ``window_bounded`` where ``rung``'s own body defines it.
     """
-    return dict(
+    metadata = dict(
         base,
         reads_surface_forms=getattr(rung, "reads_surface_forms", False),
         bounded_by_longest_form=getattr(rung, "bounded_by_longest_form", False),
     )
+    window_bounded = getattr(rung, "window_bounded", None)
+    if "window_bounded" in vars(rung) and callable(window_bounded):
+        metadata["window_bounded"] = window_bounded
+    return metadata
 
 
 signal_backends.register(

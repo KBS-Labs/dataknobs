@@ -2842,7 +2842,7 @@ def _declared_schema(spec: Mapping[str, Any], *, binding: str) -> DatabaseSchema
 def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
     config: OntologyConfig, projection: EntityProjection, *, binding: str
 ) -> None:
-    """Refuse a **declared** scanning rung over a binding declaring no bound.
+    """Refuse a **declared** scanning rung that nothing bounds over a live binding.
 
     :func:`_refuse_a_form_reading_rung_with_no_lookup`'s shape for the second
     number a live binding cannot supply, and refused for the same reason: it
@@ -2867,6 +2867,25 @@ def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
     it, so a rung added to ``dataknobs-common`` and a consumer's own are both
     covered without an edit here.
 
+    **And whether this one is bounded is asked too.** The count is not the
+    only bound: a spec setting ``max_window`` caps every probe whatever the
+    source can say, and a spec naming a ``tokenizer`` or ``normalizer`` other
+    than the default does not trust the count, because the source measured
+    its forms in default tokens under its own fold. Which keys mean that is
+    the rung's knowledge, so the registry publishes the rung's own answer as
+    ``window_bounded`` in its metadata and this reads it per declared spec.
+    A rung kind that publishes none gets the reading this door had before it
+    could ask: bounded exactly when the binding declares
+    ``longest_form_tokens``.
+
+    **The remedy is asked as well.** Over a binding with no count, whether
+    declaring one would help depends on the rung: a scan with its own
+    tokenizer would not trust it, and telling its author to declare one sends
+    them to a second refusal. So each unbounded spec is asked again, as if
+    the binding declared a count, and ``longest_form_tokens`` is offered only
+    when every one of them would then be bounded; otherwise ``max_window`` is
+    the only remedy named.
+
     **Declared rungs only**, which is the sibling's scope and for its reason:
     a document with no ``resolver:`` section gets the default composition,
     whose scan nothing in the document names. That case belongs where the rung
@@ -2879,22 +2898,44 @@ def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
     refuse the case a document *does* state.
     """
     lookup = projection.surface_forms
-    if lookup is None or lookup.longest_form_tokens is not None:
+    if lookup is None:
         return
-    declared = _declared_rung_kinds(config)
-    scanning = sorted(
-        kind
-        for kind in declared
-        if async_signal_backends.get_metadata(kind).get("bounded_by_longest_form")
-    )
-    if not scanning:
+    longest = lookup.longest_form_tokens
+    unbounded: set[str] = set()
+    a_count_would_bound = True
+    for spec in _declared_rungs(config):
+        kind = str(spec.get("kind", ""))
+        metadata = async_signal_backends.get_metadata(kind)
+        if not metadata.get("bounded_by_longest_form"):
+            continue
+        ask = metadata.get("window_bounded")
+        bounded = ask(spec, longest) if callable(ask) else longest is not None
+        if not bounded:
+            unbounded.add(kind)
+            # Would a declared count bound it? Any positive count asks that.
+            if callable(ask) and not ask(spec, 1):
+                a_count_would_bound = False
+    if not unbounded:
         return
+    scanning = sorted(unbounded)
+    if longest is None and a_count_would_bound:
+        remedy = (
+            "A live table cannot be counted, so the binding must declare "
+            "`surface_forms.longest_form_tokens:`, or the rung must cap its own "
+            "window with `max_window:`"
+        )
+    else:
+        remedy = (
+            "A count in `surface_forms.longest_form_tokens:` is in default "
+            "tokens under the source's fold, and this rung does not trust one "
+            "-- a `tokenizer:` or `normalizer:` of its own is what stops the "
+            "shipped scan trusting it -- so cap its window with `max_window:`"
+        )
     raise ValidationError(
         f"binding {binding!r} is read by {scanning}, which probes every window "
-        f"of a query and bounds that enumeration by the vocabulary's longest "
-        f"declared form. A live table cannot be counted, so the binding must "
-        f"declare `surface_forms.longest_form_tokens:` -- without it the scan "
-        f"spends n(n+1)/2 reads per query, each one a round trip",
+        f"of a query unless something bounds that enumeration. {remedy} -- "
+        f"without a bound the scan spends n(n+1)/2 reads per query, each one a "
+        f"round trip",
         context={
             "source_id": binding,
             "rungs": scanning,
@@ -3061,6 +3102,14 @@ def _refuse_undeclared_keys(
 def _declared_rung_kinds(config: OntologyConfig) -> tuple[str, ...]:
     """The rung kinds this document **writes**, in the order it writes them.
 
+    A projection of :func:`_declared_rungs`, so the section has one reader.
+    """
+    return tuple(str(rung.get("kind", "")) for rung in _declared_rungs(config))
+
+
+def _declared_rungs(config: OntologyConfig) -> tuple[Mapping[str, Any], ...]:
+    """The rung specs this document **writes**, in the order it writes them.
+
     ``None`` and ``{}`` are different answers upstream -- silence gets the
     default composition, an empty section is a composition somebody chose --
     and both are *written* rungs of nothing, so both answer ``()`` here. The
@@ -3080,7 +3129,7 @@ def _declared_rung_kinds(config: OntologyConfig) -> tuple[str, ...]:
     rungs = section.get("rungs")
     if not isinstance(rungs, list | tuple):
         return ()
-    return tuple(str(rung.get("kind", "")) for rung in rungs if isinstance(rung, Mapping))
+    return tuple(rung for rung in rungs if isinstance(rung, Mapping))
 
 
 __all__ = ["OntologyRegistry"]

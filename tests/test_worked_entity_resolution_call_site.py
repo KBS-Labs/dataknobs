@@ -482,3 +482,27 @@ def test_the_bridge_answers_what_an_await_would(bridged: dict[str, Any]) -> None
     assert [evidence.signal for evidence in direct.explain("beagle")] == [
         evidence.signal for evidence in result.explain("beagle")
     ]
+
+
+TOKENS_MARKER = "worked-tokens"
+
+
+def test_the_published_tokenizer_example_runs_as_printed() -> None:
+    """The *Your own tokens* fence runs, and its assertions are the page's claims.
+
+    The block asserts what it says -- the default scan misses ``$``, a scan
+    over the published tokenizer finds it at ``(6, 7)`` -- so running it is
+    the check. It registers ``symbols`` in the process-wide tokenizer registry
+    as its last line, which a reader's session keeps and this suite must not,
+    so the name is removed afterwards whatever the block did.
+    """
+    from dataknobs_common.text import TOKENIZERS
+
+    body = published_fence(GUIDE, TOKENS_MARKER)
+    assert not TOKENIZERS.is_registered("symbols")
+    try:
+        exec(compile(body, f"{GUIDE.relative_to(ROOT)}:{TOKENS_MARKER}", "exec"), {})
+        assert TOKENIZERS.is_registered("symbols")
+    finally:
+        if TOKENIZERS.is_registered("symbols"):
+            TOKENIZERS.unregister("symbols")

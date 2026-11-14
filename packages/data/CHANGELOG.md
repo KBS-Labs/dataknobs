@@ -1575,14 +1575,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       entity: sku
   ```
 
-  A `scan` rung additionally needs `surface_forms.longest_form_tokens:`, and a
-  document declaring one over a binding without it is rejected at load. A
-  scanning rung probes every window of a query and bounds that enumeration by
-  the vocabulary's longest declared form; an authored index counts its own
-  keys, and a live table cannot be counted --- a count taken at load is stale
-  as soon as a row is written. Unbounded the scan spends *n(n+1)/2* reads per
-  query, each one a round trip. No default is invented, because a bound
-  shorter than a real form makes that form silently unfindable.
+  A `scan` rung must be bounded, and a document declaring one that nothing
+  bounds is rejected at load. A scanning rung probes every window of a query;
+  over a live table each probe is a round trip, and unbounded the scan spends
+  *n(n+1)/2* of them per query. Either bound will do: the rung's own
+  `max_window:`, or the binding's `surface_forms.longest_form_tokens:` for a
+  rung over the default tokens. An authored index counts its own keys, and a
+  live table cannot be counted --- a count taken at load is stale as soon as a
+  row is written --- so no default is invented, because a bound shorter than
+  a real form makes that form silently unfindable. A rung naming its own
+  `tokenizer:` or `normalizer:` does not trust that count, which is in default
+  tokens under the source's fold, and needs `max_window:`. Whether a declared
+  rung is bounded is the rung's answer, read from the signal registry's
+  `window_bounded` metadata, so a consumer's rung kind is covered too; one
+  that publishes no answer is bounded exactly when the binding declares
+  `longest_form_tokens:`. The refusal names only the remedy that would bound
+  the rung: a scan that would not trust a count is not told to declare one.
 
   `surface_forms.form_edge:` is the second number a scan reads, and is
   optional: how many punctuation characters the widest edge of any form in the
@@ -1592,7 +1600,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window over the whole run of punctuation beside it: the same answers, at a
   cost growing with the square of that run, each probe a round trip. Its
   absence is not refused, because it costs reads rather than answers, and the
-  scan rung's `max_edge` caps it; a negative value or a non-integer is.
+  scan rung's `max_edge` caps it; a negative value or a non-integer is. A rung
+  naming its own `tokenizer:` or `normalizer:` does not read `form_edge`, for
+  the reason it does not trust the count, so over a live binding it widens
+  over the whole run unless it sets `max_edge` --- `0` for a tokenizer whose
+  tokens already carry the punctuation.
 
   The fold a surface-form lookup compares by is `str.casefold`, and no engine
   performs it at query time --- so the fold happens before the row is written

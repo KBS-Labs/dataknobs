@@ -297,15 +297,26 @@ surface_forms:
 Without it, the scan enumerates every window: *n(n+1)/2* probes for *n* tokens,
 and on a live binding each probe is a database round trip — 1,275 reads for a
 fifty-token utterance, 20,100 for a two-hundred-token paste. So a document
-declaring a `scan` rung over a binding that declares no bound is **rejected at
-load**, naming the key.
+declaring a `scan` rung that nothing bounds is **rejected at load**, naming
+the key that would.
+
+Two things bound it. The binding's `longest_form_tokens`, as above, or the
+rung's own `max_window`, which caps every window whatever the table can say —
+a rung written `{kind: scan, max_window: 4}` loads over a binding declaring
+no count. The count only bounds a rung that probes the way the table measured:
+a rung naming its own `tokenizer:` or `normalizer:` puts windows where the
+count was never taken, so it needs `max_window` even over a binding that
+declares `longest_form_tokens`.
 
 The number is not invented for you. A default would make a form longer than it
 silently unfindable, which trades a cost problem for a correctness one; over an
 in-memory vocabulary the same enumeration is a dictionary lookup per probe and
 is left alone, which is why the refusal is here rather than on the rung. Which
 kinds are bounded this way is read from what each kind declares about itself, as
-with the lookup rule above.
+with the lookup rule above — and whether a particular rung spec is bounded is
+asked of the rung too, through the `window_bounded` answer the signal registry
+publishes for it. A consumer's rung kind that publishes none is treated as
+bounded exactly when the binding declares `longest_form_tokens`.
 
 `form_edge` is the second number, and is optional. A window starts and ends on
 a token, so a form whose first or last character is punctuation — `(beagle)`,
@@ -317,6 +328,13 @@ rather than answers — but it costs them quadratically: the scan then widens a
 window over the whole run of punctuation beside it, every pair of prefixes a
 round trip, so one word between two 300-character `=====` rules is 90,600
 reads. Declare it, or set `max_edge` on the `scan` rung.
+
+A rung naming its own `tokenizer:` or `normalizer:` does not read `form_edge`
+either, for the reason it does not trust `longest_form_tokens`: the edge was
+measured beside default tokens under the table's fold. Over a live binding it
+therefore widens over the whole run unless it sets `max_edge` — `max_edge: 0`
+for a tokenizer whose tokens already carry the punctuation. Unlike the window,
+this is not refused at load, because it costs reads rather than answers.
 
 A source with no declared lookup **refuses** the call rather than answering over
 the unfolded column:
