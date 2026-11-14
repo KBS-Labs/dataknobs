@@ -31,6 +31,7 @@ from dataknobs_common.capabilities import (
     DynamicCapabilityMixin,
 )
 from dataknobs_common.async_iter import aclosing_iter
+from dataknobs_common.copying import FrozenMapping
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.ontology import Entity, SourceDescription, SourceRef
 from dataknobs_common.text import default_normalizer
@@ -1025,33 +1026,37 @@ class RecordEntitySource(DynamicCapabilityMixin):
             name="" if name is None else str(name),
             aliases=self._aliases(record),
             description=None if description is None else str(description),
-            metadata={
-                column: record.get_value(column)
-                for column in projection.metadata_columns
-                if record.get_value(column) is not None
-            },
+            metadata=FrozenMapping(
+                {
+                    column: record.get_value(column)
+                    for column in projection.metadata_columns
+                    if record.get_value(column) is not None
+                }
+            ),
             source=SourceRef(
                 source_id=self._source_id,
                 kind=RECORD_SOURCE_KIND,
-                locator={"table": projection.table, projection.id: local_id},
+                locator=FrozenMapping({"table": projection.table, projection.id: local_id}),
             ),
         )
 
-    def _aliases(self, record: Record) -> list[str]:
+    def _aliases(self, record: Record) -> tuple[str, ...]:
         """The alias forms this row carries, split where the projection says to."""
         projection = self._projection
         if not projection.aliases:
-            return []
+            return ()
         raw = record.get_value(projection.aliases)
         if raw is None:
-            return []
+            return ()
         if isinstance(raw, str):
             if projection.alias_split:
-                return [part.strip() for part in raw.split(projection.alias_split) if part.strip()]
-            return [raw] if raw.strip() else []
+                return tuple(
+                    part.strip() for part in raw.split(projection.alias_split) if part.strip()
+                )
+            return (raw,) if raw.strip() else ()
         if isinstance(raw, Iterable):
-            return [str(item) for item in raw if str(item).strip()]
-        return [str(raw)]
+            return tuple(str(item) for item in raw if str(item).strip())
+        return (str(raw),)
 
 
 __all__ = [

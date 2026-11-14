@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -48,8 +49,19 @@ _DIGEST = re.compile(r"[0-9a-f]{64}")
 def _entities() -> dict[str, Entity]:
     return {
         "e-1": Entity(id="e-1", type="product", name="PowerPoint"),
-        "e-2": Entity(id="e-2", type="product", name="Beagle", aliases=["Hound"]),
+        "e-2": Entity(id="e-2", type="product", name="Beagle", aliases=("Hound",)),
     }
+
+
+def _with_metadata(entity_id: str, **metadata: Any) -> dict[str, Entity]:
+    """:func:`_entities`, with one entity's metadata set.
+
+    Derived with ``replace``: an entity is frozen, so this is the only way to
+    give one metadata after it was built.
+    """
+    entities = _entities()
+    entities[entity_id] = replace(entities[entity_id], metadata=metadata)
+    return entities
 
 
 def _document(**extra: Any) -> dict[str, Any]:
@@ -172,18 +184,22 @@ def test_the_digest_is_the_entities_fingerprint() -> None:
 def test_the_digest_is_taken_at_construction_not_at_the_first_ask() -> None:
     """The digest describes the state the lookup maps were built from.
 
-    An entity ``get()`` hands out can still be changed after construction, and
-    the lookups do not see it. A digest computed later -- on first ask, or on
-    every ask -- would describe a state no lookup answers from. So the entity
-    is changed **before** ``revision()`` is first called, and the answer is
-    compared with a source built from an unchanged copy: only a digest taken
-    at construction equals it. Whether the change should be possible at all is
-    a separate question about the model.
+    An entity is frozen, so the one thing a caller still holds is the mapping
+    it built the source from. That mapping is changed **before** ``revision()``
+    is first called, and the answer is compared with a source built from an
+    unchanged copy: a digest taken at construction equals it, and so does one
+    taken later, because the source copied the mapping. Both halves are
+    pinned -- the entity refusing the change, and the mapping not reaching the
+    source -- since either one failing would let the digest describe a state
+    no lookup answers from.
     """
-    source = MappingEntitySource(_entities())
+    entities = _entities()
+    source = MappingEntitySource(entities)
     entity = source.get("e-1")
     assert entity is not None
-    entity.aliases.append("Slides")
+    with pytest.raises(AttributeError):
+        entity.aliases.append("Slides")  # type: ignore[attr-defined]
+    entities["e-3"] = Entity(id="e-3", type="product", name="Slides")
     assert source.revision() == MappingEntitySource(_entities()).revision()
     assert source.by_surface_form("Slides") == frozenset()
 
@@ -231,17 +247,14 @@ def test_the_capability_is_declared(source_cls: type[Any]) -> None:
 
 @pytest.mark.parametrize("source_cls", [MappingEntitySource, AsyncMappingEntitySource])
 def test_a_value_nothing_identifies_fails_the_construction(source_cls: type[Any]) -> None:
-    entities = _entities()
-    entities["e-1"].metadata["hook"] = lambda form: form
+    entities = _with_metadata("e-1", hook=lambda form: form)
     with pytest.raises(TypeError, match=r"entities\['e-1'\]\.metadata\['hook'\]"):
         source_cls(entities)
 
 
 def test_nan_hashes_and_is_not_infinity() -> None:
     def with_rating(rating: float) -> dict[str, Entity]:
-        entities = _entities()
-        entities["e-2"].metadata["rating"] = rating
-        return entities
+        return _with_metadata("e-2", rating=rating)
 
     nan_one = MappingEntitySource(with_rating(math.nan)).revision()
     nan_two = MappingEntitySource(with_rating(float("nan"))).revision()
@@ -273,9 +286,7 @@ def test_a_config_nested_in_a_value_takes_the_values_nan_mode() -> None:
     from dataknobs_common.retry import RetryConfig
 
     def holding(config: RetryConfig) -> dict[str, Entity]:
-        entities = _entities()
-        entities["e-1"].metadata["retry"] = config
-        return entities
+        return _with_metadata("e-1", retry=config)
 
     one = MappingEntitySource(holding(RetryConfig(backoff_multiplier=math.nan))).revision()
     two = MappingEntitySource(holding(RetryConfig(backoff_multiplier=math.nan))).revision()

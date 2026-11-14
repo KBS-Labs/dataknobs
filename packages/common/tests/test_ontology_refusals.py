@@ -802,7 +802,7 @@ def test_a_description_is_a_string_and_null_is_silence(
 @LOADERS
 @pytest.mark.parametrize("values", [["a", "b"], ("a", "b")], ids=["list", "tuple"])
 def test_enum_values_read_as_a_list_of_strings(loaded: Loaded, values: Any) -> None:
-    assert _the_attribute(loaded, enum_values=values).enum_values == ["a", "b"]
+    assert _the_attribute(loaded, enum_values=values).enum_values == ("a", "b")
 
 
 @LOADERS
@@ -1035,7 +1035,7 @@ def test_null_attributes_read_as_none(loaded: Loaded) -> None:
     shape a YAML key with no value takes.
     """
     document = {"id": "x", "entity_types": [{"id": "Species", "attributes": None}]}
-    assert loaded(document).entity_types["Species"].attributes == []
+    assert loaded(document).entity_types["Species"].attributes == ()
 
 
 @DOORS

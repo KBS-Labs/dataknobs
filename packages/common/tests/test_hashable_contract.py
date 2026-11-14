@@ -133,10 +133,12 @@ def test_the_open_set_is_exactly_what_was_measured(
 
     assert raising - OPEN == set(), (
         f"new type(s) claim Hashable and raise at the call: {sorted(raising - OPEN)}. "
-        "Each needs one of the two honest answers: identity (frozen=True, "
-        "eq=False) for a built value nobody compares field-wise, or unfrozen "
+        "Each needs one of the honest answers: identity (frozen=True, "
+        "eq=False) for a built value nobody compares field-wise, unfrozen "
         "equality (eq=True, frozen=False) for a record two of which really can "
-        "be equal."
+        "be equal, or __hash__ = None in the class's own body for a frozen "
+        "record compared field-wise -- a frozen subclass included, since its "
+        "decorator generates a hash the base's None does not stop."
     )
     assert OPEN - raising == set(), (
         f"type(s) recorded as raising now hash; remove them from OPEN: {sorted(OPEN - raising)}"

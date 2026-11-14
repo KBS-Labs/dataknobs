@@ -2,7 +2,9 @@
 
 `copy_structure` sits between `dict(value)` and `copy.deepcopy(value)`:
 it rebuilds nested dicts and lists, and passes every other value through
-unchanged.
+unchanged. `freeze_structure` rebuilds containers immutable instead, and
+`thaw_structure` turns a frozen value back into plain ones — see
+[Freezing a structure](#freezing-a-structure).
 
 ```python
 from dataknobs_common import copy_structure
@@ -118,3 +120,95 @@ Without that reference a source freed between two calls sharing one memo
 can have its id reused by the next, and the memo then answers for an
 unrelated object. Two successive calls passing a temporary dict literal
 are enough to reproduce it.
+
+## Freezing a structure
+
+`freeze_structure` rebuilds containers immutable rather than mutable. Use it
+for a value something has *indexed*: a lookup built once over a structure is
+wrong the moment that structure changes, and a frozen one cannot.
+
+It reaches further than `copy_structure`, which rebuilds dicts and lists only:
+
+| Handed | Returned |
+|---|---|
+| a mapping | a `FrozenMapping` of frozen values |
+| a `list` or `tuple` | a `tuple` of frozen values |
+| a `set` | a `frozenset` |
+| anything else | the same object |
+
+Subclasses count — a named tuple that needed rebuilding, or a `list` subclass,
+comes back a plain `tuple` — and a container of another kind, such as a
+`deque` or a `bytearray`, is a leaf.
+
+```python
+from dataknobs_common import FrozenMapping, freeze_structure
+
+frozen = freeze_structure({"schema": {"required": ["name"]}, "tags": {"a"}})
+assert isinstance(frozen, FrozenMapping)
+assert frozen["schema"]["required"] == ("name",)
+assert frozen["tags"] == frozenset({"a"})
+```
+
+Leaves pass through for the same reason they do in `copy_structure`: a live
+object duplicated silently gives its owner a second one. So this freezes the
+*structure*, not every object reachable from it.
+
+An already-frozen value — a `FrozenMapping`, a `frozenset`, a tuple of frozen
+items — comes back as itself, so freezing twice copies nothing. A subtree
+shared between two places is frozen once and the copy shared the same way, so
+a structure built from YAML anchors is not expanded once per path.
+
+**A cycle is refused**, where `copy_structure` reproduces one. A mutable copy
+can be made to hold itself; a tuple or a `FrozenMapping` cannot, since each is
+complete before anything can hold it. The `ValueError` names where:
+
+```python
+import pytest
+
+loop = {"name": "loop"}
+loop["self"] = loop
+assert copy_structure(loop)["self"] is not loop        # reproduced
+with pytest.raises(ValueError, match=r"value\['self'\] holds itself"):
+    freeze_structure(loop)                             # refused
+```
+
+### `FrozenMapping`
+
+The read-only mapping `freeze_structure` builds, and a type you can construct
+directly from any mapping or list of pairs; construction freezes what it is
+handed. It refuses `m[k] = v`, `del m[k]` and `update`, and:
+
+- **equals any mapping with the same items**, a plain `dict` included. The
+  items are frozen, so a dict holding no list compares as it did, and one
+  holding `[1]` does not: the frozen side holds `(1,)`;
+- **is unhashable**, and says so to `isinstance(m, Hashable)`;
+- **pickles and deep-copies**, which `types.MappingProxyType` does not — a
+  proxy is also shallow, leaving the values under it writable. A subclass is
+  rebuilt from its items without calling its `__init__`, so state it keeps
+  beside them is not carried;
+- **is not JSON**: `json.dumps` takes a `dict` and nothing else that is a
+  mapping. Thaw it first.
+
+## Thawing a frozen structure
+
+`thaw_structure` is the inverse: every mapping becomes a `dict`, every list or
+tuple a `list`, every set or frozenset a `set`, and anything else passes
+through. The result is always new, so it is yours to change, and it is what
+`json.dumps` accepts.
+
+```python
+import json
+
+from dataknobs_common import freeze_structure, thaw_structure
+
+frozen = freeze_structure({"tags": ["hound"], "inner": {"k": 1}})
+assert thaw_structure(frozen) == {"tags": ["hound"], "inner": {"k": 1}}
+json.dumps(thaw_structure(frozen))                 # json.dumps(frozen) raises
+```
+
+A tuple comes back a list even if it was a tuple before it was frozen: once
+frozen, nothing records which tuples were lists, and a list is what
+serializes. `dict(frozen)` is not a substitute — it thaws the top level only,
+and the `FrozenMapping` nested inside still refuses `json.dumps`.
+
+It takes `copy_structure`'s optional `seen` memo, for the same reasons.

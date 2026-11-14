@@ -119,7 +119,12 @@ from dataknobs_common.config_loading import (
     load_yaml_or_json,
     parse_yaml_or_json,
 )
-from dataknobs_common.copying import copy_structure
+from dataknobs_common.copying import (
+    FrozenMapping,
+    copy_structure,
+    freeze_structure,
+    thaw_structure,
+)
 from dataknobs_common.discriminator import (
     AsyncCallableDiscriminator,
     AsyncChainedDiscriminator,
@@ -608,6 +613,9 @@ __all__ = [
     "FileLock",
     # Structural copying — between dict() and copy.deepcopy()
     "copy_structure",
+    "freeze_structure",
+    "thaw_structure",
+    "FrozenMapping",
     # Metadata helpers
     "enforce_immutable_keys",
     # Pack composition

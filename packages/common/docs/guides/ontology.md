@@ -286,15 +286,83 @@ The fields you read most are sources rather than containers:
 | `describes`, `imports` | what this vocabulary claims to describe, and what it pulls in |
 | `variants` | what a `variants:` section admitted and refused, or `None` with no section — see [Variants of a form](#variants-of-a-form) |
 
-The value types are ordinary frozen or field-wise dataclasses: `Entity`,
-`EntityRef`, `Assertion`, `AttributeDef`, `Term` (an `EntityRef` or a
-`Literal`). An `Assertion` carries a `Polarity` — `ASSERTED` or `NEGATED` — so
-a vocabulary can state that something is *not* the case, and a walk can honour
-it.
+The value types are frozen dataclasses: `Entity`, `EntityRef`, `Assertion`,
+`AttributeDef`, `Term` (an `EntityRef` or a `Literal`). An `Assertion` carries a
+`Polarity` — `ASSERTED` or `NEGATED` — so a vocabulary can state that something
+is *not* the case, and a walk can honour it.
 
 `Ontology` and `AsyncOntology` are frozen and compared by identity: they hold
 the sources a vocabulary was built over, and two loads of one document are two
 vocabularies rather than one repeated.
+
+### A loaded vocabulary does not change
+
+A source builds its lookups once, when it is constructed: every entity's id,
+name and aliases folded into one map, every type into another, every assertion
+indexed by subject and object. So what it hands out cannot change afterwards,
+or `get()` would show one thing while the lookups answered from another.
+
+- **The value types are frozen**: `Entity`, `EntityType`, `RelationType`,
+  `AttributeDef`, `Assertion`, `Literal`, `Provenance`, `SourceRef` and
+  `ResolutionRef`. Assigning a field raises `FrozenInstanceError`. They still
+  compare field-wise, and are still unhashable.
+- **Their collections are immutable.** `aliases`, `attributes` and
+  `enum_values` are tuples; `metadata`, `SourceRef.locator` and
+  `ResolutionRef.corpus` are a `FrozenMapping`, frozen all the way down. A list
+  or dict handed to a constructor is converted, so a YAML row or a test passing
+  one still works.
+- **A source copies the container it is handed.** An entity added to the dict
+  you built a `MappingEntitySource` from afterwards reaches none of its
+  members, `get()` included.
+
+Derive a changed entity with `dataclasses.replace`, which builds a new one:
+
+```python
+from dataclasses import replace
+
+from dataknobs_common.ontology import Entity
+
+beagle = Entity(id="beagle", type="Breed", aliases=["English Beagle"])
+assert beagle.aliases == ("English Beagle",)
+
+renamed = replace(beagle, aliases=(*beagle.aliases, "Snoopy"))
+assert beagle.aliases == ("English Beagle",)   # the original is unchanged
+```
+
+**A list under `metadata:` reads back as a tuple.** The freeze reaches every
+level, so compare against a tuple:
+
+```python
+entity = Entity(id="beagle", type="Breed", metadata={"tags": ["hound"]})
+assert entity.metadata["tags"] == ("hound",)
+assert entity.metadata["tags"] != ["hound"]    # a tuple never equals a list
+```
+
+Two entities built from the same document still compare equal, and two loads
+of one document still answer the same
+[revision](#which-state-of-a-vocabulary-answered), because both sides are frozen
+the same way.
+
+**Frozen is not JSON.** `json.dumps` takes a `dict` and a `list` and no other
+mapping or sequence, so `json.dumps(entity.metadata)` raises `TypeError`, as
+does dumping `dataclasses.asdict(entity)`, which keeps the mapping as it
+found it. `thaw_structure` gives back plain dicts, lists and sets, nested
+values included — `dict(entity.metadata)` thaws the top level only:
+
+```python
+import json
+
+from dataknobs_common import thaw_structure
+
+json.dumps(thaw_structure(entity.metadata))    # '{"tags": ["hound"]}'
+```
+
+**What frozen does not reach.** The containers are frozen; a leaf is held as
+given. A `bytearray` or an object of your own inside `metadata`, or a
+`Literal`'s `value`, can still change in place, and a revision digests what
+such a leaf held when the source was built. Keep leaves immutable — the
+ordinary case for anything read from YAML or JSON — or build a new entity
+when one changes.
 
 ## Variants of a form
 
@@ -429,7 +497,7 @@ split_qualified("mammals:beagle")           # QualifiedId(ontology_id=..., sourc
 vocabulary has without declaring them, and `DEFAULT_NESTED_RELATION` is the
 relation a nested declaration means when it names none. An entity type's own
 parent is `EntityType.isa` — a declared field, like `RelationType.inverse_of`,
-rather than a key in the open `metadata` dict.
+rather than a key in the open `metadata` mapping.
 
 A relation can be written as a bare string or as a `RelationType`;
 `relation_id` reduces either to the string, which is what every holder stores.
@@ -646,7 +714,7 @@ document = {
     "entity_types": [{"id": "product"}],
     "entities": [{"id": "p-1", "type": "product", "name": "PowerPoint"}],
 }
-recorded = load_ontology(document).entities.revision()   # '2.3@d6b7dba8…'
+recorded = load_ontology(document).entities.revision()   # '2.3@02984b31…'
 
 # Later: the same document, now admitting camelCase variants.
 current = load_ontology({**document, "variants": ["camelcase"]}).entities.revision()
