@@ -143,7 +143,17 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
             value of the wrong shape -- a ``required:`` that is not a boolean,
             a ``name:`` that is not a non-empty string, an ``enum_values:``
             that is not a non-empty list of strings, a ``field_type:`` naming
-            no record type; or on a
+            no record type; on a section that is not a list of mappings, or
+            ``imports:`` that is not a list of ids; on a row of any section
+            declaring a key that section is not read for -- the sets are
+            :data:`ENTITY_TYPE_ROW_KEYS` and its siblings -- or carrying a
+            value of the wrong shape: a label (``name``, ``description``,
+            ``unit``) that is not a string, ``aliases:`` that is not a list of
+            non-empty strings, a flag (``symmetric``, ``transitive``) that is
+            not a boolean, a ``metadata:``, ``source:`` or
+            ``materialization:`` that is not a mapping, a reference or id that
+            is not one id, a literal's ``type:`` naming no record type; on a
+            required field written as ``null``, which reads as missing; or on a
             reference into a section this document declares -- ``isa``, an
             attribute's ``entity_type``, a relation type's ``domain``,
             ``range`` or ``inverse_of``, an entity's ``type``, an assertion's
@@ -165,12 +175,23 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
     _refuse_reserved_id(config.id)
     _refuse_colon("ontology id", config.id)
 
-    source_specs = tuple(config.sources)
+    # Every section is a list of mappings before anything reads a row, and a
+    # key written `null` is dropped here -- so every reader below, the
+    # reference checks included, sees it as the key left out. `null` is
+    # silence in one place rather than in each `.get`.
+    imports = _import_ids(config.imports)
+    owns_its_sections = _owns_its_sections(imports)
+    entity_type_rows = _rows(config.entity_types, "entity_types")
+    relation_type_rows = _rows(config.relation_types, "relation_types")
+    entity_rows = _rows(config.entities, "entities")
+    assertion_rows = _rows(config.assertions, "assertions")
+    source_specs = _rows(config.sources, "sources")
+    taxonomy_rows = _rows(config.taxonomies, "taxonomies")
     _validate_source_ids(source_specs)
 
-    entity_types = _build_entity_types(config.entity_types)
-    relation_types = _build_relation_types(config.relation_types)
-    declared = _build_entities(config.entities)
+    entity_types = _build_entity_types(entity_type_rows)
+    relation_types = _build_relation_types(relation_type_rows)
+    declared = _build_entities(entity_rows)
 
     _refuse_duplicates(entity_types, relation_types, declared)
 
@@ -187,24 +208,24 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
     #
     # `imports:` switches all eight off, because it is the document saying
     # the premise they rest on does not hold -- see `_owns_its_sections`.
-    if _owns_its_sections(config):
-        _refuse_undeclared_isa(config.entity_types, entity_types)
-        _refuse_undeclared_attribute_types(config.entity_types, entity_types)
-        _refuse_undeclared_relation_endpoints(config.relation_types, entity_types, relation_types)
-        _refuse_undeclared_entity_types(config.entities, entity_types)
+    if owns_its_sections:
+        _refuse_undeclared_isa(entity_type_rows, entity_types)
+        _refuse_undeclared_attribute_types(entity_type_rows, entity_types)
+        _refuse_undeclared_relation_endpoints(relation_type_rows, entity_types, relation_types)
+        _refuse_undeclared_entity_types(entity_rows, entity_types)
 
     # After the required reads of both sections, as in `relation_types`: a row
     # has to be well formed before it is worth telling its author which of its
     # keys resolves. Run first, these two reported `assertion on subject
     # 'None'` for a row that had simply omitted `subject:`, and carried that
     # `'None'` into the context as the row's id.
-    assertions = list(_build_assertions(config.assertions))
-    taxonomies = _build_taxonomies(config.taxonomies)
+    assertions = list(_build_assertions(assertion_rows))
+    taxonomies = _build_taxonomies(taxonomy_rows)
 
-    if _owns_its_sections(config):
+    if owns_its_sections:
         relations = _declared_relations(entity_types, relation_types)
-        _refuse_undeclared_assertion_relations(config.assertions, relations)
-        _refuse_undeclared_taxonomy_relations(config.taxonomies, relations)
+        _refuse_undeclared_assertion_relations(assertion_rows, relations)
+        _refuse_undeclared_taxonomy_relations(taxonomy_rows, relations)
 
     # Declared wins wherever it exists. Minting into a file that already names
     # its entities would give one node two ids, and every authored assertion
@@ -226,11 +247,11 @@ def build_ontology(config: OntologyConfig) -> OntologyParts:
         entity_types=entity_types,
         relation_types=relation_types,
         taxonomies=taxonomies,
-        imports=tuple(config.imports),
+        imports=imports,
         declared_entities=declared,
         declared_assertions=tuple(assertions),
         source_specs=source_specs,
-        taxonomy_specs=tuple(config.taxonomies),
+        taxonomy_specs=taxonomy_rows,
         variant_rules=variant_rules,
     )
 
@@ -563,7 +584,14 @@ def _refuse_reserved_id(ontology_id: str) -> None:
 def _validate_source_ids(specs: tuple[Mapping[str, Any], ...]) -> None:
     seen: set[str] = set()
     for spec in specs:
-        source_id = str(spec.get("id", ""))
+        # The keys every door reads off a spec, checked once, first: each is
+        # read again downstream with `str(spec.get(...))`, here and in a
+        # registry, and that turned `kind: [nested]` into a kind nobody binds.
+        source_id = _row_ref(spec, "id", "sources") or ""
+        _row_str(spec, "kind", "sources")
+        if spec.get("kind") == "nested":
+            for key in ("type", "relation", "child_key", "name_key"):
+                _row_str(spec, key, "sources")
         _refuse_colon("source id", source_id)
         if source_id in seen:
             raise ValidationError(
@@ -607,7 +635,16 @@ def _refuse_duplicate_assertion_ids(assertions: list[Assertion]) -> None:
         seen.add(assertion.id)
 
 
-def _declared_enum(enum_type: type[_E], declared: Any, field: str, *, noun: str, plural: str) -> _E:
+def _declared_enum(
+    enum_type: type[_E],
+    declared: Any,
+    field: str,
+    *,
+    noun: str,
+    plural: str,
+    where: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> _E:
     """Coerce a member of ``enum_type`` out of authored text, naming a miss.
 
     :class:`ValidationError` does not descend from ``ValueError``, so letting
@@ -624,21 +661,50 @@ def _declared_enum(enum_type: type[_E], declared: Any, field: str, *, noun: str,
     try:
         return enum_type(str(declared))
     except ValueError as exc:
+        subject = f"{where} declares {field}" if where is not None else field
         raise ValidationError(
-            f"{field} is {str(declared)!r}, which is not {noun}. "
+            f"{subject} {str(declared)!r}, which is not {noun}. "
             f"{plural}: {sorted(str(member.value) for member in enum_type)}",
-            context={"field": field, "value": declared},
+            context={**(context or {}), "field": field, "value": declared},
         ) from exc
 
 
-def _inference_mode(declared: Any, field: str) -> InferenceMode:
-    """The declared inference mode, or a refusal naming what was written."""
-    return _declared_enum(InferenceMode, declared, field, noun="an inference mode", plural="Modes")
+def _row_enum(
+    enum_type: type[_E],
+    row: Mapping[str, Any],
+    key: str,
+    default: _E,
+    section: str,
+    *,
+    field: str | None = None,
+    handle: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> _E:
+    """An enum-valued field: ``default`` where absent or ``null``, else a member or a refusal.
+
+    ``row.get(key, default.value)`` handed back the ``None`` of a key written
+    ``null``, which was then refused as the mode ``'None'``. The refusal is
+    :func:`_declared_enum`'s, told which row it is about.
+    """
+    value = row.get(key)
+    if value is None:
+        return default
+    return _declared_enum(
+        enum_type,
+        value,
+        field or key,
+        noun=_ENUM_NOUNS[enum_type][0],
+        plural=_ENUM_NOUNS[enum_type][1],
+        where=_where(section, row, handle),
+        context=_refusal_context(section, row, handle, context),
+    )
 
 
-def _polarity(declared: Any, field: str) -> Polarity:
-    """The declared polarity, or a refusal naming what was written."""
-    return _declared_enum(Polarity, declared, field, noun="a polarity", plural="Polarities")
+#: What a refusal calls each authored enum, and its members.
+_ENUM_NOUNS: Mapping[type[Enum], tuple[str, str]] = {
+    InferenceMode: ("an inference mode", "Modes"),
+    Polarity: ("a polarity", "Polarities"),
+}
 
 
 def _refuse_duplicates(
@@ -667,7 +733,7 @@ def _refuse_duplicates(
             seen[declared_id] = section
 
 
-def _owns_its_sections(config: OntologyConfig) -> bool:
+def _owns_its_sections(imports: Sequence[str]) -> bool:
     """Whether this document declares the sections a reference points into.
 
     Every one of the eight reference checks reads *a reference into a section
@@ -690,7 +756,7 @@ def _owns_its_sections(config: OntologyConfig) -> bool:
     an importing document is not caught here; the component that holds both
     vocabularies is where that check can be right.
     """
-    return not config.imports
+    return not imports
 
 
 def _refuse_an_unresolved_reference(
@@ -746,7 +812,7 @@ def _refuse_an_unresolved_reference(
 
 
 def _refuse_undeclared_isa(
-    rows: list[Mapping[str, Any]], entity_types: Mapping[str, EntityType]
+    rows: Sequence[Mapping[str, Any]], entity_types: Mapping[str, EntityType]
 ) -> None:
     """A lattice edge has to name a type the same document declares.
 
@@ -771,7 +837,7 @@ def _refuse_undeclared_isa(
 
 
 def _refuse_undeclared_attribute_types(
-    rows: list[Mapping[str, Any]], entity_types: Mapping[str, EntityType]
+    rows: Sequence[Mapping[str, Any]], entity_types: Mapping[str, EntityType]
 ) -> None:
     """An ``entity:``-typed attribute names the type its values point at.
 
@@ -801,7 +867,7 @@ def _refuse_undeclared_attribute_types(
 
 
 def _refuse_undeclared_relation_endpoints(
-    rows: list[Mapping[str, Any]],
+    rows: Sequence[Mapping[str, Any]],
     entity_types: Mapping[str, EntityType],
     relation_types: Mapping[str, RelationType],
 ) -> None:
@@ -850,7 +916,7 @@ def _refuse_undeclared_relation_endpoints(
 
 
 def _refuse_undeclared_entity_types(
-    rows: list[Mapping[str, Any]], entity_types: Mapping[str, EntityType]
+    rows: Sequence[Mapping[str, Any]], entity_types: Mapping[str, EntityType]
 ) -> None:
     """An ``entities:`` row names the type it is an instance of.
 
@@ -920,7 +986,7 @@ def _declared_relations(
 
 
 def _refuse_undeclared_assertion_relations(
-    rows: list[Mapping[str, Any]], relations: Collection[str]
+    rows: Sequence[Mapping[str, Any]], relations: Collection[str]
 ) -> None:
     """An assertion's ``relation:`` names an edge this document declares.
 
@@ -949,7 +1015,7 @@ def _refuse_undeclared_assertion_relations(
 
 
 def _refuse_undeclared_taxonomy_relations(
-    rows: list[Mapping[str, Any]], relations: Collection[str]
+    rows: Sequence[Mapping[str, Any]], relations: Collection[str]
 ) -> None:
     """An axis walks one relation, and it has to be one the document declares.
 
@@ -1089,14 +1155,21 @@ def _refuse_undeclared_tree_nodes(
 # --------------------------------------------------------------------------
 
 
-def _required(row: Mapping[str, Any], key: str, section: str) -> Any:
+def _required(
+    row: Mapping[str, Any],
+    key: str,
+    section: str,
+    *,
+    handle: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> Any:
     """The value at ``key``, or a refusal naming the section and the row.
 
     One reader for every required field the loader has, because a bare
     ``row[key]`` raises ``KeyError`` -- which does **not** descend from
     ``ValidationError``, so a caller holding either door's documented
     ``Raises:`` caught nothing at all for the commonest authoring mistake there
-    is. That is the same defect :func:`_inference_mode` exists to prevent for a
+    is. That is the same defect :func:`_declared_enum` exists to prevent for a
     malformed enum, arriving through a missing key rather than a bad value.
 
     It was in every section for one reason: each builder indexed its own keys,
@@ -1111,12 +1184,126 @@ def _required(row: Mapping[str, Any], key: str, section: str) -> Any:
     by. An assertion row reaches that branch as a matter of course, since
     assertions mint their ids rather than declaring them.
     """
-    if key in row:
-        return row[key]
+    value = row.get(key)
+    if value is not None:
+        return value
+    # `null` is the key left out, as for every optional one; a required
+    # field written `null` loaded as the word 'None' when it was read here.
+    # The section label stays even beside a handle: "declares no" is read
+    # against the section's required keys, so it names the section always.
     raise ValidationError(
-        f"`{section}:` {_row_handle(row, key)} declares no {key!r}",
-        context={"section": section, "field": key, "id": row.get("id")},
+        f"`{section}:` {handle or _row_handle(row, key)} declares no {key!r}",
+        context={"section": section, "field": key, "id": row.get("id"), **(context or {})},
     )
+
+
+def _required_ref(
+    row: Mapping[str, Any],
+    key: str,
+    section: str,
+    *,
+    handle: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> str:
+    """A required id or reference: present, not ``null``, and one id.
+
+    :func:`_required`, then :func:`_row_ref`'s shape. ``str()`` was all that
+    read these, so under ``imports:`` -- where the reference checks stand
+    down -- ``type: [Breed]`` loaded an entity typed ``"['Breed']"``.
+    """
+    value = _required(row, key, section, handle=handle, context=context)
+    return _id_text(value, row, key, section, handle=handle, context=context)
+
+
+def _id_text(
+    value: Any,
+    row: Mapping[str, Any],
+    key: str,
+    section: str,
+    *,
+    handle: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> str:
+    """``value`` rendered as an id, or refused as something no id could be.
+
+    A number renders as the id it names -- ``isa: 100`` names ``id: 100``,
+    which its section keys as ``'100'`` -- so a reference and the id it points
+    at are compared alike. A list, a mapping or a boolean is refused.
+    """
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        _refuse_row_value(
+            section,
+            row,
+            key,
+            value,
+            "one id: a string, or a number it is written as",
+            handle=handle,
+            context=context,
+        )
+    return str(value)
+
+
+def _rows(value: Any, section: str) -> tuple[Mapping[str, Any], ...]:
+    """A section's rows: a list of mappings, each with its ``null`` keys dropped.
+
+    ``null`` for the whole section reads as an empty one. A section that is
+    not a list -- the natural mistake is a mapping keyed by id -- and a row
+    that is not a mapping both raised a bare ``AttributeError`` or
+    ``TypeError`` from the first reader to touch them, which no door's
+    ``Raises:`` names. :func:`_build_attributes` refused both shapes for an
+    attribute list; this is that refusal for every section.
+
+    **Dropping a ``null`` key here is what makes ``null`` silence everywhere.**
+    Every reader downstream -- the builders, the reference checks, a
+    registry's own reads of ``source_specs`` -- asks ``row.get(key,
+    default)``, which hands back the ``None`` a key written ``null`` holds
+    rather than the default. One copy of each row, here, answers that for all
+    of them.
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, list | tuple):
+        keyed = (
+            " -- a mapping keyed by id is not one; write each row with its own `id:`"
+            if isinstance(value, Mapping)
+            else ""
+        )
+        raise ValidationError(
+            f"`{section}:` must be a list of rows, got {type(value).__name__}{keyed}",
+            context={"section": section},
+        )
+    rows: list[Mapping[str, Any]] = []
+    for position, row in enumerate(value):
+        if not isinstance(row, Mapping):
+            raise ValidationError(
+                f"`{section}:` holds {row!r} at position {position}, which is not a "
+                f"row: each is a mapping",
+                context={"section": section, "position": position},
+            )
+        rows.append({key: item for key, item in row.items() if item is not None})
+    return tuple(rows)
+
+
+def _import_ids(value: Any) -> tuple[str, ...]:
+    """``imports:`` as the ontology ids it names: a list of non-empty strings.
+
+    ``tuple("base")`` is four imports, and a document that imports anything
+    stands every reference check down -- so a bare string switched the checks
+    off and imported nothing anyone could name.
+    """
+    if value is None:
+        return ()
+    if (
+        isinstance(value, str)
+        or not isinstance(value, list | tuple)
+        or not all(isinstance(item, str) and item for item in value)
+    ):
+        raise ValidationError(
+            f"`imports:` declares {value!r}, which is not a list of ontology ids; "
+            f"one import is a list of one",
+            context={"section": "imports", "value": value},
+        )
+    return tuple(value)
 
 
 def _row_handle(row: Mapping[str, Any], key: str | None = None) -> str:
@@ -1131,7 +1318,13 @@ def _row_handle(row: Mapping[str, Any], key: str | None = None) -> str:
     row_id = row.get("id")
     if key != "id" and row_id is not None:
         return f"row {row_id!r}"
-    return f"a row carrying {sorted(row)}"
+    subject, relation = row.get("subject"), row.get("relation")
+    if subject is not None and relation is not None and key not in {"subject", "relation"}:
+        # An assertion mints its id, so its subject and relation are the
+        # handle its author has; the keys every assertion carries are not one.
+        return f"the assertion on {subject!r} over {relation!r}"
+    # Keys as strings: YAML's `1: x` beside `foo: y` cannot be sorted raw.
+    return f"a row carrying {sorted(str(k) for k in row)}"
 
 
 # --------------------------------------------------------------------------
@@ -1171,20 +1364,49 @@ def _refuse_row_value(
     names, so a caller can read it without parsing the message.
     """
     raise ValidationError(
-        f"`{section}:` {handle or _row_handle(row)} declares {key!r} as {value!r}, "
-        f"which is not {wants}",
-        context={
-            "section": section,
-            "id": row.get("id"),
-            "field": key,
-            "value": value,
-            **(context or {}),
-        },
+        f"{_where(section, row, handle)} declares {key!r} as {value!r}, which is not {wants}",
+        context=_refusal_context(section, row, handle, context, field=key, value=value),
     )
 
 
+def _where(section: str, row: Mapping[str, Any], handle: str | None) -> str:
+    """What a refusal opens with: the section and the row, or a handle naming both.
+
+    A handle already says where it is -- *the `source:` of entity 'rex'* -- so
+    it stands alone rather than behind a section label repeating it.
+    """
+    return handle if handle is not None else f"`{section}:` {_row_handle(row)}"
+
+
+def _refusal_context(
+    section: str,
+    row: Mapping[str, Any],
+    handle: str | None,
+    context: Mapping[str, Any] | None,
+    **fields: Any,
+) -> dict[str, Any]:
+    """A refusal's context: the section, the row's ``id``, and what the caller adds.
+
+    The ``id`` is read from ``row`` only where ``row`` is the authored row. A
+    caller passing a ``handle`` is refusing a block inside one -- a
+    ``source:``, an ``object:`` -- or a row with no id of its own, and says
+    what identifies it through ``context``: a locator's own ``id:`` key is not
+    the entity's.
+    """
+    built: dict[str, Any] = {"section": section, **fields}
+    if handle is None:
+        built["id"] = row.get("id")
+    built.update(context or {})
+    return built
+
+
 def _row_str(
-    row: Mapping[str, Any], key: str, section: str, *, handle: str | None = None
+    row: Mapping[str, Any],
+    key: str,
+    section: str,
+    *,
+    handle: str | None = None,
+    context: Mapping[str, Any] | None = None,
 ) -> str | None:
     """A label-valued field: a string, or ``None`` where absent or ``null``.
 
@@ -1199,7 +1421,7 @@ def _row_str(
         wants = "a string"
         if isinstance(value, int | float) and not isinstance(value, bool):
             wants += f"; quote it -- `{key}: {str(value)!r}`"
-        _refuse_row_value(section, row, key, value, wants, handle=handle)
+        _refuse_row_value(section, row, key, value, wants, handle=handle, context=context)
     return value
 
 
@@ -1214,12 +1436,17 @@ def _row_ref(row: Mapping[str, Any], key: str, section: str) -> str | None:
     value = row.get(key)
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, str | int | float):
-        _refuse_row_value(section, row, key, value, "the id of one row: a string")
-    return str(value)
+    return _id_text(value, row, key, section)
 
 
-def _row_flag(row: Mapping[str, Any], key: str, section: str) -> bool:
+def _row_flag(
+    row: Mapping[str, Any],
+    key: str,
+    section: str,
+    *,
+    handle: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> bool:
     """An on-or-off field: ``true`` or ``false``, and ``False`` where absent or ``null``.
 
     ``bool("no")`` is ``True``, which is how ``symmetric: "no"`` loaded a
@@ -1231,13 +1458,23 @@ def _row_flag(row: Mapping[str, Any], key: str, section: str) -> bool:
         return False
     if not isinstance(value, bool):
         _refuse_row_value(
-            section, row, key, value, "a boolean: it is on or off, so it is `true` or `false`"
+            section,
+            row,
+            key,
+            value,
+            "a boolean: it is on or off, so it is `true` or `false`",
+            handle=handle,
+            context=context,
         )
     return value
 
 
 def _row_aliases(
-    row: Mapping[str, Any], section: str, *, handle: str | None = None
+    row: Mapping[str, Any],
+    section: str,
+    *,
+    handle: str | None = None,
+    context: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
     """A row's other names: a list of non-empty strings, ``()`` where absent or ``null``.
 
@@ -1261,18 +1498,30 @@ def _row_aliases(
             f"a list of names; one alias is a list of one -- [{value!r}] -- and a "
             f"bare string would be read one character at a time",
             handle=handle,
+            context=context,
         )
     if not isinstance(value, list | tuple) or not all(
         isinstance(alias, str) and alias for alias in value
     ):
         _refuse_row_value(
-            section, row, "aliases", value, "a list of non-empty strings", handle=handle
+            section,
+            row,
+            "aliases",
+            value,
+            "a list of non-empty strings",
+            handle=handle,
+            context=context,
         )
     return tuple(value)
 
 
 def _row_mapping(
-    row: Mapping[str, Any], key: str, section: str, *, handle: str | None = None
+    row: Mapping[str, Any],
+    key: str,
+    section: str,
+    *,
+    handle: str | None = None,
+    context: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
     """A mapping-valued field, or an empty mapping where absent or ``null``.
 
@@ -1284,7 +1533,7 @@ def _row_mapping(
     if value is None:
         return {}
     if not isinstance(value, Mapping):
-        _refuse_row_value(section, row, key, value, "a mapping", handle=handle)
+        _refuse_row_value(section, row, key, value, "a mapping", handle=handle, context=context)
     return value
 
 
@@ -1311,9 +1560,9 @@ def _refuse_unread_keys(
     if not unread:
         return
     raise ValidationError(
-        f"`{section}:` {handle or _row_handle(row)} declares {unread}, which this "
-        f"loader does not read. It is read for {sorted(read)}{remedy}",
-        context={"section": section, "id": row.get("id"), "keys": unread, **(context or {})},
+        f"{_where(section, row, handle)} declares {unread}, which this loader does "
+        f"not read. It is read for {sorted(read)}{remedy}",
+        context=_refusal_context(section, row, handle, context, keys=unread),
     )
 
 
@@ -1423,10 +1672,10 @@ def _refuse_a_phase_2_key(row: Mapping[str, Any], section: str) -> None:
             )
 
 
-def _build_entity_types(rows: list[Mapping[str, Any]]) -> dict[str, EntityType]:
+def _build_entity_types(rows: Sequence[Mapping[str, Any]]) -> dict[str, EntityType]:
     built: dict[str, EntityType] = {}
     for row in rows:
-        type_id = str(_required(row, "id", "entity_types"))
+        type_id = _required_ref(row, "id", "entity_types")
         _refuse_colon("entity type id", type_id)
         _refuse_duplicate_id(built, type_id, "entity_types")
         _refuse_unread_keys(row, ENTITY_TYPE_ROW_KEYS, "entity_types")
@@ -1527,43 +1776,25 @@ def _build_attribute(row: Mapping[str, Any], entity_type: str) -> AttributeDef:
     ``imports:``, where ``entity_type: [L]`` loaded as a list. Resolving the
     name stays its job; being a name is this one's.
     """
-    name = _required(row, "name", _ATTRIBUTES_SECTION)
+    name = _required(row, "name", _ATTRIBUTES_SECTION, **_attribute_at(entity_type, None))
     if not isinstance(name, str) or not name:
         _refuse_attribute_value(entity_type, None, "name", name, "a non-empty string")
-    unread = sorted(str(key) for key in row if key not in ATTRIBUTE_ROW_KEYS)
-    if unread:
-        raise ValidationError(
-            f"attribute {name!r} of entity type {entity_type!r} declares {unread}, "
-            f"which this loader does not read. An attribute row is read for "
-            f"{sorted(ATTRIBUTE_ROW_KEYS)}",
-            context={
-                "section": _ATTRIBUTES_SECTION,
-                "entity_type": entity_type,
-                "attribute": name,
-                "keys": unread,
-            },
-        )
+    _refuse_unread_keys(
+        row, ATTRIBUTE_ROW_KEYS, _ATTRIBUTES_SECTION, **_attribute_at(entity_type, name)
+    )
     declared = _attribute_str(row, "type", entity_type, name)
     description = _attribute_str(row, "description", entity_type, name)
     target = _attribute_str(row, "entity_type", entity_type, name)
     if target == "":
         _refuse_attribute_value(entity_type, name, "entity_type", target, "a non-empty string")
-    required = row.get("required")
-    if required is not None and not isinstance(required, bool):
-        _refuse_attribute_value(
-            entity_type,
-            name,
-            "required",
-            required,
-            "a boolean: it is on or off, so it is `true` or `false`",
-        )
+    required = _row_flag(row, "required", _ATTRIBUTES_SECTION, **_attribute_at(entity_type, name))
     value_type = declared if declared is not None else "string"
     return AttributeDef(
         name=name,
         value_type=value_type,
         field_type=_attribute_field_type(row, value_type, entity_type, name),
         entity_type=target,
-        required=bool(required),
+        required=required,
         enum_values=_attribute_enum_values(row, entity_type, name),
         description=description if description is not None else "",
     )
@@ -1573,10 +1804,7 @@ def _attribute_str(
     row: Mapping[str, Any], key: str, entity_type: str, attribute: str
 ) -> str | None:
     """A string-valued attribute key, or ``None`` where it is absent or ``null``."""
-    value = row.get(key)
-    if value is not None and not isinstance(value, str):
-        _refuse_attribute_value(entity_type, attribute, key, value, "a string")
-    return value
+    return _row_str(row, key, _ATTRIBUTES_SECTION, **_attribute_at(entity_type, attribute))
 
 
 def _attribute_enum_values(
@@ -1665,16 +1893,18 @@ def _refuse_attribute_value(
     An attribute row is pointed at through the entity type holding it, so the
     handle names both, and the context carries both.
     """
-    subject = f"attribute {attribute!r}" if attribute is not None else "an attribute"
     _refuse_row_value(
-        _ATTRIBUTES_SECTION,
-        {},
-        key,
-        value,
-        wants,
-        handle=f"{subject} of entity type {entity_type!r}",
-        context={"entity_type": entity_type, "attribute": attribute},
+        _ATTRIBUTES_SECTION, {}, key, value, wants, **_attribute_at(entity_type, attribute)
     )
+
+
+def _attribute_at(entity_type: str, attribute: str | None) -> dict[str, Any]:
+    """How every attribute refusal points at its row: the entity type, then the name."""
+    subject = f"attribute {attribute!r}" if attribute is not None else "an attribute"
+    return {
+        "handle": f"{subject} of entity type {entity_type!r}",
+        "context": {"entity_type": entity_type, "attribute": attribute},
+    }
 
 
 def _field_type(declared: Any) -> FieldType | None:
@@ -1715,7 +1945,9 @@ def _endpoints(row: Mapping[str, Any], field: str, relation_id: str) -> frozense
     ``1`` against a map keyed ``'1'`` -- resolved at load, matching nothing
     after it.
     """
-    value = row.get(field, ())
+    value = row.get(field)
+    if value is None:
+        return frozenset()
     if isinstance(value, str) or not isinstance(value, Sequence):
         raise ValidationError(
             f"relation type {relation_id!r} declares `{field}: {value!r}`; it takes a "
@@ -1728,13 +1960,15 @@ def _endpoints(row: Mapping[str, Any], field: str, relation_id: str) -> frozense
                 "value": value,
             },
         )
-    return frozenset(str(target) for target in value)
+    # Each element one id: `domain: [[Breed]]` was rendered "['Breed']" and
+    # then reported as an entity type nothing declares.
+    return frozenset(_id_text(target, row, field, "relation_types") for target in value)
 
 
-def _build_relation_types(rows: list[Mapping[str, Any]]) -> dict[str, RelationType]:
+def _build_relation_types(rows: Sequence[Mapping[str, Any]]) -> dict[str, RelationType]:
     built: dict[str, RelationType] = {}
     for row in rows:
-        relation_id = str(_required(row, "id", "relation_types"))
+        relation_id = _required_ref(row, "id", "relation_types")
         _refuse_colon("relation type id", relation_id)
         _refuse_duplicate_id(built, relation_id, "relation_types")
         _refuse_a_phase_2_key(row, "relation_types")
@@ -1750,24 +1984,24 @@ def _build_relation_types(rows: list[Mapping[str, Any]]) -> dict[str, RelationTy
             inverse_of=_row_ref(row, "inverse_of", "relation_types"),
             symmetric=_row_flag(row, "symmetric", "relation_types"),
             transitive=_row_flag(row, "transitive", "relation_types"),
-            inference=_inference_mode(
-                row.get("inference", InferenceMode.ON_DEMAND.value), "inference"
+            inference=_row_enum(
+                InferenceMode, row, "inference", InferenceMode.ON_DEMAND, "relation_types"
             ),
         )
     return built
 
 
-def _build_entities(rows: list[Mapping[str, Any]]) -> dict[str, Entity]:
+def _build_entities(rows: Sequence[Mapping[str, Any]]) -> dict[str, Entity]:
     built: dict[str, Entity] = {}
     for row in rows:
-        entity_id = str(_required(row, "id", "entities"))
+        entity_id = _required_ref(row, "id", "entities")
         _refuse_colon("entity id", entity_id)
         if entity_id in built:
             raise ValidationError(
                 f"duplicate id {entity_id!r} in `entities:`",
                 context={"id": entity_id},
             )
-        entity_type = str(_required(row, "type", "entities"))
+        entity_type = _required_ref(row, "type", "entities")
         _refuse_unread_keys(row, ENTITY_ROW_KEYS, "entities")
         built[entity_id] = Entity(
             id=entity_id,
@@ -1793,21 +2027,24 @@ def _build_source_ref(entity: Mapping[str, Any]) -> SourceRef | None:
     if entity.get("source") is None:
         return None
     block = _row_mapping(entity, "source", "entities")
-    handle = f"the `source:` of {_row_handle(entity)}"
+    at: dict[str, Any] = {
+        "handle": f"the `source:` of entity {entity.get('id')!r}",
+        "context": {"id": entity.get("id")},
+    }
     known = {"source_id", "kind", "projection_id"}
     return SourceRef(
-        source_id=_row_str(block, "source_id", "entities.source", handle=handle) or "",
-        kind=_row_str(block, "kind", "entities.source", handle=handle) or "record",
+        source_id=_row_str(block, "source_id", "entities.source", **at) or "",
+        kind=_row_str(block, "kind", "entities.source", **at) or "record",
         locator=FrozenMapping({k: v for k, v in block.items() if k not in known}),
-        projection_id=_row_str(block, "projection_id", "entities.source", handle=handle),
+        projection_id=_row_str(block, "projection_id", "entities.source", **at),
     )
 
 
-def _build_assertions(rows: list[Mapping[str, Any]]) -> list[Assertion]:
+def _build_assertions(rows: Sequence[Mapping[str, Any]]) -> list[Assertion]:
     built: list[Assertion] = []
     for row in rows:
-        subject = str(_required(row, "subject", "assertions"))
-        relation = str(_required(row, "relation", "assertions"))
+        subject = _required_ref(row, "subject", "assertions")
+        relation = _required_ref(row, "relation", "assertions")
         obj = _build_term(_required(row, "object", "assertions"), row)
         # After the required reads, as in `relation_types`: a row has to be
         # well formed before it is worth telling its author which of its
@@ -1816,12 +2053,13 @@ def _build_assertions(rows: list[Mapping[str, Any]]) -> list[Assertion]:
         _refuse_unread_keys(row, ASSERTION_ROW_KEYS, "assertions")
         built.append(
             Assertion(
-                id=_row_str(row, "id", "assertions") or _mint_assertion_id(subject, relation, obj),
+                # An id, rendered as every id is; `""` reads as absent and mints.
+                id=_row_ref(row, "id", "assertions") or _mint_assertion_id(subject, relation, obj),
                 subject=subject,
                 relation=relation,
                 object=obj,
                 metadata=FrozenMapping(_row_mapping(row, "metadata", "assertions")),
-                polarity=_polarity(row.get("polarity", Polarity.ASSERTED.value), "polarity"),
+                polarity=_row_enum(Polarity, row, "polarity", Polarity.ASSERTED, "assertions"),
             )
         )
     return built
@@ -1846,11 +2084,19 @@ def _build_term(value: Any, row: Mapping[str, Any]) -> Term:
         return EntityRef(entity_id=value)
     if isinstance(value, Mapping):
         section = "assertions.object"
-        handle = f"the `object:` of {_row_handle(row)}"
+        at: dict[str, Any] = {
+            "handle": f"the `object:` of {_row_handle(row)}",
+            "context": {"subject": row.get("subject"), "relation": row.get("relation")},
+        }
         if "entity" in value:
-            _refuse_unread_keys(value, _ENTITY_REF_KEYS, section, handle=handle)
-            return EntityRef(entity_id=str(value["entity"]))
-        _refuse_unread_keys(value, LITERAL_ROW_KEYS, section, handle=handle)
+            _refuse_unread_keys(value, _ENTITY_REF_KEYS, section, **at)
+            if value.get("entity") is None:
+                raise ValidationError(
+                    f"{at['handle']} declares no 'entity'",
+                    context={"section": section, "field": "entity", **at["context"]},
+                )
+            return EntityRef(entity_id=_id_text(value["entity"], value, "entity", section, **at))
+        _refuse_unread_keys(value, LITERAL_ROW_KEYS, section, **at)
         written = value.get("type")
         declared = _field_type(written) if written is not None else FieldType.STRING
         if declared is None:
@@ -1860,13 +2106,13 @@ def _build_term(value: Any, row: Mapping[str, Any]) -> Term:
                 "type",
                 written,
                 f"a record field type, one of {sorted(m.value for m in FieldType)}",
-                handle=handle,
+                **at,
             )
         return Literal(
             value=value.get("value"),
             type=declared,
-            unit=_row_str(value, "unit", section, handle=handle),
-            metadata=FrozenMapping(_row_mapping(value, "metadata", section, handle=handle)),
+            unit=_row_str(value, "unit", section, **at),
+            metadata=FrozenMapping(_row_mapping(value, "metadata", section, **at)),
         )
     return Literal.of(value)
 
@@ -1930,19 +2176,20 @@ def _refuse_an_unread_taxonomy_key(row: Mapping[str, Any], taxonomy_id: str) -> 
     )
 
 
-def _build_taxonomies(rows: list[Mapping[str, Any]]) -> dict[str, TaxonomyDefinition]:
+def _build_taxonomies(rows: Sequence[Mapping[str, Any]]) -> dict[str, TaxonomyDefinition]:
     built: dict[str, TaxonomyDefinition] = {}
     for row in rows:
-        taxonomy_id = str(_required(row, "id", "taxonomies"))
+        taxonomy_id = _required_ref(row, "id", "taxonomies")
         _refuse_duplicate_id(built, taxonomy_id, "taxonomies")
         _refuse_an_unread_taxonomy_key(row, taxonomy_id)
-        relation = str(_required(row, "relation", "taxonomies"))
+        relation = _required_ref(row, "relation", "taxonomies")
         materialization = _row_mapping(row, "materialization", "taxonomies")
+        at: dict[str, Any] = {
+            "handle": f"the `materialization:` of taxonomy {taxonomy_id!r}",
+            "context": {"id": taxonomy_id},
+        }
         _refuse_unread_keys(
-            materialization,
-            MATERIALIZATION_KEYS,
-            "taxonomies.materialization",
-            handle=f"the `materialization:` of {_row_handle(row)}",
+            materialization, MATERIALIZATION_KEYS, "taxonomies.materialization", **at
         )
         built[taxonomy_id] = TaxonomyDefinition(
             id=taxonomy_id,
@@ -1952,13 +2199,23 @@ def _build_taxonomies(rows: list[Mapping[str, Any]]) -> dict[str, TaxonomyDefini
             # A dict, not a FrozenMapping: TaxonomyDefinition is not yet frozen.
             metadata=dict(_row_mapping(row, "metadata", "taxonomies")),
             materialization=Materialization(
-                structure=_inference_mode(
-                    materialization.get("structure", InferenceMode.ON_DEMAND.value),
-                    "materialization.structure",
+                structure=_row_enum(
+                    InferenceMode,
+                    materialization,
+                    "structure",
+                    InferenceMode.ON_DEMAND,
+                    "taxonomies.materialization",
+                    field="materialization.structure",
+                    **at,
                 ),
-                content=_inference_mode(
-                    materialization.get("content", InferenceMode.ON_DEMAND.value),
-                    "materialization.content",
+                content=_row_enum(
+                    InferenceMode,
+                    materialization,
+                    "content",
+                    InferenceMode.ON_DEMAND,
+                    "taxonomies.materialization",
+                    field="materialization.content",
+                    **at,
                 ),
             ),
         )
@@ -2006,17 +2263,18 @@ def _mint_nested(
             # A node is the consumer's data, its keys configurable through
             # `child_key`/`name_key`, so it has no closed key set; the three
             # fields read from it are read for their shape all the same.
-            handle = f"tree node {minted.id!r}"
-            section = f"sources.{source_id}.tree"
+            section = "sources.tree"
+            at: dict[str, Any] = {
+                "handle": f"tree node {minted.id!r} of source {source_id!r}",
+                "context": {"source_id": source_id, "node_id": minted.id},
+            }
             entities[minted.id] = Entity(
                 id=minted.id,
                 type=node_type,
                 name=minted.name,
-                aliases=_row_aliases(minted.node, section, handle=handle),
-                description=_row_str(minted.node, "description", section, handle=handle),
-                metadata=FrozenMapping(
-                    _row_mapping(minted.node, "metadata", section, handle=handle)
-                ),
+                aliases=_row_aliases(minted.node, section, **at),
+                description=_row_str(minted.node, "description", section, **at),
+                metadata=FrozenMapping(_row_mapping(minted.node, "metadata", section, **at)),
             )
             if minted.parent_id is not None:
                 assertions.append(
@@ -2215,15 +2473,16 @@ def _rung_specs(section: Mapping[str, Any] | None) -> tuple[Mapping[str, Any], .
             f"`resolver:` must be a mapping, got {type(section).__name__}",
             context={"resolver": section},
         )
-    unread = sorted(str(key) for key in section if key not in RESOLVER_SECTION_KEYS)
-    if unread:
-        raise ValidationError(
-            f"`resolver:` declares {unread}, which this loader does not read. The "
-            f"section is read for {sorted(RESOLVER_SECTION_KEYS)}, and one with no "
-            f"`rungs:` is read as a composition of nothing -- so a key spelt any "
-            f"other way builds a cascade that matches nothing",
-            context={"keys": unread},
-        )
+    _refuse_unread_keys(
+        section,
+        RESOLVER_SECTION_KEYS,
+        "resolver",
+        handle="`resolver:`",
+        remedy=(
+            ", and one with no `rungs:` is read as a composition of nothing -- so a "
+            "key spelt any other way builds a cascade that matches nothing"
+        ),
+    )
     rungs = section.get("rungs")
     if rungs is None:
         return ()

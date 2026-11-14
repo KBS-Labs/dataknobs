@@ -25,7 +25,7 @@ from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.fields import FieldType
 from dataknobs_common.ontology import async_load_ontology, load_ontology
 from dataknobs_common.ontology import loader as loader_module
-from dataknobs_common.ontology.model import Literal
+from dataknobs_common.ontology.model import InferenceMode, Literal, Polarity
 
 if TYPE_CHECKING:
     from dataknobs_common.ontology import AsyncOntology, Ontology
@@ -130,7 +130,6 @@ _REFUSED: list[tuple[str, dict[str, Any], str]] = [
     ("taxonomy-description-int", _taxonomy(description=5), "description"),
     ("nested-node-description-int", _nested(description=5), "description"),
     ("literal-unit-int", _literal(unit=5), "unit"),
-    ("assertion-id-int", _assertion(id=5), "id"),
     # flags -- on or off; "no" was truthy
     ("relation-type-symmetric-no", _relation_type(symmetric="no"), "symmetric"),
     ("relation-type-transitive-false-string", _relation_type(transitive="false"), "transitive"),
@@ -187,7 +186,9 @@ def test_a_nested_node_is_named_by_the_id_it_was_minted(loaded: Loaded) -> None:
     with pytest.raises(ValidationError) as excinfo:
         loaded(_nested(aliases="Top"))
 
-    assert "areas" in str(excinfo.value)
+    assert "tree node 'root'" in str(excinfo.value)
+    assert excinfo.value.context["node_id"] == "root"
+    assert excinfo.value.context["source_id"] == "areas"
 
 
 # --------------------------------------------------------------------------
@@ -357,11 +358,13 @@ def test_a_phase_2_key_keeps_its_own_message(loaded: Loaded) -> None:
 
 
 def test_each_closed_key_set_is_what_its_builder_reads() -> None:
-    """The published sets, against the keys a well-formed row may carry.
+    """The published sets, pinned by name.
 
-    A key added to a builder and not to its set is refused for every document
-    that writes it; a key added to the set and not read is the discard this
-    whole change ends. So the sets are pinned here, once, by name.
+    This pins the constants, not what each builder reads: a key added to a
+    builder and not to its set is refused for every document that writes it,
+    which ``test_a_row_carrying_every_key_it_reads_loads`` turns red. A key
+    added to a set and read by nothing would pass both -- review is what
+    catches that, and this list is what a reviewer reads it against.
     """
     assert {
         "id",
@@ -468,3 +471,317 @@ def test_a_row_carrying_every_key_it_reads_loads(loaded: Loaded) -> None:
             ],
         }
     )
+
+
+# --------------------------------------------------------------------------
+# null is silence for every key a row carries, not only the optional labels
+# --------------------------------------------------------------------------
+
+
+@LOADERS
+def test_null_enums_and_endpoints_read_as_their_defaults(loaded: Loaded) -> None:
+    """``inference: null`` was refused as the mode ``'None'``; ``domain: null`` as a bare string."""
+    ontology = loaded(
+        _document(
+            relation_types=[{"id": "likes", "inference": None, "domain": None, "range": None}],
+            assertions=[{"subject": "rex", "relation": "likes", "object": "rex", "polarity": None}],
+            taxonomies=[
+                {
+                    "id": "kinds",
+                    "relation": "likes",
+                    "materialization": {"structure": None, "content": None},
+                }
+            ],
+        )
+    )
+
+    likes = ontology.relation_types["likes"]
+    assert likes.inference is InferenceMode.ON_DEMAND
+    assert (likes.domain, likes.range) == (frozenset(), frozenset())
+    (assertion,) = _answer(ontology.assertions.find(subject="rex"))
+    assert assertion.polarity is Polarity.ASSERTED
+    materialization = ontology.taxonomies["kinds"].materialization
+    assert (materialization.structure, materialization.content) == (
+        InferenceMode.ON_DEMAND,
+        InferenceMode.ON_DEMAND,
+    )
+
+
+@LOADERS
+def test_a_null_kind_on_an_axis_row_is_no_kind(loaded: Loaded) -> None:
+    """``kind: null`` asked for no backing, so this door builds the assertion axis."""
+    ontology = loaded(_taxonomy(kind=None))
+
+    assert "kinds" in ontology.taxonomies
+
+
+@LOADERS
+def test_a_null_section_reads_as_an_empty_one(loaded: Loaded) -> None:
+    ontology = loaded(
+        {
+            "id": "v",
+            "imports": None,
+            "entity_types": None,
+            "relation_types": None,
+            "entities": None,
+            "assertions": None,
+            "sources": None,
+            "taxonomies": None,
+        }
+    )
+
+    assert dict(ontology.entity_types) == {}
+
+
+#: (case id, the document, the required field written as null)
+_NULL_REQUIRED: list[tuple[str, dict[str, Any], str]] = [
+    ("entity-type", _entity(type=None), "type"),
+    ("entity-id", _document(entities=[{"id": None, "type": "Breed"}]), "id"),
+    ("entity-type-id", _document(entity_types=[{"id": None}]), "id"),
+    ("relation-type-id", _document(relation_types=[{"id": None}]), "id"),
+    ("assertion-subject", _assertion(subject=None), "subject"),
+    ("assertion-relation", _assertion(relation=None), "relation"),
+    ("assertion-object", _assertion(object=None), "object"),
+    ("taxonomy-relation", _taxonomy(relation=None), "relation"),
+    ("entity-ref", _assertion(object={"entity": None}), "entity"),
+]
+
+
+@LOADERS
+@pytest.mark.parametrize(
+    ("document", "field"),
+    [pytest.param(document, field, id=case) for case, document, field in _NULL_REQUIRED],
+)
+def test_a_required_field_written_as_null_is_missing(
+    loaded: Loaded, document: dict[str, Any], field: str
+) -> None:
+    """``type: null`` loaded an entity typed ``'None'``, and the reference check skipped it."""
+    with pytest.raises(ValidationError) as excinfo:
+        loaded(document)
+
+    assert excinfo.value.context["field"] == field
+    assert "declares no" in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------
+# A required reference is one id, not whatever str() makes of a container
+# --------------------------------------------------------------------------
+
+_IMPORTS = {"imports": ["base"]}
+
+#: (case id, the document, the field) -- most under ``imports:``, where the
+#: reference checks stand down and ``str()`` was all that read the value.
+_BAD_REFS: list[tuple[str, dict[str, Any], str]] = [
+    ("entity-type-list", _entity(type=["Breed"]) | _IMPORTS, "type"),
+    ("entity-id-list", _document(entities=[{"id": ["rex"], "type": "Breed"}]), "id"),
+    ("entity-type-id-mapping", _document(entity_types=[{"id": {"a": 1}}]), "id"),
+    ("assertion-relation-list", _assertion(relation=["likes"]) | _IMPORTS, "relation"),
+    ("assertion-subject-mapping", _assertion(subject={"a": 1}) | _IMPORTS, "subject"),
+    ("taxonomy-relation-list", _taxonomy(relation=["likes"]) | _IMPORTS, "relation"),
+    ("entity-ref-list", _assertion(object={"entity": ["rex"]}) | _IMPORTS, "entity"),
+    ("entity-type-bool", _entity(type=True) | _IMPORTS, "type"),
+    ("domain-element-list", _relation_type(domain=[["Breed"]]), "domain"),
+]
+
+
+@LOADERS
+@pytest.mark.parametrize(
+    ("document", "field"),
+    [pytest.param(document, field, id=case) for case, document, field in _BAD_REFS],
+)
+def test_a_required_reference_of_the_wrong_shape_is_refused(
+    loaded: Loaded, document: dict[str, Any], field: str
+) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        loaded(document)
+
+    assert excinfo.value.context["field"] == field
+    assert "which no" not in str(excinfo.value), "refused for its shape, not as unresolved"
+
+
+@LOADERS
+def test_a_numeric_reference_still_names_the_id_it_renders_as(loaded: Loaded) -> None:
+    ontology = loaded(_document(entity_types=[{"id": 7}], entities=[{"id": 1, "type": 7}]))
+
+    entity = _answer(ontology.entities.get("1"))
+    assert entity is not None
+    assert entity.type == "7"
+
+
+# --------------------------------------------------------------------------
+# A section is a list of rows, and each row a mapping
+# --------------------------------------------------------------------------
+
+_BAD_SECTIONS: list[tuple[str, dict[str, Any], str]] = [
+    ("entities-string-row", {"id": "v", "entities": ["rex"]}, "entities"),
+    ("entity-types-string-row", {"id": "v", "entity_types": ["Breed"]}, "entity_types"),
+    ("relation-types-int-row", {"id": "v", "relation_types": [3]}, "relation_types"),
+    ("assertions-string-row", {"id": "v", "assertions": ["x"]}, "assertions"),
+    ("taxonomies-int-row", {"id": "v", "taxonomies": [5]}, "taxonomies"),
+    ("sources-string-row", {"id": "v", "sources": ["x"]}, "sources"),
+    ("entities-keyed-by-id", {"id": "v", "entities": {"rex": {"type": "Breed"}}}, "entities"),
+    ("sources-string", {"id": "v", "sources": "x"}, "sources"),
+    ("imports-string", {"id": "v", "imports": "base"}, "imports"),
+    ("imports-int-item", {"id": "v", "imports": [5]}, "imports"),
+]
+
+
+@LOADERS
+@pytest.mark.parametrize(
+    ("document", "section"),
+    [pytest.param(document, section, id=case) for case, document, section in _BAD_SECTIONS],
+)
+def test_a_section_of_the_wrong_shape_is_refused(
+    loaded: Loaded, document: dict[str, Any], section: str
+) -> None:
+    """``entities: ["rex"]`` raised ``AttributeError``; ``imports: base`` was four imports."""
+    with pytest.raises(ValidationError) as excinfo:
+        loaded(document)
+
+    assert excinfo.value.context["section"] == section
+    assert f"`{section}:`" in str(excinfo.value)
+
+
+@LOADERS
+def test_a_section_keyed_by_id_says_how_to_write_it(loaded: Loaded) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        loaded({"id": "v", "entities": {"rex": {"type": "Breed"}}})
+
+    assert "`id:`" in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------
+# What a refusal points at
+# --------------------------------------------------------------------------
+
+
+@LOADERS
+def test_an_id_less_assertion_with_mixed_type_keys_is_refused_by_name(loaded: Loaded) -> None:
+    """The handle sorted raw keys, so ``1: x`` escaped as a ``TypeError`` from the sort."""
+    with pytest.raises(ValidationError) as excinfo:
+        loaded(
+            _assertion(**{"1": "x"})
+            | {"assertions": [{"subject": "rex", "relation": "likes", "object": "rex", 1: "x"}]}
+        )
+
+    assert excinfo.value.context["keys"] == ["1"]
+
+
+@LOADERS
+def test_an_assertion_is_pointed_at_by_its_subject_and_relation(loaded: Loaded) -> None:
+    """``a row carrying ['object', 'relation', 'subject']`` names none of fifty assertions."""
+    with pytest.raises(ValidationError) as excinfo:
+        loaded(_literal(metadata="x"))
+
+    message = str(excinfo.value)
+    assert "'rex'" in message
+    assert "'likes'" in message
+    assert "a row carrying" not in message
+    assert excinfo.value.context["subject"] == "rex"
+    assert excinfo.value.context["relation"] == "likes"
+
+
+@LOADERS
+def test_a_source_refusal_carries_the_entity_not_the_locator(loaded: Loaded) -> None:
+    """A locator's own ``id:`` was reported as the row's."""
+    with pytest.raises(ValidationError) as excinfo:
+        loaded(_entity(source={"source_id": 5, "id": 42}))
+
+    message = str(excinfo.value)
+    assert message.startswith("the `source:` of entity 'rex'")
+    assert excinfo.value.context["id"] == "rex"
+
+
+@LOADERS
+def test_a_materialization_refusal_carries_its_taxonomy(loaded: Loaded) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        loaded(_taxonomy(materialization={"struture": "copied"}))
+
+    assert excinfo.value.context["id"] == "kinds"
+    assert str(excinfo.value).startswith("the `materialization:` of taxonomy 'kinds'")
+
+
+@LOADERS
+def test_an_attribute_refusal_carries_no_row_id(loaded: Loaded) -> None:
+    """An attribute is named by its entity type and its name; an ``id`` of ``None`` is noise."""
+    with pytest.raises(ValidationError) as excinfo:
+        loaded(_document(entity_types=[{"id": "Breed", "attributes": [{"name": 5}]}]))
+
+    assert "id" not in excinfo.value.context
+    assert excinfo.value.context["entity_type"] == "Breed"
+
+
+@LOADERS
+def test_an_enum_refusal_names_its_row(loaded: Loaded) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        loaded(_relation_type(inference="sometimes"))
+
+    assert "'likes'" in str(excinfo.value)
+    assert excinfo.value.context["id"] == "likes"
+    assert excinfo.value.context["field"] == "inference"
+
+
+# --------------------------------------------------------------------------
+# An assertion id is an id
+# --------------------------------------------------------------------------
+
+
+@LOADERS
+def test_an_assertion_id_is_rendered_as_every_id_is(loaded: Loaded) -> None:
+    ontology = loaded(_assertion(id=5))
+
+    assert _answer(ontology.assertions.get("5")) is not None
+
+
+@LOADERS
+def test_an_empty_assertion_id_is_minted(loaded: Loaded) -> None:
+    ontology = loaded(_assertion(id=""))
+
+    (assertion,) = _answer(ontology.assertions.find(subject="rex"))
+    assert assertion.id == "rex-likes-rex"
+
+
+# --------------------------------------------------------------------------
+# A nested source's own keys
+# --------------------------------------------------------------------------
+
+
+@LOADERS
+def test_a_nested_spec_with_null_keys_reads_their_defaults(loaded: Loaded) -> None:
+    """``type: null`` minted entities typed ``'None'``; ``relation: null`` edges over ``'None'``."""
+    ontology = loaded(
+        _document(
+            entities=[],
+            sources=[
+                {
+                    "id": "areas",
+                    "kind": "nested",
+                    "type": None,
+                    "relation": None,
+                    "child_key": None,
+                    "name_key": None,
+                    "tree": {"name": "Root", "children": [{"name": "Leaf"}]},
+                }
+            ],
+        )
+    )
+
+    leaf = _answer(ontology.entities.get("root/leaf"))
+    assert leaf is not None
+    assert leaf.type == "areas"
+    (edge,) = _answer(ontology.assertions.find(subject="root/leaf"))
+    assert edge.relation == "isa"
+
+
+@LOADERS
+@pytest.mark.parametrize("key", ["type", "relation", "child_key", "name_key"])
+def test_a_nested_spec_key_of_the_wrong_shape_is_refused(loaded: Loaded, key: str) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        loaded(
+            _document(
+                entities=[],
+                sources=[{"id": "areas", "kind": "nested", key: ["x"], "tree": {"name": "Root"}}],
+            )
+        )
+
+    assert excinfo.value.context["field"] == key

@@ -71,12 +71,18 @@ runs on the base install.
 
 ### What each row reads
 
+Each section is a list of rows, and each row a mapping. A section keyed by id
+(`entities: {rex: {...}}`) is refused; write each row with its own `id:`.
 Every row is read for the keys below and no others. A key nothing reads is
 refused by name, because otherwise it would load and be discarded: `alias:`
 written for `aliases:` would add no alias and report nothing. Each value is
-checked for its shape, not converted into one. A key written as `null` reads
-as absent. Any refusal is a `ValidationError` naming the section, the row and
-the key.
+checked for its shape, not converted into one.
+
+**A key written as `null` reads as absent**, wherever it is written. An
+optional key then takes its default, a required key is missing and is refused
+as missing, and a whole section written `null` is an empty one. Any refusal
+is a `ValidationError` naming the section, the row and the key. An assertion
+row, which usually has no `id:`, is named by its subject and relation.
 
 The shapes the tables share:
 
@@ -88,23 +94,27 @@ The shapes the tables share:
 - **A flag** is `true` or `false`. `"no"` is refused rather than read as
   truthy.
 - **A mapping** is a mapping. A list of pairs is refused.
-- **A reference** (`isa`, `inverse_of`) names one id. A number names the id it
-  renders as, since ids are read the same way, so `isa: 100` names
-  `id: 100`.
+- **An id or a reference** names one id. That covers every `id`, and every
+  key that points at one: `isa`, `inverse_of`, an entity's `type`, an
+  assertion's `subject` and `relation`, a taxonomy's `relation`, each entry
+  of `domain` and `range`, and `{entity: …}`. A number names the id it
+  renders as, so `isa: 100` names `id: 100`. A list, a mapping or a boolean
+  is refused.
 
 | Section | Required | Optional |
 |---|---|---|
 | `entity_types:` | `id` | `name`, `description`, `aliases`, `metadata`, `attributes` (below), `isa` |
 | `relation_types:` | `id` | `name`, `description`, `aliases`, `metadata`, `domain`, `range`, `inverse_of`, `symmetric`, `transitive`, `inference` (`on_demand` or `materialized`) |
 | `entities:` | `id`, `type` | `name`, `description`, `aliases`, `metadata`, `source` |
-| `assertions:` | `subject`, `relation`, `object` | `id` (minted from the edge when absent), `metadata`, `polarity` (`asserted` or `negated`) |
+| `assertions:` | `subject`, `relation`, `object` | `id` (minted from the edge when absent or `""`), `metadata`, `polarity` (`asserted` or `negated`) |
 | `taxonomies:` | `id`, `relation` | `name`, `description`, `metadata`, `materialization` (`structure` and `content`, each `on_demand` or `materialized`) |
 
 Three of those values take a further shape:
 
-- **An `object:`** is a string naming an entity, a mapping `{entity: …}`, any
-  other scalar as a literal, or a literal mapping read for `value`, `type`,
-  `unit` and `metadata`. A literal's `type:` is a record field type, as an
+- **An `object:`** is a string naming an entity, a mapping `{entity: …}`, a
+  literal mapping read for `value`, `type`, `unit` and `metadata`, or any
+  other value — a number, a boolean, a list — as a literal whose type is
+  detected. A literal's `type:` is a record field type, as an
   attribute's `field_type:` is, and is `string` when absent.
   `{value: 3.5, type: number}` is refused, since `number` names no record type.
 - **A `source:`** reads `source_id`, `kind` (`record` when absent) and
@@ -114,8 +124,13 @@ Three of those values take a further shape:
   binds, and that door reads its keys (see
   [Taxonomies and how a tree is projected](#taxonomies-and-how-a-tree-is-projected)).
 
-`cardinality:`, `constraints:` and `condition:` are refused with a message of
-their own, because a later version reads them.
+`cardinality:`, `constraints:` and `condition:` on a `relation_types:` row,
+and `condition:` on an `assertions:` row, are refused with a message of their
+own, because a later version reads them. On any other row they are keys
+nothing reads, and are refused as such.
+
+`imports:` is a list of ontology ids. A bare string is refused, as an alias
+list's is.
 
 A **nested tree's** nodes are your data, so they have no closed key set. Their
 `aliases`, `description` and `metadata` are still read for their shape.

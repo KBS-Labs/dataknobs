@@ -1224,7 +1224,7 @@ def test_the_phase_2_refusal_names_the_row_it_is_about(door: Door) -> None:
 
 @DOORS
 def test_an_unknown_polarity_is_refused(door: Door) -> None:
-    """The coercion `_inference_mode` already had, on the enum a document gained.
+    """The coercion the inference mode already had, on the enum a document gained.
 
     A stray ``ValueError`` from the enum would escape a caller holding either
     door's documented ``Raises:``, which is the defect one shared reader for
