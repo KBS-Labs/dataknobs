@@ -338,9 +338,31 @@ assert entity.metadata["tags"] == ("hound",)
 assert entity.metadata["tags"] != ["hound"]    # a tuple never equals a list
 ```
 
-Two entities built from the same document still compare equal, and a
-[revision](#which-state-of-a-vocabulary-answered) is unaffected, because both
-sides are frozen the same way.
+Two entities built from the same document still compare equal, and two loads
+of one document still answer the same
+[revision](#which-state-of-a-vocabulary-answered), because both sides are frozen
+the same way.
+
+**Frozen is not JSON.** `json.dumps` takes a `dict` and a `list` and no other
+mapping or sequence, so `json.dumps(entity.metadata)` raises `TypeError`, as
+does dumping `dataclasses.asdict(entity)`, which keeps the mapping as it
+found it. `thaw_structure` gives back plain dicts, lists and sets, nested
+values included — `dict(entity.metadata)` thaws the top level only:
+
+```python
+import json
+
+from dataknobs_common import thaw_structure
+
+json.dumps(thaw_structure(entity.metadata))    # '{"tags": ["hound"]}'
+```
+
+**What frozen does not reach.** The containers are frozen; a leaf is held as
+given. A `bytearray` or an object of your own inside `metadata`, or a
+`Literal`'s `value`, can still change in place, and a revision digests what
+such a leaf held when the source was built. Keep leaves immutable — the
+ordinary case for anything read from YAML or JSON — or build a new entity
+when one changes.
 
 ## Variants of a form
 
@@ -475,7 +497,7 @@ split_qualified("mammals:beagle")           # QualifiedId(ontology_id=..., sourc
 vocabulary has without declaring them, and `DEFAULT_NESTED_RELATION` is the
 relation a nested declaration means when it names none. An entity type's own
 parent is `EntityType.isa` — a declared field, like `RelationType.inverse_of`,
-rather than a key in the open `metadata` dict.
+rather than a key in the open `metadata` mapping.
 
 A relation can be written as a bare string or as a `RelationType`;
 `relation_id` reduces either to the string, which is what every holder stores.

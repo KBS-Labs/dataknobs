@@ -9,6 +9,7 @@ each asserted against the alternative it is chosen over: it isolates where
 """
 
 import copy
+import json
 import pickle
 import threading
 import types
@@ -17,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from dataknobs_common import FrozenMapping, copy_structure, freeze_structure
+from dataknobs_common import FrozenMapping, copy_structure, freeze_structure, thaw_structure
 
 
 class TestContainersAreRebuilt:
@@ -214,8 +215,23 @@ class TestFrozenMapping:
 
     def test_it_equals_a_dict_with_the_same_items_from_either_side(self) -> None:
         assert FrozenMapping({"k": 1}) == {"k": 1}
+        # The reflected side: ``dict.__eq__`` answers NotImplemented for a
+        # non-dict, and Python then asks the mapping.
         assert FrozenMapping({"k": 1}) == {"k": 1}
         assert FrozenMapping({"k": 1}) != {"k": 2}
+        assert FrozenMapping({"k": 1}) != {"k": 2}
+
+    def test_it_equals_a_dict_holding_lists_only_once_those_are_frozen(self) -> None:
+        assert FrozenMapping({"t": [1]}) == {"t": (1,)}
+        assert FrozenMapping({"t": [1]}) != {"t": [1]}
+
+    def test_it_is_not_json_until_thawed(self) -> None:
+        frozen = FrozenMapping({"t": [1], "inner": {"k": 1}})
+        with pytest.raises(TypeError):
+            json.dumps(frozen)
+        with pytest.raises(TypeError):
+            json.dumps(dict(frozen))  # the nested mapping is still frozen
+        assert json.loads(json.dumps(thaw_structure(frozen))) == {"t": [1], "inner": {"k": 1}}
 
     def test_it_answers_hashable_honestly(self) -> None:
         frozen = FrozenMapping({"k": 1})
@@ -297,7 +313,64 @@ class TestFreezeStructure:
         with pytest.raises(ValueError, match=r"value\[1\]\['back'\] holds itself"):
             freeze_structure(source)
 
-    def test_a_shared_subtree_is_not_a_cycle(self) -> None:
+    def test_a_shared_subtree_is_not_a_cycle_and_stays_shared(self) -> None:
         shared = [1]
         frozen = freeze_structure({"a": shared, "b": shared})
         assert frozen == {"a": (1,), "b": (1,)}
+        assert frozen["a"] is frozen["b"]
+
+    def test_sharing_at_every_level_is_frozen_once_per_container(self) -> None:
+        """What YAML anchors produce: 2**64 paths to the leaf, 65 containers.
+
+        Frozen once per path, this would not finish; frozen once per
+        container, it is immediate.
+        """
+        nested: list[Any] = [1]
+        for _ in range(64):
+            nested = [nested, nested]
+        frozen = freeze_structure(nested)
+        assert frozen[0] is frozen[1]
+
+    def test_a_named_tuple_needing_a_rebuild_comes_back_a_plain_tuple(self) -> None:
+        from typing import NamedTuple
+
+        class Pair(NamedTuple):
+            left: Any
+            right: Any
+
+        kept = Pair(1, 2)
+        assert freeze_structure(kept) is kept
+        assert type(freeze_structure(Pair([1], 2))) is tuple
+
+
+class TestThawStructure:
+    """``freeze_structure``'s inverse."""
+
+    def test_frozen_containers_come_back_plain(self) -> None:
+        frozen = freeze_structure({"d": {"k": [1]}, "s": {2}, "t": (3,)})
+        thawed = thaw_structure(frozen)
+        assert thawed == {"d": {"k": [1]}, "s": {2}, "t": [3]}
+        assert type(thawed) is dict
+        assert type(thawed["d"]) is dict
+        assert type(thawed["s"]) is set
+
+    def test_the_result_is_new_even_for_a_plain_value(self) -> None:
+        source = {"k": [1]}
+        thawed = thaw_structure(source)
+        thawed["k"].append(2)
+        assert source == {"k": [1]}
+
+    def test_a_live_object_passes_through_by_identity(self) -> None:
+        lock = threading.Lock()
+        assert thaw_structure(freeze_structure({"lock": lock}))["lock"] is lock
+
+    def test_sharing_survives_a_round_trip(self) -> None:
+        shared = [1]
+        thawed = thaw_structure(freeze_structure({"a": shared, "b": shared}))
+        assert thawed["a"] is thawed["b"]
+
+    def test_a_mutable_value_that_holds_itself_terminates(self) -> None:
+        source: dict[str, Any] = {}
+        source["self"] = source
+        thawed = thaw_structure(source)
+        assert thawed["self"] is thawed

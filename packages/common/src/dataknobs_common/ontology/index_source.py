@@ -60,8 +60,8 @@ STREAM_BATCH_SIZE = 1000
 
 #: The ``Entity`` attributes ``fields`` may name.
 #:
-#: The three an entity carries text in: two strings, and ``aliases``, a list
-#: of surface forms. The list is not rendered as a value --- its ``str()`` is
+#: The three an entity carries text in: two strings, and ``aliases``, a tuple
+#: of surface forms. The tuple is not rendered as a value --- its ``str()`` is
 #: a Python repr --- but folded by :func:`~dataknobs_common.index.fold_forms`,
 #: so an entity's forms are embedded in its own row rather than in rows of
 #: their own that a store keyed on id collapses. Validated at construction

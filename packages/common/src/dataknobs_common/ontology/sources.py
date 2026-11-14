@@ -512,9 +512,11 @@ class _EntityIndex:
     hands, which is the arrangement the frozenset above exists to avoid.
 
     **The revision is digested here too, in the same construction**, so the
-    digest and the lookup maps describe one state of the entities. That state
-    is also the only one: an entity is frozen and the mapping is the index's
-    own copy, so nothing ``get()`` can return differs from what was digested.
+    digest and the lookup maps describe one state of the entities. No
+    container can move it afterwards: an entity is frozen, its collections
+    are, and the mapping is the index's own copy. A mutable *leaf* still can
+    -- a ``bytearray`` or an object of the caller's in ``metadata`` is held as
+    given -- and the digest records what it held here.
 
     **The mapping is the index's own.** Construction takes a copy of the one
     it was handed before building anything, so an entity the caller adds to
@@ -731,7 +733,9 @@ class MappingEntitySource(CapabilityMixin):
             TypeError: An entity holds a value no digest can identify, such
                 as a lambda in its ``metadata``. The message names the entity
                 and the field.
-            ValueError: An entity holds a container that holds itself.
+            ValueError: An entity holds a leaf that holds itself, such as an
+                object of the caller's in ``metadata``. A container that
+                holds itself is refused earlier, when the entity is built.
         """
         self._index = _EntityIndex(entities, normalizer or default_normalizer, version)
 
@@ -895,7 +899,9 @@ class AsyncMappingEntitySource(CapabilityMixin):
             TypeError: An entity holds a value no digest can identify, such
                 as a lambda in its ``metadata``. The message names the entity
                 and the field.
-            ValueError: An entity holds a container that holds itself.
+            ValueError: An entity holds a leaf that holds itself, such as an
+                object of the caller's in ``metadata``. A container that
+                holds itself is refused earlier, when the entity is built.
         """
         self._index = _EntityIndex(entities, normalizer or default_normalizer, version)
 

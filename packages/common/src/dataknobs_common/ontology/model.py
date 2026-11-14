@@ -33,6 +33,7 @@ from dataknobs_common.entity_resolution.values import (  # noqa: F401
     ResolutionRef,
     Scoring,
 )
+from dataknobs_common.entity_resolution.values import _held_as_tuple
 from dataknobs_common.fields import Field, FieldType
 
 # The *same* key parameter the structure axis takes, imported rather than
@@ -170,7 +171,9 @@ class AttributeDef:
     def __post_init__(self) -> None:
         """Hold ``enum_values`` as a tuple, whatever sequence it was handed as."""
         if self.enum_values is not None:
-            object.__setattr__(self, "enum_values", tuple(self.enum_values))
+            object.__setattr__(
+                self, "enum_values", _held_as_tuple(self.enum_values, "AttributeDef", "enum_values")
+            )
 
 
 @dataclass(frozen=True)
@@ -242,7 +245,9 @@ class Entity(Generic[K]):
         """
         if not self.name:
             object.__setattr__(self, "name", str(self.id))
-        object.__setattr__(self, "aliases", tuple(self.aliases))
+        object.__setattr__(
+            self, "aliases", _held_as_tuple(self.aliases, type(self).__name__, "aliases")
+        )
         object.__setattr__(self, "metadata", freeze_structure(self.metadata))
 
 
@@ -266,7 +271,7 @@ class EntityType(Entity[str]):
     **A declared field rather than a documented key in** :attr:`metadata`,
     which is where it was parked while nothing read it. The parking was
     defensible then and is not now, for a reason measured rather than
-    anticipated: ``metadata`` is an open dict a loader copies **wholesale**
+    anticipated: ``metadata`` is an open mapping a loader copies **wholesale**
     from the document, so while the parent lived in it a row could write one
     the loader's own check never saw -- that check reads the declared ``isa:``,
     and a parent written a level down inside ``metadata:`` reached the lattice
@@ -290,7 +295,9 @@ class EntityType(Entity[str]):
     def __post_init__(self) -> None:
         """Everything :class:`Entity` does, and hold ``attributes`` as a tuple."""
         super().__post_init__()
-        object.__setattr__(self, "attributes", tuple(self.attributes))
+        object.__setattr__(
+            self, "attributes", _held_as_tuple(self.attributes, "EntityType", "attributes")
+        )
 
 
 @dataclass(frozen=True)
@@ -314,6 +321,18 @@ class RelationType(Entity[str]):
 
     # Declared again, for :class:`EntityType`'s reason.
     __hash__ = None
+
+    def __post_init__(self) -> None:
+        """Everything :class:`Entity` does, and hold ``domain`` and ``range`` as frozensets.
+
+        Annotated as frozensets already; converted as well, so a set handed
+        at runtime is not held mutable on a frozen type. A ``str`` is refused
+        for the reason :class:`Entity` refuses one for ``aliases``.
+        """
+        super().__post_init__()
+        for name in ("domain", "range"):
+            held = _held_as_tuple(getattr(self, name), "RelationType", name)
+            object.__setattr__(self, name, frozenset(held))
 
 
 #: A relation id to resolve, or the definition itself.
@@ -473,7 +492,9 @@ class Assertion(Generic[K]):
         """
         object.__setattr__(self, "relation", relation_id(self.relation))
         object.__setattr__(self, "metadata", freeze_structure(self.metadata))
-        object.__setattr__(self, "derived_from", tuple(self.derived_from))
+        object.__setattr__(
+            self, "derived_from", _held_as_tuple(self.derived_from, "Assertion", "derived_from")
+        )
 
 
 class QualifiedId(NamedTuple):

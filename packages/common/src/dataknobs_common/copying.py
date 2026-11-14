@@ -1,17 +1,20 @@
 # SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
 # SPDX-License-Identifier: Apache-2.0
 
-"""Copy or freeze nested containers without duplicating what they hold.
+"""Copy, freeze or thaw nested containers without duplicating what they hold.
 
-Two functions over one walk, for the case that sits between ``dict(value)``
-and ``copy.deepcopy(value)``: the *structure* is rebuilt while the *values*
-stay whatever the source had.
+Three functions for the case that sits between ``dict(value)`` and
+``copy.deepcopy(value)``: the *structure* is rebuilt while the *values* stay
+whatever the source had. Each walks the containers it rebuilds and passes
+every other value through.
 
-* :func:`copy_structure` rebuilds it mutable, so a hand-out is the caller's
-  own to change.
-* :func:`freeze_structure` rebuilds it immutable, so a value held by
-  something that indexed it cannot be changed under that index. Its mappings
-  are :class:`FrozenMapping`.
+* :func:`copy_structure` rebuilds dicts and lists mutable, so a hand-out is
+  the caller's own to change.
+* :func:`freeze_structure` rebuilds every mapping, sequence and set
+  immutable, so a value held by something that indexed it cannot be changed
+  under that index. Its mappings are :class:`FrozenMapping`.
+* :func:`thaw_structure` is the inverse: plain dicts, lists and sets again,
+  for a caller who needs a frozen value as JSON, or to change a copy of it.
 
 See :func:`copy_structure` for when each of the three copies is right.
 """
@@ -21,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from typing import Any, TypeVar
 
-__all__ = ["FrozenMapping", "copy_structure", "freeze_structure"]
+__all__ = ["FrozenMapping", "copy_structure", "freeze_structure", "thaw_structure"]
 
 _KT = TypeVar("_KT")
 _VT_co = TypeVar("_VT_co", covariant=True)
@@ -140,9 +143,11 @@ class FrozenMapping(Mapping[_KT, _VT_co]):
 
     Built from any mapping, or from what ``dict()`` accepts. Construction
     runs :func:`freeze_structure` over every value, so a dict nested inside
-    becomes a ``FrozenMapping`` and a list a tuple: nothing reachable through
-    one can be changed in place, which is the property a value indexed at
-    construction needs.
+    becomes a ``FrozenMapping`` and a list a tuple: no container reachable
+    through one can be changed in place, which is the property a value
+    indexed at construction needs. A leaf that is itself mutable -- a
+    ``bytearray``, an object -- is held as given; see
+    :func:`freeze_structure`.
 
     **Why not** :class:`types.MappingProxyType`. A proxy is shallow -- the
     values under it stay writable -- and it cannot be pickled or
@@ -151,11 +156,23 @@ class FrozenMapping(Mapping[_KT, _VT_co]):
     does.
 
     **Compared as a mapping, and therefore unhashable.** It equals any
-    mapping with the same items, a plain ``dict`` included, so a type that
-    held a dict compares exactly as it did. Equality between mappings is not
-    something a hash over the items can agree with when the items are
+    mapping with the same items, a plain ``dict`` included. Its items are
+    frozen, so it equals a dict whose items are the same *frozen* values: a
+    dict holding no list compares as it did, and one holding ``[1]`` does
+    not, because the frozen side holds ``(1,)``. Equality between mappings is
+    not something a hash over the items can agree with when the items are
     unhashable, so ``__hash__`` is declared ``None`` and
-    :class:`collections.abc.Hashable` answers no rather than the call raising.
+    :class:`collections.abc.Hashable` answers no rather than the call
+    raising.
+
+    **Not JSON.** ``json.dumps`` serializes a ``dict`` and nothing else that
+    is a mapping. :func:`thaw_structure` gives one back, nested values
+    included -- ``dict(m)`` thaws the top level only.
+
+    **A subclass pickles as its own type but by the data alone**: unpickling
+    and ``copy.deepcopy`` rebuild it from the frozen items without calling
+    its ``__init__``, so state a subclass keeps beside those items is not
+    carried.
 
     Example:
         ```python
@@ -178,13 +195,16 @@ class FrozenMapping(Mapping[_KT, _VT_co]):
             ValueError: A container under ``items`` holds itself.
         """
         source = items if isinstance(items, Mapping) else dict(items)
-        self._data = {
-            key: _freeze(value, f"value[{key!r}]", set()) for key, value in source.items()
-        }
+        walk = _FreezeWalk()
+        self._data = {key: walk.freeze(value, f"value[{key!r}]") for key, value in source.items()}
 
     @classmethod
     def _adopt(cls, data: dict[Any, Any]) -> FrozenMapping[Any, Any]:
-        """Wrap ``data``, whose values are already frozen, without walking it again."""
+        """Wrap ``data``, whose values are already frozen, without walking it again.
+
+        Also what an unpickle calls, by this name -- see :meth:`__reduce__` --
+        so renaming it breaks every pickle already written.
+        """
         frozen: FrozenMapping[Any, Any] = cls.__new__(cls)
         frozen._data = data
         return frozen
@@ -213,8 +233,6 @@ FrozenMapping.__hash__ = None  # type: ignore[assignment]
 def freeze_structure(value: Any) -> Any:
     """Rebuild nested containers immutable; pass every other value through.
 
-    :func:`copy_structure`'s walk with immutable results:
-
     ======================== ==========================================
     Handed                   Returned
     ======================== ==========================================
@@ -224,22 +242,32 @@ def freeze_structure(value: Any) -> Any:
     anything else            the same object
     ======================== ==========================================
 
+    It reaches more than :func:`copy_structure`, which rebuilds dicts and
+    lists only: any ``Mapping``, any ``list`` or ``tuple`` -- subclasses
+    included, so a named tuple that needed rebuilding, or a ``list``
+    subclass, comes back a plain ``tuple`` -- and a ``set``. A container of
+    another kind, such as a ``deque`` or a ``bytearray``, is a leaf.
+
     **Leaves pass through, for** :func:`copy_structure`'s **reason**: a live
     object duplicated silently gives its owner a second one. So a mutable
-    object that is not one of those containers stays mutable, and this is a
-    freeze of the *structure* rather than of everything reachable.
+    leaf stays mutable, and this is a freeze of the *structure* rather than
+    of everything reachable.
 
     **An already-frozen value comes back as itself**: a ``FrozenMapping``
     (whose construction froze it), a ``frozenset``, and a tuple whose items
     are all already frozen. So freezing twice copies nothing.
 
+    **A subtree shared between two places is frozen once**, and the frozen
+    copy is shared the same way, so the walk is linear in the distinct
+    containers it meets. Without that, a structure sharing a subtree at each
+    level -- what YAML anchors produce -- would be expanded into real tuples
+    once per path to each leaf.
+
     **A cycle is refused, not reproduced.** This is where the walk departs
     from :func:`copy_structure`, whose memo rebuilds a self-referring
     structure the way ``copy.deepcopy`` does. A mutable copy can be made to
     hold itself; a tuple or a ``FrozenMapping`` cannot, because each is
-    complete before anything can hold it. A subtree merely *shared* between
-    two keys is frozen once per occurrence, which loses the sharing and
-    nothing else, since neither copy can change.
+    complete before anything can hold it.
 
     Args:
         value: The value to freeze. Any type.
@@ -261,35 +289,122 @@ def freeze_structure(value: Any) -> Any:
         assert frozen["schema"]["required"] == ("name",)
         ```
     """
-    return _freeze(value, "value", set())
+    return _FreezeWalk().freeze(value, "value")
 
 
-def _freeze(value: Any, path: str, active: set[int]) -> Any:
-    """:func:`freeze_structure`'s walk, carrying the path and the open containers.
+class _FreezeWalk:
+    """One :func:`freeze_structure` call's state.
 
-    ``active`` holds the ids of the containers *on the current path*, not of
-    every container seen, which is what tells a cycle from a shared subtree:
-    the ids are removed on the way back out. Holding each container on the
-    path keeps its id from being reused while it is there.
+    ``active`` holds the ids of the containers *on the current path*, which
+    is what tells a cycle from a shared subtree: an id is removed on the way
+    back out. ``done`` maps the id of each container already frozen to its
+    frozen copy, so a second path to it reuses the copy. ``keep`` holds every
+    container either one is keyed on, because an id is only unique among live
+    objects: a ``Mapping`` computing its values could hand out a temporary
+    whose id a later one reuses. The same reason ``copy_structure`` keeps its
+    sources alive.
     """
-    if isinstance(value, (FrozenMapping, frozenset)):
-        return value
-    if not isinstance(value, (Mapping, list, tuple, set)):
-        return value
-    marker = id(value)
-    if marker in active:
-        raise ValueError(f"{path} holds itself, so it cannot be frozen.")
-    active.add(marker)
-    try:
+
+    __slots__ = ("active", "done", "keep")
+
+    def __init__(self) -> None:
+        self.active: set[int] = set()
+        self.done: dict[int, Any] = {}
+        self.keep: list[Any] = []
+
+    def freeze(self, value: Any, path: str) -> Any:
+        if isinstance(value, (FrozenMapping, frozenset)):
+            return value
+        if not isinstance(value, (Mapping, list, tuple, set)):
+            return value
+        marker = id(value)
+        if marker in self.active:
+            raise ValueError(f"{path} holds itself, so it cannot be frozen.")
+        if marker in self.done:
+            return self.done[marker]
+        self.keep.append(value)
+        self.active.add(marker)
+        try:
+            frozen = self._rebuild(value, path)
+        finally:
+            self.active.discard(marker)
+        self.done[marker] = frozen
+        return frozen
+
+    def _rebuild(self, value: Any, path: str) -> Any:
         if isinstance(value, Mapping):
             return FrozenMapping._adopt(
-                {key: _freeze(item, f"{path}[{key!r}]", active) for key, item in value.items()}
+                {key: self.freeze(item, f"{path}[{key!r}]") for key, item in value.items()}
             )
         if isinstance(value, set):
             return frozenset(value)
-        items = tuple(_freeze(item, f"{path}[{index}]", active) for index, item in enumerate(value))
+        items = tuple(self.freeze(item, f"{path}[{index}]") for index, item in enumerate(value))
         if isinstance(value, tuple) and all(a is b for a, b in zip(items, value, strict=True)):
             return value
         return items
-    finally:
-        active.discard(marker)
+
+
+def thaw_structure(value: Any, seen: dict[int, Any] | None = None) -> Any:
+    """Rebuild nested containers as plain dicts, lists and sets.
+
+    The inverse of :func:`freeze_structure`, for the two things a frozen value
+    cannot do: be serialized by ``json`` -- which takes a ``dict`` and a
+    ``list`` and no other mapping or sequence -- and be changed. Every
+    ``Mapping`` becomes a ``dict``, every ``list`` or ``tuple`` a ``list``,
+    every ``set`` or ``frozenset`` a ``set``, and anything else passes
+    through for :func:`copy_structure`'s reason.
+
+    A tuple that was a tuple *before* it was frozen comes back a list too:
+    once frozen, nothing records which tuples were lists, and a list is what
+    serializes. A named tuple comes back a plain list.
+
+    **The result is always new**, so changing it never reaches the value
+    thawed. ``seen`` is :func:`copy_structure`'s memo, for its reasons: a
+    container reached twice is thawed once and shared the same way, and a
+    mutable value that holds itself terminates.
+
+    Args:
+        value: The value to thaw. Any type.
+        seen: Optional memo mapping ``id()`` to the result already built
+            for it, as :func:`copy_structure` takes.
+
+    Returns:
+        The value with its mappings, sequences and sets rebuilt as ``dict``,
+        ``list`` and ``set``, and every other value the original.
+
+    Example:
+        ```python
+        import json
+
+        from dataknobs_common import freeze_structure, thaw_structure
+
+        frozen = freeze_structure({"tags": ["hound"], "inner": {"k": 1}})
+        assert thaw_structure(frozen) == {"tags": ["hound"], "inner": {"k": 1}}
+        json.dumps(thaw_structure(frozen))   # json.dumps(frozen) would raise
+        ```
+    """
+    if seen is None:
+        seen = {}
+    marker = id(value)
+    if marker in seen:
+        return seen[marker]
+    if not isinstance(value, (Mapping, list, tuple, set, frozenset)):
+        return value
+    # Hold the source so its id cannot be reused while the memo lives; see
+    # ``copy_structure``.
+    seen.setdefault(id(seen), []).append(value)
+    if isinstance(value, Mapping):
+        thawed_dict: dict[Any, Any] = {}
+        seen[marker] = thawed_dict
+        for key, item in value.items():
+            thawed_dict[key] = thaw_structure(item, seen)
+        return thawed_dict
+    if isinstance(value, (set, frozenset)):
+        thawed_set = set(value)
+        seen[marker] = thawed_set
+        return thawed_set
+    thawed_list: list[Any] = []
+    seen[marker] = thawed_list
+    for item in value:
+        thawed_list.append(thaw_structure(item, seen))
+    return thawed_list

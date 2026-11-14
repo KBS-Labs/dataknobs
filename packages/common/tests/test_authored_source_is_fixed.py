@@ -280,6 +280,129 @@ def test_a_list_and_a_dict_are_coerced_and_compare_equal() -> None:
     assert from_lists == from_frozen
 
 
+# Each built from the runtime type a YAML row or a hand-written test passes,
+# so deleting a field's conversion fails its case. ``_instances()`` builds
+# with the immutable types and could not tell.
+_FROM_RUNTIME_TYPES = [
+    (
+        "Entity.aliases",
+        lambda: Entity(id="e", type="T", aliases=["a"]),  # type: ignore[arg-type]
+        lambda v: v.aliases,
+        tuple,
+    ),
+    (
+        "EntityType.attributes",
+        lambda: EntityType(id="T", attributes=[AttributeDef(name="n", value_type="string")]),  # type: ignore[arg-type]
+        lambda v: v.attributes,
+        tuple,
+    ),
+    (
+        "AttributeDef.enum_values",
+        lambda: AttributeDef(name="n", value_type="enum", enum_values=["s", "m"]),  # type: ignore[arg-type]
+        lambda v: v.enum_values,
+        tuple,
+    ),
+    (
+        "RelationType.domain",
+        lambda: RelationType(id="r", domain={"A"}),  # type: ignore[arg-type]
+        lambda v: v.domain,
+        frozenset,
+    ),
+    (
+        "RelationType.range",
+        lambda: RelationType(id="r", range=["B"]),  # type: ignore[arg-type]
+        lambda v: v.range,
+        frozenset,
+    ),
+    (
+        "Assertion.derived_from",
+        lambda: Assertion(
+            id="a",
+            subject="s",
+            relation="r",
+            object=EntityRef("o"),
+            derived_from=["x"],  # type: ignore[arg-type]
+        ),
+        lambda v: v.derived_from,
+        tuple,
+    ),
+    (
+        "ResolutionRef.runners_up",
+        lambda: replace(_resolution_ref(), runners_up=[]),  # type: ignore[arg-type]
+        lambda v: v.runners_up,
+        tuple,
+    ),
+    (
+        "SourceRef.locator",
+        lambda: SourceRef(source_id="s", kind="k", locator={"row": [1]}),  # type: ignore[arg-type]
+        lambda v: v.locator,
+        FrozenMapping,
+    ),
+    (
+        "Literal.metadata",
+        lambda: Literal(value=1, type=FieldType.INTEGER, metadata={"k": [1]}),  # type: ignore[arg-type]
+        lambda v: v.metadata,
+        FrozenMapping,
+    ),
+    (
+        "Assertion.metadata",
+        lambda: Assertion(
+            id="a", subject="s", relation="r", object=EntityRef("o"), metadata={"k": 1}
+        ),  # type: ignore[arg-type]
+        lambda v: v.metadata,
+        FrozenMapping,
+    ),
+    (
+        "ResolutionRef.corpus",
+        lambda: replace(_resolution_ref(), corpus={"k": [1]}),  # type: ignore[arg-type]
+        lambda v: v.corpus,
+        FrozenMapping,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("build", "reach", "held"),
+    [case[1:] for case in _FROM_RUNTIME_TYPES],
+    ids=[case[0] for case in _FROM_RUNTIME_TYPES],
+)
+def test_every_collection_field_converts_what_it_is_handed(
+    build: Any, reach: Any, held: type
+) -> None:
+    assert type(reach(build())) is held
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: Entity(id="e", type="T", aliases="Beagle"),  # type: ignore[arg-type]
+        lambda: EntityType(id="T", aliases="Breed"),  # type: ignore[arg-type]
+        lambda: AttributeDef(name="n", value_type="enum", enum_values="sm"),  # type: ignore[arg-type]
+        lambda: RelationType(id="r", domain="Breed"),  # type: ignore[arg-type]
+        lambda: Assertion(
+            id="a",
+            subject="s",
+            relation="r",
+            object=EntityRef("o"),
+            derived_from="a1",  # type: ignore[arg-type]
+        ),
+        lambda: replace(_resolution_ref(), runners_up=b"x"),  # type: ignore[arg-type]
+    ],
+    ids=[
+        "Entity.aliases",
+        "EntityType.aliases",
+        "AttributeDef.enum_values",
+        "RelationType.domain",
+        "Assertion.derived_from",
+        "ResolutionRef.runners_up",
+    ],
+)
+def test_text_handed_for_a_sequence_is_refused_not_split(build: Any) -> None:
+    """``tuple("Beagle")`` is six letters; the field is named instead."""
+    with pytest.raises(TypeError, match="one character at a time"):
+        build()
+
+
 def test_a_metadata_list_reads_back_as_a_tuple() -> None:
     """The deep freeze's one visible cost, stated in the guide and changelog."""
     entity = Entity(id="e", type="T", metadata={"tags": ["a"]})
