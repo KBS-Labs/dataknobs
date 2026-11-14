@@ -3,6 +3,8 @@
 
 """Folding a surface form for lookup, and locating one inside a string.
 
+The scan half of :mod:`dataknobs_common.text`; its names are re-exported there.
+
 One fold and two spans, and the module exists because of *who* needs them
 rather than how much of it there is. An entity source folds the forms it
 indexes; a match signal folds the query it is handed, and a **scanning** match
@@ -33,6 +35,10 @@ here is a character that is neither alphanumeric nor whitespace, so an
 extension never crosses a word and never crosses a space.
 
 Dependency-free on purpose: it imports nothing, so anything may import it.
+The package's other half, :mod:`dataknobs_common.text.variants`, imports
+:mod:`dataknobs_common.registry` and :mod:`dataknobs_common.exceptions`, which
+import only the standard library -- so importing the package still opens no
+edge back into the subpackages that import it.
 """
 
 from __future__ import annotations

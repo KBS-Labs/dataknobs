@@ -284,6 +284,17 @@ print(result3)  # "cats and dogs"
 ## Advanced Functions
 
 ### get_lexical_variations()
+
+!!! tip "For a vocabulary's variants, prefer `dataknobs_common.text`"
+    `get_lexical_variations` keeps its released output, and splits camelCase
+    with `dataknobs_common.text`'s `camelcase` rule. New code making variants
+    of a vocabulary's forms should use that module's generator instead: named
+    rules that compose in order, English defaults that inflect the last word
+    rather than appending `s`, and an admission step that refuses a variant
+    which would make two entities collide. An ontology document opts in with
+    a `variants:` section; see
+    [Variants of a form](https://kbs-labs.github.io/dataknobs/packages/common/ontology/#variants-of-a-form).
+
 ```python
 def get_lexical_variations(
     text: str,

@@ -1025,6 +1025,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`OntologyRegistry.load` reads an ontology's `variants:` section**, as
+  `dataknobs_common`'s loaders do: the variants of an authored vocabulary are
+  admitted with the registry's fold and bound as aliases, and the report is on
+  the loaded vocabulary's `variants`. A reload diffs the entities as authored,
+  so changing the rules publishes no change to the vocabulary. A document
+  declaring `variants:` over a live source is refused: a live table is filled
+  by its owner, who can write `admit`'s admitted forms into it. This package
+  now needs the `dataknobs-common` release that ships the section.
+
 - **`creates_table` and `opens_read_only` on the SQL backend configs.** Each
   reads `auto_create_table` or `read_only` as the bool `__post_init__`
   resolved it to; the fields themselves stay `bool | None`, so that leaving

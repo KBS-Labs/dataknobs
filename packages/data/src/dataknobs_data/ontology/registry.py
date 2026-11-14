@@ -43,6 +43,7 @@ from dataknobs_common.ontology import (
     RESOLVER_SECTION_KEYS,
     OntologyConfig,
     OntologySupport,
+    apply_variants,
     assemble_async_ontology,
     async_build_resolver,
     build_ontology,
@@ -140,6 +141,7 @@ if TYPE_CHECKING:
     from dataknobs_common.events import EventBus
     from dataknobs_common.hierarchy import AsyncHierarchy
     from dataknobs_common.ontology import OntologyParts, SourceDescription
+    from dataknobs_common.text import Variants
 
     from dataknobs_data.database import AsyncDatabase
     from dataknobs_data.query import Filter
@@ -1009,6 +1011,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             assertions=AsyncMappingAssertionSource(parts.declared_assertions),
             describes=bound.describes,
             structures=await self._bind_taxonomies(parts, bound.live),
+            variants=bound.variants,
         )
         now_populated = await self._axis_populations(ontology)
         # After the vocabulary is assembled, because the index is over it:
@@ -1094,10 +1097,19 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                     context={"source_id": spec.get("id"), "kind": kind},
                 )
         if not live:
-            authored = AsyncMappingEntitySource(
-                parts.declared_entities, normalizer=self._normalizer
+            entities, variants = apply_variants(parts, normalizer=self._normalizer)
+            authored = AsyncMappingEntitySource(entities, normalizer=self._normalizer)
+            return _BoundSources(authored, (authored.describe(),), {}, variants)
+        if parts.variant_rules is not None:
+            raise ValidationError(
+                f"ontology {parts.id!r} declares `variants:` over a live source "
+                f"({str(live[0].get('id', ''))!r}). Variants are admitted where an "
+                f"authored vocabulary is bound, over every form it declares; a "
+                f"live table is filled by its owner, who can write "
+                f"`dataknobs_common.text.admit`'s admitted forms into it and "
+                f"re-declare `surface_forms.longest_form_tokens:` to match",
+                context={"ontology_id": parts.id, "source_id": live[0].get("id")},
             )
-            return _BoundSources(authored, (authored.describe(),), {})
         if parts.declared_entities:
             raise ValidationError(
                 f"ontology {parts.id!r} declares both an authored vocabulary and "
@@ -2445,6 +2457,10 @@ class _BoundSources(NamedTuple):
     entities: Any
     describes: tuple[SourceDescription, ...]
     live: Mapping[str, _LiveBinding]
+    #: What :func:`~dataknobs_common.ontology.apply_variants` reported for an
+    #: authored vocabulary; ``None`` with no ``variants:`` section, and always
+    #: for a live source, which refuses the section.
+    variants: Variants[str] | None = None
 
 
 class _StoreClaim(NamedTuple):

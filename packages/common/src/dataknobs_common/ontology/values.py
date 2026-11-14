@@ -36,6 +36,8 @@ from dataknobs_common.ontology.taxonomy import (
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from dataknobs_common.text.variants import Rule, Variants
+
     from dataknobs_common.hierarchy import AsyncHierarchy, Hierarchy
     from dataknobs_common.ontology.model import (
         Assertion,
@@ -338,12 +340,13 @@ def _localize(ontology_id: str, qualified_id: str) -> str:
 class OntologyParts:
     """A validated config, mapped onto values, with no source bound yet.
 
-    Six of :class:`Ontology`'s eleven fields verbatim, plus the declared rows
-    and the still-unbound ``sources:`` and ``taxonomies:`` specs. The five it
-    omits are all downstream of binding: the two sources, the descriptions a
-    door derives from them, the structure axes a door binds or copies once the
-    backings exist, and the codec a door chooses -- ``StrCodec`` for a
-    document, whose ids are the strings its author typed.
+    Six of :class:`Ontology`'s twelve fields verbatim, plus the declared rows,
+    the still-unbound ``sources:`` and ``taxonomies:`` specs, and the
+    ``variants:`` rules. The six it omits are all downstream of binding: the
+    two sources, the descriptions a door derives from them, the structure axes
+    a door binds or copies once the backings exist, the codec a door chooses
+    -- ``StrCodec`` for a document, whose ids are the strings its author typed
+    -- and the variants report, which needs the fold the door binds with.
 
     Returning this rather than an ontology is what lets one core serve every
     door: a core that inspected the config to decide which flavour to build
@@ -374,6 +377,17 @@ class OntologyParts:
     #: :attr:`taxonomies` above is what the rows *mean*, and these are the
     #: rows.
     taxonomy_specs: tuple[Mapping[str, Any], ...]
+
+    #: The rules the ``variants:`` section names, built and validated, in the
+    #: order they compose -- or ``None`` where the document has no such
+    #: section, which is the opt-in: no section, no variants. **Rules, not
+    #: variants**, because admission needs the index's fold and this value is
+    #: fold-free; each door applies them with its own, through
+    #: :func:`~dataknobs_common.ontology.variants.apply_variants`.
+    #: :attr:`declared_entities` stays as authored either way, so a registry
+    #: diffing two loads' parts reports a change in the vocabulary and never a
+    #: change in what the rules made.
+    variant_rules: tuple[Rule, ...] | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -448,6 +462,15 @@ class Ontology(Generic[K]):
     #: what to resolve against, so it travels even though nothing here spends
     #: it.
     imports: tuple[str, ...] = ()
+
+    #: What the ``variants:`` section admitted and refused, as
+    #: :func:`~dataknobs_common.text.admit` reports it -- the admitted forms are
+    #: already among the entities' aliases in :attr:`entities`. ``None`` where
+    #: the document has no ``variants:`` section, so a vocabulary that asked for
+    #: none is told apart from one whose rules made nothing. Carried rather than
+    #: only logged because a refusal is the rules working, and a caller deciding
+    #: whether to add a form by hand needs to read which ones were refused.
+    variants: Variants[K] | None = None
 
     def entity(self, entity_id: K) -> Entity[K] | None:
         """The entity with this id, by way of :attr:`entities`.
@@ -656,7 +679,7 @@ class Ontology(Generic[K]):
 
 @dataclass(frozen=True, eq=False)
 class AsyncOntology(Generic[K]):
-    """The same eleven fields, with asynchronous backings.
+    """The same twelve fields, with asynchronous backings.
 
     ``entities`` is an :class:`~dataknobs_common.ontology.sources.AsyncEntitySource`
     and ``assertions`` an
@@ -690,6 +713,9 @@ class AsyncOntology(Generic[K]):
 
     #: :attr:`Ontology.imports`, unflavoured -- a list of ids awaits nothing.
     imports: tuple[str, ...] = ()
+
+    #: :attr:`Ontology.variants`, unflavoured: a report awaits nothing.
+    variants: Variants[K] | None = None
 
     async def entity(self, entity_id: K) -> Entity[K] | None:
         """The entity with this id, by way of :attr:`entities`."""

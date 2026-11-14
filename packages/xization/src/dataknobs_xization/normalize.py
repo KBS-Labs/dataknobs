@@ -5,12 +5,20 @@
 
 Provides functions and regex patterns for normalizing text including
 whitespace handling, camelCase splitting, and symbol processing.
+
+For the variants of a vocabulary's forms, new code should use
+:mod:`dataknobs_common.text`'s variant generator: named, composable rules, and
+an admission step that refuses a variant which would make two entities
+collide. :func:`get_lexical_variations` keeps its released output and splits
+camelCase with that module's ``camelcase`` rule.
 """
 
 import math
 import re
 from itertools import product
 from typing import Sequence, Set
+
+from dataknobs_common.text import camelcase
 
 # squash whitespace: to collapse consecutive whitespace to a single space by
 #    x.sub(' ', text)
@@ -72,9 +80,12 @@ AMPERSAND_RE = re.compile(r"\s*\&\s*")
 
 
 def expand_camelcase_fn(text: str) -> str:
-    """Expand both "lU" and "UUl" camelcasing to "l U" and "U Ul" """
-    text = CAMELCASE_LU_RE.sub(r"\1 \2", text)
-    return CAMELCASE_UL_RE.sub(r"\1 \2", text)
+    """Expand both "lU" and "UUl" camelcasing to "l U" and "U Ul".
+
+    :func:`dataknobs_common.text.camelcase`, which this module's two
+    ``CAMELCASE_*_RE`` patterns describe.
+    """
+    return camelcase(text)[0]
 
 
 def drop_non_embedded_symbols_fn(text: str, repl: str = "") -> str:
@@ -118,7 +129,8 @@ def get_hyphen_slash_expansions_fn(
         do_split: True to add split tokens separately.
         min_split_token_len: If any of the split tokens fail
             to meet the min token length, don't add any of the splits.
-        hyphen_slash_re: The regex to identify hyphen/slash to expand.
+        hyphen_slash_re: The regex to identify hyphen/slash to expand. Both
+            the substitutions and the split are made where it matches.
 
     Returns:
         The set of text variations.
@@ -127,7 +139,7 @@ def get_hyphen_slash_expansions_fn(
     if subs is not None and len(subs) > 0:
         # create variant with all <s>'s
         for s in subs:
-            variations.add(HYPHEN_SLASH_RE.sub(s, text))
+            variations.add(hyphen_slash_re.sub(s, text))
     if do_split:
         # add each word separately
         tokens = set(hyphen_slash_re.split(text))
@@ -188,6 +200,13 @@ def get_lexical_variations(
 
     Returns:
         The set of all text variations.
+
+    Note:
+        New code should prefer :mod:`dataknobs_common.text`'s variant
+        generator. This function's output is kept as released: each variation
+        is made from ``text`` alone, both the hyphen and the slash expansion
+        also act at every space between two words, and the plural appends
+        ``s`` to every variation made.
     """
     variations = {text} if include_self else set()
     if expand_camelcase:
@@ -208,6 +227,8 @@ def get_lexical_variations(
                 add_self=False,
                 do_split=do_hyphen_split,
                 min_split_token_len=min_hyphen_split_token_len,
+                # The combined pattern, not HYPHEN_ONLY_RE: released output.
+                hyphen_slash_re=HYPHEN_SLASH_RE,
             )
         )
     if (do_slash_expansion and slash_subs is not None and len(slash_subs) > 0) or do_slash_split:
@@ -218,6 +239,8 @@ def get_lexical_variations(
                 add_self=False,
                 do_split=do_slash_split,
                 min_split_token_len=min_slash_split_token_len,
+                # The combined pattern, not SLASH_ONLY_RE: released output.
+                hyphen_slash_re=HYPHEN_SLASH_RE,
             )
         )
     if drop_parentheticals:
@@ -225,7 +248,8 @@ def get_lexical_variations(
     if expand_ampersands:
         variations.add(expand_ampersand_fn(text))
     if add_eng_plurals:
-        # TODO: Use a better pluralizer
+        # Released output: `s` on every variation. `dataknobs_common.text`'s
+        # `inflect` rule is the pluralizer for new code.
         plurals = {f"{v}s" for v in variations}
         variations.update(plurals)
     return variations

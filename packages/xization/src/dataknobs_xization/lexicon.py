@@ -12,7 +12,8 @@ and pattern matching in text with support for variations and fuzzy matching.
     use ``ScanningSignal`` (from
     ``dataknobs_common.entity_resolution``) over an ``EntitySource`` (from
     ``dataknobs_common.ontology``), and declare each variation as a
-    form of its entity.
+    form of its entity. An ontology document's ``variants:`` section
+    generates them, with the rules in ``dataknobs_common.text``.
 
     Two defects in its matching are known and will not be fixed:
 

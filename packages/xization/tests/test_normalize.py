@@ -65,6 +65,39 @@ def test_get_hyphen_slash_expansions_fn():
     }
 
 
+def test_the_expansion_substitutes_at_the_pattern_it_is_given():
+    """The substitution reads ``hyphen_slash_re``, as the split always did.
+
+    It substituted at the module's combined pattern whatever was passed, so a
+    slash-only pattern still wrote a substitute at every hyphen and every space
+    between words: ``a-b c`` came back as ``a or b or c``, which holds no
+    slash at all.
+    """
+    f = dk_norm.get_hyphen_slash_expansions_fn
+
+    assert f(
+        "a-b c",
+        subs=(" or ",),
+        add_self=False,
+        do_split=False,
+        hyphen_slash_re=dk_norm.SLASH_ONLY_RE,
+    ) == {"a-b c"}
+    assert f(
+        "a/b c",
+        subs=("",),
+        add_self=False,
+        do_split=False,
+        hyphen_slash_re=dk_norm.HYPHEN_ONLY_RE,
+    ) == {"a/bc"}
+
+
+def test_the_expansion_without_a_pattern_is_unchanged():
+    """With no pattern passed, both halves use the combined one, as before."""
+    f = dk_norm.get_hyphen_slash_expansions_fn
+
+    assert f("a-b c/d", subs=(" or ",), add_self=False, do_split=False) == {"a or b or c or d"}
+
+
 def test_drop_parentheticals_fn():
     f = dk_norm.drop_parentheticals_fn
     assert f("a (bc) d") == "a  d"
