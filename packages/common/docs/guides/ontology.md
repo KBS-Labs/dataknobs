@@ -714,7 +714,7 @@ document = {
     "entity_types": [{"id": "product"}],
     "entities": [{"id": "p-1", "type": "product", "name": "PowerPoint"}],
 }
-recorded = load_ontology(document).entities.revision()   # '2.3@02984b31…'
+recorded = load_ontology(document).entities.revision()   # '2.3@3c42cd2a…'
 
 # Later: the same document, now admitting camelCase variants.
 current = load_ontology({**document, "variants": ["camelcase"]}).entities.revision()

@@ -341,6 +341,9 @@ def client_for(cfg: ServiceConfig) -> Client:
   it can key something that outlives one.
 - **A credential does not appear in it.** A digest of a guessable one can
   still be brute-forced, so it is no place to publish one.
+- **Its cost follows the distinct containers the fields hold**, not the paths
+  to them. A subtree held in several places, as a YAML anchor builds, is
+  digested once, and digests as an equal copy of it would.
 
 It follows field values, which is what the generated equality compares. A
 config whose `__eq__` is written by hand, or that compares by identity under
@@ -354,8 +357,10 @@ functions by import path. A value nothing identifies, such as a lambda, a bound
 method, a live client, or an instance of a class defined inside a function, is
 refused with `TypeError` naming the field, because two such values could share
 a key and differ. So is calling `fingerprint()` on a config whose own class is
-defined inside a function. NaN, being unequal to itself, and a container that
-holds itself are refused with `ValueError`.
+defined inside a function. NaN, being unequal to itself, a container that
+holds itself, and a `_fingerprint_value` whose answer asks it about the same
+value again are refused with `ValueError`. An answer handing the value to
+another config's hook is followed: that is a chain, not a loop.
 
 Two extension points. `_FINGERPRINT_EXCLUDE` leaves fields out: name only
 fields that do not decide what is built from the config, since two configs
@@ -379,7 +384,9 @@ class GatewayConfig(StructuredConfig):
 What `_fingerprint_value` returns is tagged as its answer, with the value's
 type when an import reaches it, so an endpoint encoded as its URL does not share
 a key with that URL held as a string. It is encoded without consulting
-`_fingerprint_value` again.
+`_fingerprint_value` again. The answer may depend only on the value: a
+shared container is read once, so the answer given where a value first occurs
+stands wherever else it occurs. `path` is there for the error message.
 
 ### `accepts(key)` (classmethod)
 

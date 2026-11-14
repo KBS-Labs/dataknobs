@@ -796,16 +796,15 @@ def _encode_path(value: pathlib.PurePath) -> Any:
     return {"path": ["posix", str(value)]}
 
 
-def _fingerprint_encode(
-    owner: StructuredConfig | None,
-    value: Any,
-    path: str,
-    *,
-    hook: bool = True,
-    active: frozenset[int] = frozenset(),
-    nan: bool = False,
-) -> Any:
-    """Encode ``value`` as JSON that two values share only if they are equal.
+def _is_container(value: Any) -> bool:
+    """Whether ``value`` holds members, so it can be shared and can hold itself."""
+    return isinstance(value, (list, tuple, set, frozenset, Mapping)) or (
+        dataclasses.is_dataclass(value) and not isinstance(value, type)
+    )
+
+
+class _EncodeWalk:
+    """One digest's walk: an encoding that two values share only if they are equal.
 
     Strings and lists stay as JSON has them, and a number is its exact value.
     Everything else becomes an object with one tagged key, so no two kinds can
@@ -814,79 +813,175 @@ def _fingerprint_encode(
     its type and value, a type or a module-level function its import path, a
     date, path, UUID or byte string the value it compares by.
 
-    Anything else goes to ``owner._fingerprint_value``, and what that returns
-    is tagged as its answer and encoded with ``hook`` off all the way down, so
-    the hook is consulted once per value. With no ``owner`` there is no hook,
-    and anything else is refused. ``nan`` tags NaN rather than refusing it;
-    see :func:`_encode_number`. A type nothing can import is
-    anything else, since its name could be another type's. ``active`` holds
-    the containers being encoded, so one holding itself is refused rather
-    than followed for ever.
+    **A tree hash.** A container stands inside its parent as
+    ``{"node": <digest of its own encoding>}``, so the text hashed for any
+    container is its own members, never a subtree spelled out again. ``done``
+    maps each container already encoded to its node, so a container reached
+    by a second path -- what a YAML anchor builds -- is read once, and the
+    work follows the distinct containers a value holds rather than the paths
+    to them. A node is a function of the container's value, so a shared
+    subtree and an equal copy of it digest alike.
+
+    ``done`` is keyed on the owner and the hook flag too, because those are
+    what can make one value encode two ways in a walk: a nested config owns
+    its own fields, and a hook's answer is encoded with the hook off. It is
+    not keyed on the path, so a hook's answer is reused wherever its value
+    occurs; see :meth:`StructuredConfig._fingerprint_value`.
+
+    ``keep`` holds every container ``done`` is keyed on, because an ``id`` is
+    unique only among live objects: a hook's answer is garbage once encoded,
+    and a later answer taking its ``id`` would otherwise be handed its node --
+    a wrong digest, silently. ``active`` holds the ids on the current path, so
+    a value that holds itself is refused rather than followed for ever, while
+    a container that is merely shared is not. ``asked`` does the same for the
+    hook; see :meth:`_hooked`.
+
+    Anything not encoded by value goes to ``owner._fingerprint_value``, and
+    what that returns is tagged as its answer and encoded with the hook off,
+    so the hook is consulted once per value. With no ``owner`` there is no
+    hook, and anything else is refused. ``nan`` tags NaN rather than refusing
+    it; see :func:`_encode_number`. A type nothing can import is anything
+    else, since its name could be another type's.
     """
 
-    def inner(item: Any, at: str) -> Any:
-        return _fingerprint_encode(owner, item, at, hook=hook, active=active | {id(value)}, nan=nan)
+    __slots__ = ("active", "asked", "done", "keep", "nan")
 
-    if value is None or isinstance(value, str):
-        return value
-    if isinstance(value, _NUMBER_TYPES):
-        return _encode_number(value, path, nan=nan)
-    if isinstance(value, (list, tuple, set, frozenset, Mapping)) or (
-        dataclasses.is_dataclass(value) and not isinstance(value, type)
-    ):
-        if id(value) in active:
+    def __init__(self, *, nan: bool) -> None:
+        self.nan = nan
+        self.active: set[int] = set()
+        self.asked: set[tuple[int, type]] = set()
+        self.done: dict[tuple[int, int, bool], dict[str, str]] = {}
+        self.keep: list[Any] = []
+
+    def digest(self, value: Any, path: str) -> str:
+        """The digest of ``value`` as a root: its own node, when it is a container."""
+        encoded = self.encode(None, value, path, hook=False)
+        if _is_container(value):
+            node: str = encoded["node"]
+            return node
+        return _digest(encoded)
+
+    def encode(self, owner: StructuredConfig | None, value: Any, path: str, *, hook: bool) -> Any:
+        if value is None or isinstance(value, str):
+            return value
+        if isinstance(value, _NUMBER_TYPES):
+            return _encode_number(value, path, nan=self.nan)
+        if not _is_container(value):
+            return self._body(owner, value, path, hook=hook)
+        marker = id(value)
+        if marker in self.active:
             raise ValueError(f"{path} holds itself, so it has no finite encoding.")
-    named = _import_path(type(value))
-    if isinstance(value, Enum) and named is not None:
-        return {"enum": [named, inner(value.value, path)]}
-    if isinstance(value, StructuredConfig) and named is not None:
-        return {"config": [named, value._fingerprint_fields(path, active | {id(value)}, nan=nan)]}
-    if dataclasses.is_dataclass(value) and not isinstance(value, type) and named is not None:
-        fields = {
-            f.name: inner(getattr(value, f.name), f"{path}.{f.name}")
-            for f in dataclasses.fields(value)
-            if f.compare
-        }
-        return {"dataclass": [named, fields]}
-    if isinstance(value, Mapping):
-        pairs = [[inner(k, f"{path}[{k!r}]"), inner(v, f"{path}[{k!r}]")] for k, v in value.items()]
-        return {"map": sorted(pairs, key=lambda pair: _sort_key(pair[0]))}
-    if isinstance(value, list):
-        return [inner(v, f"{path}[{i}]") for i, v in enumerate(value)]
-    if isinstance(value, tuple):
-        return {"tuple": [inner(v, f"{path}[{i}]") for i, v in enumerate(value)]}
-    if isinstance(value, (set, frozenset)):
-        return {"set": sorted((inner(v, f"{path}{{...}}") for v in value), key=_sort_key)}
-    if isinstance(value, (datetime.date, datetime.time, datetime.timedelta)):
-        return _encode_temporal(value)
-    if isinstance(value, pathlib.PurePath):
-        return _encode_path(value)
-    if isinstance(value, uuid.UUID):
-        return {"uuid": value.hex}
-    if isinstance(value, (bytes, bytearray, memoryview)):
-        return {"bytes": bytes(value).hex()}
-    if isinstance(value, type) or inspect.isfunction(value):
-        ref = _import_path(value)
-        if ref is not None:
-            return {"ref": ref}
-    if hook and owner is not None:
-        answered = owner._fingerprint_value(value, path)
-        return {
-            "custom": [
-                named,
-                _fingerprint_encode(owner, answered, path, hook=False, active=active, nan=nan),
+        key = (marker, id(owner), hook)
+        node = self.done.get(key)
+        if node is not None:
+            return node
+        self.keep.append(value)
+        self.active.add(marker)
+        try:
+            body = self._body(owner, value, path, hook=hook)
+        finally:
+            self.active.discard(marker)
+        node = {"node": _digest(body)}
+        self.done[key] = node
+        return node
+
+    def _body(self, owner: StructuredConfig | None, value: Any, path: str, *, hook: bool) -> Any:
+        """``value``'s own encoding, its member containers standing as nodes."""
+        named = _import_path(type(value))
+        if isinstance(value, Enum) and named is not None:
+            return {"enum": [named, self.encode(owner, value.value, path, hook=hook)]}
+        if isinstance(value, StructuredConfig) and named is not None:
+            return {"config": [named, value._fingerprint_fields(self, path)]}
+        if dataclasses.is_dataclass(value) and not isinstance(value, type) and named is not None:
+            fields = {
+                f.name: self.encode(owner, getattr(value, f.name), f"{path}.{f.name}", hook=hook)
+                for f in dataclasses.fields(value)
+                if f.compare
+            }
+            return {"dataclass": [named, fields]}
+        if isinstance(value, Mapping):
+            pairs = [
+                [
+                    self.encode(owner, k, f"{path}[{k!r}]", hook=hook),
+                    self.encode(owner, v, f"{path}[{k!r}]", hook=hook),
+                ]
+                for k, v in value.items()
             ]
-        }
-    remedy = (
-        "Leave the field out with _FINGERPRINT_EXCLUDE, or encode it by overriding "
-        "_fingerprint_value."
-        if owner is not None
-        else "Hold a value that identifies it instead, such as a name or an import path."
-    )
-    raise TypeError(
-        f"{path} holds {type(value).__name__} {value!r}, which a fingerprint cannot "
-        f"identify: it has no import path and no value text. {remedy}"
-    )
+            return {"map": sorted(pairs, key=lambda pair: _sort_key(pair[0]))}
+        if isinstance(value, list):
+            return [self.encode(owner, v, f"{path}[{i}]", hook=hook) for i, v in enumerate(value)]
+        if isinstance(value, tuple):
+            return {
+                "tuple": [
+                    self.encode(owner, v, f"{path}[{i}]", hook=hook) for i, v in enumerate(value)
+                ]
+            }
+        if isinstance(value, (set, frozenset)):
+            return {
+                "set": sorted(
+                    (self.encode(owner, v, f"{path}{{...}}", hook=hook) for v in value),
+                    key=_sort_key,
+                )
+            }
+        if isinstance(value, (datetime.date, datetime.time, datetime.timedelta)):
+            return _encode_temporal(value)
+        if isinstance(value, pathlib.PurePath):
+            return _encode_path(value)
+        if isinstance(value, uuid.UUID):
+            return {"uuid": value.hex}
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return {"bytes": bytes(value).hex()}
+        if isinstance(value, type) or inspect.isfunction(value):
+            ref = _import_path(value)
+            if ref is not None:
+                return {"ref": ref}
+        if hook and owner is not None:
+            return self._hooked(owner, value, path, named)
+        remedy = (
+            "Leave the field out with _FINGERPRINT_EXCLUDE, or encode it by overriding "
+            "_fingerprint_value."
+            if owner is not None
+            else "Hold a value that identifies it instead, such as a name or an import path."
+        )
+        raise TypeError(
+            f"{path} holds {type(value).__name__} {value!r}, which a fingerprint cannot "
+            f"identify: it has no import path and no value text. {remedy}"
+        )
+
+    def _hooked(self, owner: StructuredConfig, value: Any, path: str, named: str | None) -> Any:
+        """The hook's answer for ``value``, tagged as an answer.
+
+        An answer can bring its value round again: a nested config in it
+        turns the hook back on. That is a cycle only when **the same hook** is
+        asked about the same value again, and since a hook's answer may
+        depend only on the value, a hook is its owner's type: an owner of
+        that type would answer the same way, so the walk would never end.
+        Another config's hook asked about the value is a chain, not a loop,
+        and is followed. ``asked`` holds each (value, owner type) pair being
+        answered on the current path.
+
+        A container whose encoding ended here -- a dataclass no import
+        reaches -- leaves the path while its answer is encoded: the answer is
+        another encoding of it, not the container holding itself, and
+        ``asked`` is what bounds that walk.
+        """
+        question = (id(value), type(owner))
+        if question in self.asked:
+            raise ValueError(
+                f"{path} brings its value back to {type(owner).__qualname__}._fingerprint_value, "
+                "which would answer it again, so it has no finite encoding."
+            )
+        answered = owner._fingerprint_value(value, path)
+        on_path = _is_container(value)
+        self.asked.add(question)
+        if on_path:
+            self.active.discard(question[0])
+        try:
+            return {"custom": [named, self.encode(owner, answered, path, hook=False)]}
+        finally:
+            self.asked.discard(question)
+            if on_path:
+                self.active.add(question[0])
 
 
 def _digest(encoded: Any) -> str:
@@ -925,6 +1020,10 @@ def fingerprint_value(value: Any, *, path: str = "value") -> str:
     instant in two time zones. A change between two such values does not move
     the digest.
 
+    **The work follows the distinct containers ``value`` holds**, not the
+    paths to them: a subtree reached by several paths -- what a YAML anchor
+    builds -- is digested once, and digests as an equal copy of it would.
+
     Args:
         value: What to digest.
         path: How to name ``value`` in an error, so the refusal names the
@@ -937,13 +1036,14 @@ def fingerprint_value(value: Any, *, path: str = "value") -> str:
         TypeError: ``value`` holds something nothing identifies -- a lambda, a
             bound method, a live client, a class defined inside a function --
             so two such values could share a digest and differ.
-        ValueError: ``value`` holds a container that holds itself, or a
-            config whose ``_FINGERPRINT_EXCLUDE`` names something that is not
-            a field.
+        ValueError: ``value`` holds a container that holds itself, a config
+            whose ``_fingerprint_value`` answers with something that asks it
+            about the same value again, or a config whose
+            ``_FINGERPRINT_EXCLUDE`` names something that is not a field.
         RecursionError: ``value`` nests deeper than the interpreter's
             recursion limit allows.
     """
-    return _digest(_fingerprint_encode(None, value, path, hook=False, nan=True))
+    return _EncodeWalk(nan=True).digest(value, path)
 
 
 # ``eq=False``: the base has no fields, and an ``__eq__`` generated over none
@@ -1442,14 +1542,19 @@ class StructuredConfig:
         A field equality ignores (``compare=False``) is left out, as are the
         names in ``_FINGERPRINT_EXCLUDE``.
 
+        The work follows the distinct containers the fields hold, not the
+        paths to them, so a subtree held in several places is digested once.
+
         Returns:
             Sixty-four hex characters.
 
         Raises:
             TypeError: A field holds a value nothing identifies, or the
                 config's own class is defined inside a function.
-            ValueError: A field holds NaN or a container that holds itself, or
-                ``_FINGERPRINT_EXCLUDE`` names something that is not a field.
+            ValueError: A field holds NaN or a container that holds itself,
+                ``_fingerprint_value`` answers with something that asks it
+                about the same value again, or ``_FINGERPRINT_EXCLUDE`` names
+                something that is not a field.
         """
         named = _import_path(type(self))
         if named is None:
@@ -1458,18 +1563,15 @@ class StructuredConfig:
                 "import reaches it and another class of that name could share "
                 "its fingerprint. Define it at module level."
             )
-        return _digest(
-            {"config": [named, self._fingerprint_fields(type(self).__name__, frozenset())]}
-        )
+        return _EncodeWalk(nan=False).digest(self, type(self).__name__)
 
-    def _fingerprint_fields(
-        self, path: str, active: frozenset[int], *, nan: bool = False
-    ) -> dict[str, Any]:
+    def _fingerprint_fields(self, walk: _EncodeWalk, path: str) -> dict[str, Any]:
         """This config's fields, encoded, without the ones its equality or policy leaves out.
 
-        ``nan`` is the mode of the digest this config is nested in, carried
-        down so a config inside :func:`fingerprint_value` tags NaN as the
-        rest of that value does. :meth:`fingerprint` leaves it off.
+        ``walk`` is the digest this config is nested in, so its memo and its
+        ``nan`` mode reach the fields: a config inside :func:`fingerprint_value`
+        tags NaN as the rest of that value does, and :meth:`fingerprint`
+        refuses it.
         """
         fields = {f.name: f for f in dataclasses.fields(self)}
         unknown = sorted(set(self._FINGERPRINT_EXCLUDE) - fields.keys())
@@ -1479,9 +1581,7 @@ class StructuredConfig:
                 f"which are not fields. Fields: {sorted(fields)}."
             )
         return {
-            name: _fingerprint_encode(
-                self, getattr(self, name), f"{path}.{name}", active=active, nan=nan
-            )
+            name: walk.encode(self, getattr(self, name), f"{path}.{name}", hook=True)
             for name, f in fields.items()
             if f.compare and name not in self._FINGERPRINT_EXCLUDE
         }
@@ -1500,6 +1600,13 @@ class StructuredConfig:
         type; when none does, as for a class defined inside a function, the
         answer has to tell such types apart itself. It is encoded without
         consulting this method again.
+
+        **The answer may depend only on ``value``.** A digest reads a shared
+        container once, so the answer given at one place a value occurs
+        stands for every place it occurs. ``path`` is for the error message.
+        It is also how a loop is told from a chain: an answer that asks a
+        config of this class about the same value again is refused as a loop,
+        even when that config's own state would have answered differently.
 
         Args:
             value: The value, from a field or from inside one.

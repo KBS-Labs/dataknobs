@@ -399,4 +399,4 @@ def test_the_encoding_is_pinned() -> None:
 
 
 #: Written when the encoding was; see the test above.
-_PINNED = "48160c98eb794a0899430f7e0d5a17bf85e1d97e71d5ec6422efe37426ac87f2"
+_PINNED = "bc53ba5c03f51ea8399c937126971045e285a0b09f4b6e054813ac81833bb607"
