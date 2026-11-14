@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Every row of an authored ontology is read for its shape, and only for the
+  keys it reads.** The entity-type, relation-type, entity, assertion and
+  taxonomy rows, a literal `object:` and a nested-tree node now check each
+  optional value, as the attribute row already did, instead of converting it.
+  A value of the wrong shape is refused with a `ValidationError` naming the
+  section, the row and the key. That covers:
+  - `aliases: Beagle`, which loaded six one-letter aliases (write
+    `aliases: [Beagle]`);
+  - `symmetric: "no"` and `transitive: "false"`, which loaded as on;
+  - `name: 2024`, which was rendered (quote it);
+  - a list of pairs given as `metadata:`.
+
+  `null` reads as absent for every optional key. So `metadata: null`,
+  `aliases: null` and `materialization: null` no longer raise a bare
+  `TypeError` or `AttributeError`, and `name: null` no longer loads as the
+  word `'None'`. A key nothing reads, such as `alias:` for `aliases:`, is
+  refused by name. The key sets are published beside `ATTRIBUTE_ROW_KEYS` in
+  `dataknobs_common.ontology.loader`: `ENTITY_TYPE_ROW_KEYS`,
+  `RELATION_TYPE_ROW_KEYS`, `ENTITY_ROW_KEYS`, `ASSERTION_ROW_KEYS`,
+  `LITERAL_ROW_KEYS` and `MATERIALIZATION_KEYS`. An entity's `source:` keeps
+  its open key set, since its other keys are the locator into your data. A
+  literal's `type:` naming no record field type (`type: number`) is refused,
+  as an attribute's `field_type:` is; it used to load as `string`.
+
 - **An `eq=False` `StructuredConfig` compares by identity.** The base carried
   an `__eq__` generated over its own fields, of which it has none, and a
   subclass declaring `eq=False` inherited it, so any two instances of one class

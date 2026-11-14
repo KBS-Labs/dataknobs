@@ -1134,6 +1134,234 @@ def _row_handle(row: Mapping[str, Any], key: str | None = None) -> str:
     return f"a row carrying {sorted(row)}"
 
 
+# --------------------------------------------------------------------------
+# Optional fields -- each shape read by one reader, refused by one refusal
+# --------------------------------------------------------------------------
+#
+# Every builder below used to read its optional fields its own way, and every
+# way was a coercion: `tuple(row.get("aliases", []))` made `aliases: Beagle`
+# six one-letter surface forms, `bool(...)` made `symmetric: "no"` symmetric,
+# `str(...)` made `name: null` the word 'None', and `FrozenMapping(...)` raised
+# a bare `TypeError` for `metadata: null`. The attribute row had already been
+# given checked reads; the rows around it each repeated the coercion, which is
+# why the defect was in all of them. One reader per *shape* is what makes the
+# next optional field inherit the check by being read, as `_required` made a
+# required one inherit its refusal.
+#
+# **`null` is silence** in every reader, as `attributes: null` already was: a
+# key written with no value reads as the key left out.
+
+
+def _refuse_row_value(
+    section: str,
+    row: Mapping[str, Any],
+    key: str,
+    value: Any,
+    wants: str,
+    *,
+    handle: str | None = None,
+    context: Mapping[str, Any] | None = None,
+) -> NoReturn:
+    """The one refusal for an optional field of the wrong shape.
+
+    ``handle`` overrides how the row is pointed at, for a row whose own ``id``
+    is not the handle its author has -- a nested-tree node, named by the id it
+    was minted, a block inside a row, named by the row that holds it, or an
+    attribute, named by its entity type. ``context`` adds what such a handle
+    names, so a caller can read it without parsing the message.
+    """
+    raise ValidationError(
+        f"`{section}:` {handle or _row_handle(row)} declares {key!r} as {value!r}, "
+        f"which is not {wants}",
+        context={
+            "section": section,
+            "id": row.get("id"),
+            "field": key,
+            "value": value,
+            **(context or {}),
+        },
+    )
+
+
+def _row_str(
+    row: Mapping[str, Any], key: str, section: str, *, handle: str | None = None
+) -> str | None:
+    """A label-valued field: a string, or ``None`` where absent or ``null``.
+
+    **A number is refused rather than rendered.** ``name: 2024`` is an int to
+    YAML; rendering it would make the one spelling that is not a string the
+    one silently accepted, which is :func:`_attribute_str`'s rule for the
+    attribute row next door. An *id* is rendered, because it is a key compared
+    after ``str()`` everywhere; a label addresses nothing.
+    """
+    value = row.get(key)
+    if value is not None and not isinstance(value, str):
+        wants = "a string"
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            wants += f"; quote it -- `{key}: {str(value)!r}`"
+        _refuse_row_value(section, row, key, value, wants, handle=handle)
+    return value
+
+
+def _row_ref(row: Mapping[str, Any], key: str, section: str) -> str | None:
+    """A field naming another row's id, rendered as ids are.
+
+    ``isa: 100`` names ``id: 100``, which the section keys as ``'100'``; so a
+    number is rendered here exactly as the id it names was, and the reference
+    check compares like with like. What is refused is a value no id could be:
+    a list, a mapping, a boolean.
+    """
+    value = row.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        _refuse_row_value(section, row, key, value, "the id of one row: a string")
+    return str(value)
+
+
+def _row_flag(row: Mapping[str, Any], key: str, section: str) -> bool:
+    """An on-or-off field: ``true`` or ``false``, and ``False`` where absent or ``null``.
+
+    ``bool("no")`` is ``True``, which is how ``symmetric: "no"`` loaded a
+    relation every inference then ran both ways. The attribute row's
+    ``required:`` was refused for exactly this.
+    """
+    value = row.get(key)
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        _refuse_row_value(
+            section, row, key, value, "a boolean: it is on or off, so it is `true` or `false`"
+        )
+    return value
+
+
+def _row_aliases(
+    row: Mapping[str, Any], section: str, *, handle: str | None = None
+) -> tuple[str, ...]:
+    """A row's other names: a list of non-empty strings, ``()`` where absent or ``null``.
+
+    **A bare string is refused, not read as one alias.** A document has a list
+    spelling, so a scalar is ambiguous -- ``aliases: Beagle, Hound`` is one
+    alias or two -- and the model refuses one for the same reason
+    (:class:`~dataknobs_common.ontology.model.Entity`). ``tuple("Beagle")``,
+    which this read used to be, is six aliases, every one a surface form an
+    index then carried. An empty string is refused too: it is a surface form
+    nothing can be written as.
+    """
+    value = row.get("aliases")
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        _refuse_row_value(
+            section,
+            row,
+            "aliases",
+            value,
+            f"a list of names; one alias is a list of one -- [{value!r}] -- and a "
+            f"bare string would be read one character at a time",
+            handle=handle,
+        )
+    if not isinstance(value, list | tuple) or not all(
+        isinstance(alias, str) and alias for alias in value
+    ):
+        _refuse_row_value(
+            section, row, "aliases", value, "a list of non-empty strings", handle=handle
+        )
+    return tuple(value)
+
+
+def _row_mapping(
+    row: Mapping[str, Any], key: str, section: str, *, handle: str | None = None
+) -> Mapping[str, Any]:
+    """A mapping-valued field, or an empty mapping where absent or ``null``.
+
+    ``dict(...)``, which this read used to be, accepted a list of pairs as a
+    mapping and raised a bare ``TypeError`` or ``ValueError`` for anything
+    else -- ``null`` included.
+    """
+    value = row.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        _refuse_row_value(section, row, key, value, "a mapping", handle=handle)
+    return value
+
+
+def _refuse_unread_keys(
+    row: Mapping[str, Any],
+    read: Collection[str],
+    section: str,
+    *,
+    handle: str | None = None,
+    remedy: str = "",
+    context: Mapping[str, Any] | None = None,
+) -> None:
+    """Refuse a key on an authored row that nothing here reads.
+
+    *A dropped key and an unsupported key have to look different, or the file
+    says one thing and the vocabulary means another* -- the rule the taxonomy
+    row and the attribute row were given, for every row that has a closed set.
+    ``alias:`` for ``aliases:`` loaded and was discarded.
+
+    Keys are compared and listed as strings, so YAML's ``1: x`` beside
+    ``foo: y`` is named rather than escaping the sort as a ``TypeError``.
+    """
+    unread = sorted(str(key) for key in row if key not in read)
+    if not unread:
+        return
+    raise ValidationError(
+        f"`{section}:` {handle or _row_handle(row)} declares {unread}, which this "
+        f"loader does not read. It is read for {sorted(read)}{remedy}",
+        context={"section": section, "id": row.get("id"), "keys": unread, **(context or {})},
+    )
+
+
+#: The keys an ``entity_types:`` row is read for, and the only ones.
+ENTITY_TYPE_ROW_KEYS: frozenset[str] = frozenset(
+    {"id", "name", "description", "aliases", "metadata", "attributes", "isa"}
+)
+
+#: The keys a ``relation_types:`` row is read for. The keys a later version
+#: reads (:data:`_PHASE_2_KEYS`) are refused first, by name and version.
+RELATION_TYPE_ROW_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "name",
+        "description",
+        "aliases",
+        "metadata",
+        "domain",
+        "range",
+        "inverse_of",
+        "symmetric",
+        "transitive",
+        "inference",
+    }
+)
+
+#: The keys an ``entities:`` row is read for. ``source:`` is a mapping whose
+#: unknown keys are the consumer's locator, so *its* set stays open.
+ENTITY_ROW_KEYS: frozenset[str] = frozenset(
+    {"id", "type", "name", "aliases", "description", "metadata", "source"}
+)
+
+#: The keys an ``assertions:`` row is read for; ``condition:`` is refused first
+#: as a phase-2 key.
+ASSERTION_ROW_KEYS: frozenset[str] = frozenset(
+    {"id", "subject", "relation", "object", "metadata", "polarity"}
+)
+
+#: The keys a literal ``object:`` is read for. An entity ``object:`` written as
+#: a mapping is read for ``entity`` alone.
+LITERAL_ROW_KEYS: frozenset[str] = frozenset({"value", "type", "unit", "metadata"})
+
+#: The keys a taxonomy row's ``materialization:`` block is read for.
+MATERIALIZATION_KEYS: frozenset[str] = frozenset({"structure", "content"})
+
+_ENTITY_REF_KEYS: frozenset[str] = frozenset({"entity"})
+
+
 #: Per section, the keys this version does not read and what each belongs to.
 #:
 #: Conditions, cardinality and constraints are one later piece of work: each
@@ -1201,15 +1429,15 @@ def _build_entity_types(rows: list[Mapping[str, Any]]) -> dict[str, EntityType]:
         type_id = str(_required(row, "id", "entity_types"))
         _refuse_colon("entity type id", type_id)
         _refuse_duplicate_id(built, type_id, "entity_types")
-        parent = row.get("isa")
+        _refuse_unread_keys(row, ENTITY_TYPE_ROW_KEYS, "entity_types")
         built[type_id] = EntityType(
             id=type_id,
-            name=str(row.get("name", "")),
-            description=row.get("description"),
-            aliases=tuple(row.get("aliases", [])),
-            metadata=FrozenMapping(row.get("metadata", {})),
+            name=_row_str(row, "name", "entity_types") or "",
+            description=_row_str(row, "description", "entity_types"),
+            aliases=_row_aliases(row, "entity_types"),
+            metadata=FrozenMapping(_row_mapping(row, "metadata", "entity_types")),
             attributes=_build_attributes(row.get("attributes"), type_id),
-            isa=str(parent) if parent is not None else None,
+            isa=_row_ref(row, "isa", "entity_types"),
         )
     return built
 
@@ -1432,18 +1660,20 @@ def _attribute_field_type(
 def _refuse_attribute_value(
     entity_type: str, attribute: str | None, key: str, value: Any, wants: str
 ) -> NoReturn:
-    """The one refusal for an attribute key of the wrong shape."""
+    """The refusal for an attribute key of the wrong shape: :func:`_refuse_row_value`'s.
+
+    An attribute row is pointed at through the entity type holding it, so the
+    handle names both, and the context carries both.
+    """
     subject = f"attribute {attribute!r}" if attribute is not None else "an attribute"
-    raise ValidationError(
-        f"{subject} of entity type {entity_type!r} declares {key!r} as {value!r}, "
-        f"which is not {wants}",
-        context={
-            "section": _ATTRIBUTES_SECTION,
-            "entity_type": entity_type,
-            "attribute": attribute,
-            "field": key,
-            "value": value,
-        },
+    _refuse_row_value(
+        _ATTRIBUTES_SECTION,
+        {},
+        key,
+        value,
+        wants,
+        handle=f"{subject} of entity type {entity_type!r}",
+        context={"entity_type": entity_type, "attribute": attribute},
     )
 
 
@@ -1508,17 +1738,18 @@ def _build_relation_types(rows: list[Mapping[str, Any]]) -> dict[str, RelationTy
         _refuse_colon("relation type id", relation_id)
         _refuse_duplicate_id(built, relation_id, "relation_types")
         _refuse_a_phase_2_key(row, "relation_types")
+        _refuse_unread_keys(row, RELATION_TYPE_ROW_KEYS, "relation_types")
         built[relation_id] = RelationType(
             id=relation_id,
-            name=str(row.get("name", "")),
-            description=row.get("description"),
-            aliases=tuple(row.get("aliases", [])),
-            metadata=FrozenMapping(row.get("metadata", {})),
+            name=_row_str(row, "name", "relation_types") or "",
+            description=_row_str(row, "description", "relation_types"),
+            aliases=_row_aliases(row, "relation_types"),
+            metadata=FrozenMapping(_row_mapping(row, "metadata", "relation_types")),
             domain=_endpoints(row, "domain", relation_id),
             range=_endpoints(row, "range", relation_id),
-            inverse_of=row.get("inverse_of"),
-            symmetric=bool(row.get("symmetric", False)),
-            transitive=bool(row.get("transitive", False)),
+            inverse_of=_row_ref(row, "inverse_of", "relation_types"),
+            symmetric=_row_flag(row, "symmetric", "relation_types"),
+            transitive=_row_flag(row, "transitive", "relation_types"),
             inference=_inference_mode(
                 row.get("inference", InferenceMode.ON_DEMAND.value), "inference"
             ),
@@ -1536,33 +1767,39 @@ def _build_entities(rows: list[Mapping[str, Any]]) -> dict[str, Entity]:
                 f"duplicate id {entity_id!r} in `entities:`",
                 context={"id": entity_id},
             )
+        entity_type = str(_required(row, "type", "entities"))
+        _refuse_unread_keys(row, ENTITY_ROW_KEYS, "entities")
         built[entity_id] = Entity(
             id=entity_id,
-            type=str(_required(row, "type", "entities")),
-            name=str(row.get("name", "")),
-            aliases=tuple(row.get("aliases", [])),
-            description=row.get("description"),
-            metadata=FrozenMapping(row.get("metadata", {})),
-            source=_build_source_ref(row.get("source")),
+            type=entity_type,
+            name=_row_str(row, "name", "entities") or "",
+            aliases=_row_aliases(row, "entities"),
+            description=_row_str(row, "description", "entities"),
+            metadata=FrozenMapping(_row_mapping(row, "metadata", "entities")),
+            source=_build_source_ref(row),
         )
     return built
 
 
-def _build_source_ref(row: Mapping[str, Any] | None) -> SourceRef | None:
+def _build_source_ref(entity: Mapping[str, Any]) -> SourceRef | None:
     """The reference an entity carries into a consumer's own data.
 
-    Everything the row says beyond the three declared keys becomes the
+    Everything the block says beyond the three declared keys becomes the
     ``locator``: it is opaque to us by design, and dropping unknown keys would
-    silently discard exactly the part the consumer needs to find the row.
+    silently discard exactly the part the consumer needs to find the row. So
+    this is the one block with no closed key set -- but the block is a mapping,
+    and the three keys it does read are strings, as every authored label is.
     """
-    if row is None:
+    if entity.get("source") is None:
         return None
+    block = _row_mapping(entity, "source", "entities")
+    handle = f"the `source:` of {_row_handle(entity)}"
     known = {"source_id", "kind", "projection_id"}
     return SourceRef(
-        source_id=str(row.get("source_id", "")),
-        kind=str(row.get("kind", "record")),
-        locator=FrozenMapping({k: v for k, v in row.items() if k not in known}),
-        projection_id=row.get("projection_id"),
+        source_id=_row_str(block, "source_id", "entities.source", handle=handle) or "",
+        kind=_row_str(block, "kind", "entities.source", handle=handle) or "record",
+        locator=FrozenMapping({k: v for k, v in block.items() if k not in known}),
+        projection_id=_row_str(block, "projection_id", "entities.source", handle=handle),
     )
 
 
@@ -1571,42 +1808,65 @@ def _build_assertions(rows: list[Mapping[str, Any]]) -> list[Assertion]:
     for row in rows:
         subject = str(_required(row, "subject", "assertions"))
         relation = str(_required(row, "relation", "assertions"))
-        obj = _build_term(_required(row, "object", "assertions"))
+        obj = _build_term(_required(row, "object", "assertions"), row)
         # After the required reads, as in `relation_types`: a row has to be
         # well formed before it is worth telling its author which of its
         # optional keys a later version reads.
         _refuse_a_phase_2_key(row, "assertions")
+        _refuse_unread_keys(row, ASSERTION_ROW_KEYS, "assertions")
         built.append(
             Assertion(
-                id=str(row.get("id") or _mint_assertion_id(subject, relation, obj)),
+                id=_row_str(row, "id", "assertions") or _mint_assertion_id(subject, relation, obj),
                 subject=subject,
                 relation=relation,
                 object=obj,
-                metadata=FrozenMapping(row.get("metadata", {})),
+                metadata=FrozenMapping(_row_mapping(row, "metadata", "assertions")),
                 polarity=_polarity(row.get("polarity", Polarity.ASSERTED.value), "polarity"),
             )
         )
     return built
 
 
-def _build_term(value: Any) -> Term:
+def _build_term(value: Any, row: Mapping[str, Any]) -> Term:
     """What an assertion's ``object:`` denotes.
 
     A bare string names an entity, which is the form a hand-edited file uses
     for every edge. A mapping is explicit either way, and any other scalar is
     a literal whose type is detected the way a record field's is.
+
+    **A mapping is read for its keys and no others**: ``entity`` for an entity,
+    :data:`LITERAL_ROW_KEYS` for a literal. And a literal's ``type:`` names a
+    record field type or is refused -- ``{value: 3.5, type: number}`` loaded as
+    a ``STRING`` literal, while the attribute row refuses the same word in
+    ``field_type:``, so the two readings of one word differed in what they did
+    with a word they could not read. ``row`` is the assertion holding the
+    object, which is the handle its author has.
     """
     if isinstance(value, str):
         return EntityRef(entity_id=value)
     if isinstance(value, Mapping):
+        section = "assertions.object"
+        handle = f"the `object:` of {_row_handle(row)}"
         if "entity" in value:
+            _refuse_unread_keys(value, _ENTITY_REF_KEYS, section, handle=handle)
             return EntityRef(entity_id=str(value["entity"]))
-        declared = _field_type(value.get("type"))
+        _refuse_unread_keys(value, LITERAL_ROW_KEYS, section, handle=handle)
+        written = value.get("type")
+        declared = _field_type(written) if written is not None else FieldType.STRING
+        if declared is None:
+            _refuse_row_value(
+                section,
+                value,
+                "type",
+                written,
+                f"a record field type, one of {sorted(m.value for m in FieldType)}",
+                handle=handle,
+            )
         return Literal(
             value=value.get("value"),
-            type=declared if declared is not None else FieldType.STRING,
-            unit=value.get("unit"),
-            metadata=FrozenMapping(value.get("metadata", {})),
+            type=declared,
+            unit=_row_str(value, "unit", section, handle=handle),
+            metadata=FrozenMapping(_row_mapping(value, "metadata", section, handle=handle)),
         )
     return Literal.of(value)
 
@@ -1657,16 +1917,16 @@ def _refuse_an_unread_taxonomy_key(row: Mapping[str, Any], taxonomy_id: str) -> 
     """
     if "kind" in row:
         return
-    unread = sorted(str(key) for key in row if key not in TAXONOMY_ROW_KEYS)
-    if not unread:
-        return
-    raise ValidationError(
-        f"`taxonomies:` row {taxonomy_id!r} declares {unread}, which this "
-        f"loader does not read. An axis over this document's own assertions is "
-        f"read for {sorted(TAXONOMY_ROW_KEYS)}; a row asking for any other "
-        f"backing declares `kind:`, and the door that binds that kind reads "
-        f"the keys it needs",
-        context={"taxonomy": taxonomy_id, "keys": unread},
+    _refuse_unread_keys(
+        row,
+        TAXONOMY_ROW_KEYS,
+        "taxonomies",
+        remedy=(
+            " -- an axis over this document's own assertions. A row asking for "
+            "any other backing declares `kind:`, and the door that binds that "
+            "kind reads the keys it needs"
+        ),
+        context={"taxonomy": taxonomy_id},
     )
 
 
@@ -1676,13 +1936,21 @@ def _build_taxonomies(rows: list[Mapping[str, Any]]) -> dict[str, TaxonomyDefini
         taxonomy_id = str(_required(row, "id", "taxonomies"))
         _refuse_duplicate_id(built, taxonomy_id, "taxonomies")
         _refuse_an_unread_taxonomy_key(row, taxonomy_id)
-        materialization = row.get("materialization", {})
+        relation = str(_required(row, "relation", "taxonomies"))
+        materialization = _row_mapping(row, "materialization", "taxonomies")
+        _refuse_unread_keys(
+            materialization,
+            MATERIALIZATION_KEYS,
+            "taxonomies.materialization",
+            handle=f"the `materialization:` of {_row_handle(row)}",
+        )
         built[taxonomy_id] = TaxonomyDefinition(
             id=taxonomy_id,
-            relation=str(_required(row, "relation", "taxonomies")),
-            name=str(row.get("name", "")),
-            description=row.get("description"),
-            metadata=dict(row.get("metadata", {})),
+            relation=relation,
+            name=_row_str(row, "name", "taxonomies") or "",
+            description=_row_str(row, "description", "taxonomies"),
+            # A dict, not a FrozenMapping: TaxonomyDefinition is not yet frozen.
+            metadata=dict(_row_mapping(row, "metadata", "taxonomies")),
             materialization=Materialization(
                 structure=_inference_mode(
                     materialization.get("structure", InferenceMode.ON_DEMAND.value),
@@ -1735,13 +2003,20 @@ def _mint_nested(
             source=source_id,
             claimed=claimed,
         ):
+            # A node is the consumer's data, its keys configurable through
+            # `child_key`/`name_key`, so it has no closed key set; the three
+            # fields read from it are read for their shape all the same.
+            handle = f"tree node {minted.id!r}"
+            section = f"sources.{source_id}.tree"
             entities[minted.id] = Entity(
                 id=minted.id,
                 type=node_type,
                 name=minted.name,
-                aliases=tuple(minted.node.get("aliases", [])),
-                description=minted.node.get("description"),
-                metadata=FrozenMapping(minted.node.get("metadata", {})),
+                aliases=_row_aliases(minted.node, section, handle=handle),
+                description=_row_str(minted.node, "description", section, handle=handle),
+                metadata=FrozenMapping(
+                    _row_mapping(minted.node, "metadata", section, handle=handle)
+                ),
             )
             if minted.parent_id is not None:
                 assertions.append(

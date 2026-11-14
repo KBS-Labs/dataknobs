@@ -69,6 +69,57 @@ by default — `pip install dataknobs-common[yaml]`. Nothing else on this page
 does: `load_ontology` also takes a `.json` path or a plain mapping, and either
 runs on the base install.
 
+### What each row reads
+
+Every row is read for the keys below and no others. A key nothing reads is
+refused by name, because otherwise it would load and be discarded: `alias:`
+written for `aliases:` would add no alias and report nothing. Each value is
+checked for its shape, not converted into one. A key written as `null` reads
+as absent. Any refusal is a `ValidationError` naming the section, the row and
+the key.
+
+The shapes the tables share:
+
+- **A label** (`name`, `description`, `unit`) is a string. `name: 2024` is
+  refused rather than rendered: quote it.
+- **An alias list** is a list of non-empty strings. `aliases: Beagle` is
+  refused, because a bare string would be read one character at a time. One
+  alias is a list of one: `aliases: [Beagle]`.
+- **A flag** is `true` or `false`. `"no"` is refused rather than read as
+  truthy.
+- **A mapping** is a mapping. A list of pairs is refused.
+- **A reference** (`isa`, `inverse_of`) names one id. A number names the id it
+  renders as, since ids are read the same way, so `isa: 100` names
+  `id: 100`.
+
+| Section | Required | Optional |
+|---|---|---|
+| `entity_types:` | `id` | `name`, `description`, `aliases`, `metadata`, `attributes` (below), `isa` |
+| `relation_types:` | `id` | `name`, `description`, `aliases`, `metadata`, `domain`, `range`, `inverse_of`, `symmetric`, `transitive`, `inference` (`on_demand` or `materialized`) |
+| `entities:` | `id`, `type` | `name`, `description`, `aliases`, `metadata`, `source` |
+| `assertions:` | `subject`, `relation`, `object` | `id` (minted from the edge when absent), `metadata`, `polarity` (`asserted` or `negated`) |
+| `taxonomies:` | `id`, `relation` | `name`, `description`, `metadata`, `materialization` (`structure` and `content`, each `on_demand` or `materialized`) |
+
+Three of those values take a further shape:
+
+- **An `object:`** is a string naming an entity, a mapping `{entity: …}`, any
+  other scalar as a literal, or a literal mapping read for `value`, `type`,
+  `unit` and `metadata`. A literal's `type:` is a record field type, as an
+  attribute's `field_type:` is, and is `string` when absent.
+  `{value: 3.5, type: number}` is refused, since `number` names no record type.
+- **A `source:`** reads `source_id`, `kind` (`record` when absent) and
+  `projection_id`, each a string. **Its other keys are kept**, as the
+  locator into your own data, so this is the one block with an open key set.
+- **A `taxonomies:` row declaring `kind:`** asks for a backing another door
+  binds, and that door reads its keys (see
+  [Taxonomies and how a tree is projected](#taxonomies-and-how-a-tree-is-projected)).
+
+`cardinality:`, `constraints:` and `condition:` are refused with a message of
+their own, because a later version reads them.
+
+A **nested tree's** nodes are your data, so they have no closed key set. Their
+`aliases`, `description` and `metadata` are still read for their shape.
+
 ### What an attribute row reads
 
 An attribute row is read for seven keys. Any other key is refused by name,
