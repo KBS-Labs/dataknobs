@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-11-14T05:35:25Z",
+  "timestamp": "2026-11-14T14:09:01Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -19,7 +19,7 @@
   "coverage_percent": null,
   "package_hashes": {
     "bots": "14007b32a083af6b62eb3acaa8ff9d1345018a63c34ff9bb0ebf7993b8f60ad3",
-    "common": "95bfeea909f6a4e430d9aafdc6fbbfdb640bcf8ff662f132042c24ca42bfffc1",
+    "common": "aee3b3875d1fb17d1cf637c9a7d2c9fc862c77516289852341059f14c8949289",
     "config": "e7b097453ad58f7ef2fa7c7af49e2ecf1f7491ed7a9a5caa48c6c8c4938c7ac4",
     "data": "984ca57cebe0acfe964ccdc39a4a5eccb0fbc7febeb6d69f6f797e044975b387",
     "fsm": "1327861ec788caee07183a57cd7060bd4df7182e12fb30764ccafe6d7775b98e",
@@ -35,27 +35,27 @@
     "toolchain_test": "112bc414a0e8fb4221c01856a4265c6d46739f2229f24f50a0936790b70aa114",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
     "workspace_tests": "15c8fb0cef092f2a0dd686747006bdf70a83335a204cf36c37739caa9943b901",
-    "docs": "3692510739a0d268f9c0ee25e49d7f6e5e63bfe6387e0e3883753ed5401ab93f"
+    "docs": "28a90cdf25309b6b6cdc878942c22ebc43f866be7a1c7dbae79aa24675a5615b"
   },
-  "total_seconds": 439,
+  "total_seconds": 428,
   "checks": {
     "workflow_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-workflows.sh",
-      "duration_seconds": 0
+      "duration_seconds": 1
     },
     "shell_lint": {
       "status": "pass",
       "exit_code": 0,
       "tool": "lint-shell.sh",
-      "duration_seconds": 5
+      "duration_seconds": 4
     },
     "contract": {
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 8
+      "duration_seconds": 7
     },
     "validation": {
       "status": "pass",
@@ -69,7 +69,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 30
+      "duration_seconds": 31
     },
     "documentation_versions": {
       "status": "pass",
@@ -83,20 +83,20 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-mirror-check.py",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 242,
-      "workspace_guards_seconds": 100
+      "duration_seconds": 228,
+      "workspace_guards_seconds": 99
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 53
+      "duration_seconds": 57
     }
   }
 }
