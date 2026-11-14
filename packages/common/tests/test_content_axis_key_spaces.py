@@ -285,6 +285,9 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("AsyncEntitySource", "get", "entity_id", "key"),
     ("AsyncEntitySource", "get_many", "->", "key"),
     ("AsyncEntitySource", "get_many", "entity_ids", "key"),
+    # An opaque label the source mints for its own state: compared for
+    # equality and never parsed, so neither a key nor anything authored.
+    ("AsyncEntitySource", "revision", "->", "payload"),
     ("AsyncMatchSignal", "candidates", "->", "key"),
     ("AsyncMatchSignal", "candidates", "filter", "payload"),
     ("AsyncMatchSignal", "candidates", "query", "text"),
@@ -377,6 +380,7 @@ _VERDICTS: tuple[tuple[str, str, str, str], ...] = (
     ("EntitySource", "get", "entity_id", "key"),
     ("EntitySource", "get_many", "->", "key"),
     ("EntitySource", "get_many", "entity_ids", "key"),
+    ("EntitySource", "revision", "->", "payload"),
     ("EntitySourceIndexSource", "<field>", "_declared", "schema"),
     ("EntitySourceIndexSource", "<field>", "_fields", "schema"),
     # The source id kept from the one `describe()` this asks for. `schema`
@@ -537,7 +541,7 @@ _REACHABLE_VALUE_TYPES = 40
 
 #: Class rows plus the published module-level ones -- see :func:`_module_rows`
 #: for why a function belonging to no class is in the population at all.
-_ROWS = 368
+_ROWS = 370
 
 
 def _modules() -> Iterator[ast.Module]:

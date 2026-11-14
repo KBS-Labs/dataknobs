@@ -129,6 +129,9 @@ class UnfoldedSource:
     def longest_form_tokens(self) -> int | None:
         return None
 
+    def revision(self) -> str | None:
+        return self._inner.revision()
+
 
 class AsyncUnfoldedSource(UnfoldedSource):
     """:class:`UnfoldedSource`' twin, refusing at the same point."""
@@ -220,7 +223,9 @@ def test_the_authored_twins_answer_the_guard_their_description_declares(
     source = source_cls(VOCABULARY)
 
     assert isinstance(source, CapabilityContract)
-    assert source_cls.supported_capabilities() == frozenset({Capability.SURFACE_FORM_LOOKUP})
+    assert source_cls.supported_capabilities() == frozenset(
+        {Capability.SURFACE_FORM_LOOKUP, Capability.SOURCE_REVISION}
+    )
     assert source.instance_capabilities() == source.describe().capabilities
     assert supports_capability(source, Capability.SURFACE_FORM_LOOKUP)
     require_capability(source, Capability.SURFACE_FORM_LOOKUP)

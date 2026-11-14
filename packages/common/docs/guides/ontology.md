@@ -626,6 +626,66 @@ onto.entities.supported_capabilities()   # what this kind of source can do
 onto.entities.instance_capabilities()    # what this one does — describe()'s set
 ```
 
+### Which state of a vocabulary answered
+
+A link you record against a vocabulary — a mention resolved to an entity, an
+index built over its forms — is only as good as the vocabulary that made it.
+`revision()` says which state of the vocabulary is answering, so you can store
+it beside the link and ask again later: two different answers mean the
+vocabulary has changed since, and the link is worth checking rather than
+trusting.
+
+```python
+from dataknobs_common.ontology import load_ontology
+
+document = {
+    "id": "office",
+    "version": "2.3",
+    "entity_types": [{"id": "product"}],
+    "entities": [{"id": "p-1", "type": "product", "name": "PowerPoint"}],
+}
+recorded = load_ontology(document).entities.revision()   # '2.3@d6b7dba8…'
+
+# Later: the same document, now admitting camelCase variants.
+current = load_ontology({**document, "variants": ["camelcase"]}).entities.revision()
+assert current != recorded   # 'Power Point' is an alias now, so the link is worth a look
+```
+
+It is on both source protocols, awaitable on `AsyncEntitySource` because a
+live source reads its answer from its owner. A source that can answer declares
+`Capability.SOURCE_REVISION`; one that cannot answers `None`, and only such a
+source does. An authored source always answers.
+
+**Compare answers for equality, and do not parse them.** An authored source
+spells its answer `<version>@<digest>`, where the version is the document's
+(`1.0` when it declares none — that is `OntologyConfig`'s default, and what
+`onto.version` reports) and the digest is a SHA-256 over the entities the
+source holds, variants included. A source built in code with no `version=`
+answers the bare digest. The `@` is not a separator you may split on: a
+version string may contain one.
+
+The digest is taken **when the source is built**, alongside the lookups, so
+it describes the state the lookups answer from. A value in an entity that no
+digest can identify — a lambda in its `metadata` — fails the construction with
+a `TypeError` naming the entity and field. NaN does not: two documents that
+both say `.nan` hold the same content, and answer the same revision.
+
+Three things the answer does not track, each erring in a stated direction:
+
+- **The fold.** A normalizer is a callable, and is not digested. The same
+  entities built with a different `normalizer=` answer the same revision while
+  resolving differently. A fold is code, and a fold change is a code change.
+- **The library release.** Equal answers mean equal content under one release
+  of this library; another release may encode differently and move every
+  revision. That reports a change that did not happen, never hides one that
+  did.
+- **Alias order.** Reordering an entity's aliases moves the revision, though
+  it resolves the same. That errs the same way.
+
+The digest is `fingerprint_value` from `dataknobs_common`, the encoding
+`StructuredConfig.fingerprint()` keys configs with, applied to any value. It
+is there to call if you need a content digest of your own.
+
 ## Taxonomies and how a tree is projected
 
 A `TaxonomyDefinition` names the relation its edges are made of, and carries

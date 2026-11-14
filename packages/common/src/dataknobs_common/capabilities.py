@@ -110,6 +110,14 @@ class Capability(str, Enum):
     # by one letter, and ``frozenset()`` already means "ran and matched
     # nothing" to every rung that reads it.
     SURFACE_FORM_LOOKUP = "surface_form_lookup"
+    # The source answers ``revision()`` with a string that changes when what
+    # it resolves changes, so a caller holding a link can tell whether the
+    # vocabulary that made it has moved since. The negative case is ordinary
+    # too: a live source with no owner-supplied revision cannot know when its
+    # rows changed, and a ``None`` from a source that declared this would read
+    # as "no change" to a caller comparing two answers. So such a source
+    # withholds it and answers ``None``.
+    SOURCE_REVISION = "source_revision"
 
     # ---- Scope projection ----
     SCOPE_PROJECTOR_READ_ONLY = "scope_projector_read_only"
@@ -183,6 +191,7 @@ CAPABILITY_FAMILIES: Mapping[str, frozenset[Capability]] = MappingProxyType(
         "vocabulary_lookup": frozenset(
             {
                 Capability.SURFACE_FORM_LOOKUP,
+                Capability.SOURCE_REVISION,
             }
         ),
         "scope_projection": frozenset(

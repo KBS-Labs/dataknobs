@@ -195,6 +195,9 @@ class CountingEntitySource(_CountingSource):
     def by_type(self, type_id: str) -> frozenset[str]:
         return self._inner.by_type(type_id)
 
+    def revision(self) -> str | None:
+        return self._inner.revision()
+
 
 class AsyncCountingEntitySource(_CountingSource):
     """The asynchronous flavour, counting the round trips rather than the calls.
@@ -231,6 +234,9 @@ class AsyncCountingEntitySource(_CountingSource):
 
     async def by_type(self, type_id: str) -> frozenset[str]:
         return await self._inner.by_type(type_id)
+
+    async def revision(self) -> str | None:
+        return await self._inner.revision()
 
 
 def test_a_scan_probes_no_window_longer_than_a_declared_form() -> None:

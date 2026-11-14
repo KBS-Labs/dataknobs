@@ -453,6 +453,43 @@ which binding a row belongs to. A `kind: record` binding only ever **reads**,
 so that column is yours to add rather than the registry's to write, and there
 is no form of `table:` that could stand in for one.
 
+### A live binding's revision is its owner's
+
+An authored vocabulary digests what it holds, and that is its
+[revision](https://kbs-labs.github.io/dataknobs/packages/common/ontology/#which-state-of-a-vocabulary-answered).
+A table's rows change without the source hearing of it, so only the table's
+owner can say which state is answering: a migration number, a snapshot id, a
+high-water mark of a change log. Hand the source an async callable that
+answers it:
+
+```python
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_data.ontology import EntityProjection, RecordEntitySource
+
+projection = EntityProjection.from_mapping(
+    {"table": "products", "id": "sku", "name": "title", "type": {"const": "Product"}},
+    binding="products",
+)
+
+async def snapshot() -> str:
+    return "snapshot-0042"   # read from wherever your deployment records it
+
+source = RecordEntitySource(
+    AsyncMemoryDatabase(), projection, source_id="products", revision=snapshot
+)
+assert await source.revision() == "snapshot-0042"
+```
+
+The provider is a `RevisionProvider` — `Callable[[], Awaitable[str]]` — and is
+awaited on every call, with no cache, because an answer held from an earlier
+call is the one thing that could miss a change. It answers `str` and never
+`None`: the source declares `Capability.SOURCE_REVISION` exactly when it is
+given one, and without one it withholds the capability and answers `None`.
+
+**A document cannot name a provider yet**, so a `kind: record` binding the
+registry builds from configuration has none: it withholds the capability and
+answers `None`. Build the source yourself, as above, when you need one.
+
 ## A taxonomy over a parent column
 
 Rows that carry their parent's key are a hierarchy already. A `taxonomies:`

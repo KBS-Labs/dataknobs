@@ -1098,7 +1098,9 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 )
         if not live:
             entities, variants = apply_variants(parts, normalizer=self._normalizer)
-            authored = AsyncMappingEntitySource(entities, normalizer=self._normalizer)
+            authored = AsyncMappingEntitySource(
+                entities, normalizer=self._normalizer, version=parts.version
+            )
             return _BoundSources(authored, (authored.describe(),), {}, variants)
         if parts.variant_rules is not None:
             raise ValidationError(

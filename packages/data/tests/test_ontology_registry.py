@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from dataknobs_common.capabilities import Capability
 from dataknobs_common.events import Event, EventType, InMemoryEventBus, event_bus_backends
 from dataknobs_common.exceptions import OperationError, ValidationError
 from dataknobs_common.ontology import (
@@ -2488,3 +2489,16 @@ async def test_an_injected_bus_says_so_when_it_passes_over_a_block(
     finally:
         await registry.close()
         await handed_over.close()
+
+
+async def test_a_live_binding_through_a_document_declares_no_revision() -> None:
+    """A document has no way to name a revision provider, so the registry binds none."""
+    registry = OntologyRegistry.from_components(
+        config=OntologyConfig(**_document()), database=await _seeded()
+    )
+    try:
+        ontology = await registry.load()
+        assert Capability.SOURCE_REVISION not in ontology.entities.describe().capabilities
+        assert await ontology.entities.revision() is None
+    finally:
+        await registry.close()

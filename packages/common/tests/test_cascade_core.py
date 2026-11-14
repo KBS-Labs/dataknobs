@@ -1359,6 +1359,9 @@ class AliaslessSource:
     def longest_form_tokens(self) -> int:
         return self._inner.longest_form_tokens()
 
+    def revision(self) -> str | None:
+        return self._inner.revision()
+
 
 def test_a_source_without_alias_forms_still_conforms_and_still_resolves() -> None:
     """Reporting alias forms is optional, and a source lacking it is not broken.

@@ -923,7 +923,7 @@ async def test_the_source_answers_the_capability_contract_it_advertises() -> Non
         # The classmethod half is the ceiling: what a `kind: record` binding
         # can declare, answerable before one exists.
         assert RecordEntitySource.supported_capabilities() == frozenset(
-            {Capability.ORIGIN_FETCH, Capability.SURFACE_FORM_LOOKUP}
+            {Capability.ORIGIN_FETCH, Capability.SURFACE_FORM_LOOKUP, Capability.SOURCE_REVISION}
         )
         assert source.instance_capabilities() == source.describe().capabilities
         assert source.supports(Capability.SURFACE_FORM_LOOKUP)
@@ -1410,3 +1410,45 @@ async def test_a_separate_forms_store_scopes_a_key_read_back_in_another_type() -
 
     assert await source.get("4471") is not None  # the reserved key matches the text
     assert await source.by_surface_form("Beagle") == frozenset({"4471"})
+
+
+# --------------------------------------------------------------------------
+# A live source's revision is its owner's
+# --------------------------------------------------------------------------
+
+
+async def test_without_a_provider_the_source_has_no_revision_and_says_so() -> None:
+    """``None``, and the capability absent from every place a caller can ask."""
+    projection = EntityProjection.from_mapping(PROJECTION, binding="products")
+    source = RecordEntitySource(AsyncMemoryDatabase(), projection, source_id="products")
+
+    assert await source.revision() is None
+    assert Capability.SOURCE_REVISION not in source.describe().capabilities
+    assert not source.supports(Capability.SOURCE_REVISION)
+    assert Capability.SOURCE_REVISION not in source.instance_capabilities()
+
+
+async def test_a_provider_is_asked_on_every_call() -> None:
+    """The owner's answer, fresh each time: a table's rows change without a reload."""
+    asked = 0
+
+    async def migration() -> str:
+        nonlocal asked
+        asked += 1
+        return f"migration-{asked}"
+
+    projection = EntityProjection.from_mapping(PROJECTION, binding="products")
+    source = RecordEntitySource(
+        AsyncMemoryDatabase(), projection, source_id="products", revision=migration
+    )
+
+    assert Capability.SOURCE_REVISION in source.describe().capabilities
+    assert source.supports(Capability.SOURCE_REVISION)
+    assert Capability.SOURCE_REVISION in source.instance_capabilities()
+    assert await source.revision() == "migration-1"
+    assert await source.revision() == "migration-2"
+    assert asked == 2
+
+
+def test_the_kind_can_declare_a_revision_before_any_binding_exists() -> None:
+    assert Capability.SOURCE_REVISION in RecordEntitySource.supported_capabilities()

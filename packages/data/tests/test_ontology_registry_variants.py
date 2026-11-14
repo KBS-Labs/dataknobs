@@ -120,3 +120,13 @@ async def test_variants_over_a_live_source_are_refused() -> None:
     async with OntologyRegistry() as registry:
         with pytest.raises(ValidationError, match="variants"):
             await registry.load(document)
+
+
+async def test_the_registry_passes_the_documents_version_to_the_authored_source() -> None:
+    """The third door spells the revision as the two loaders do."""
+    async with OntologyRegistry() as registry:
+        onto = await registry.load(grocery(version="2.3"))
+        revision = await onto.entities.revision()
+    assert revision is not None
+    assert revision.startswith("2.3@")
+    assert revision == load_ontology(grocery(version="2.3")).entities.revision()
