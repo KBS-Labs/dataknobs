@@ -48,7 +48,7 @@ def test_with_no_section_nothing_changes() -> None:
     onto = load_ontology(grocery())
     assert onto.variants is None
     assert onto.by_surface_form("apples") == frozenset()
-    assert onto.entity("apple").aliases == []
+    assert onto.entity("apple").aliases == ()
 
 
 def test_the_section_admits_variants_as_aliases() -> None:
@@ -112,7 +112,7 @@ def test_the_door_uses_its_own_fold() -> None:
 def test_the_parts_keep_the_authored_entities() -> None:
     """Variants are applied at bind time, so a diff of two loads' parts sees authored forms."""
     parts = build_ontology(OntologyConfig.from_dict(grocery(DEFAULT_SPECS)))
-    assert parts.declared_entities["apple"].aliases == []
+    assert parts.declared_entities["apple"].aliases == ()
     assert parts.variant_rules is not None
 
 
@@ -138,9 +138,9 @@ def test_with_variants_leaves_its_input_alone() -> None:
         "acme-jam": Entity(id="acme-jam", type="item", name="Acme Jam", metadata={"brand": "Acme"}),
     }
     varied, report = with_variants(entities, (strip_prefix("brand"), inflect))
-    assert entities["apple"].aliases == []
-    assert varied["apple"].aliases == ["Apples"]
-    assert varied["acme-jam"].aliases == ["Jam", "Acme Jams", "Jams"]
+    assert entities["apple"].aliases == ()
+    assert varied["apple"].aliases == ("Apples",)
+    assert varied["acme-jam"].aliases == ("Jam", "Acme Jams", "Jams")
     source = MappingEntitySource(varied)
     assert source.by_surface_form("jams") == frozenset({"acme-jam"})
     assert report.refused == ()
@@ -153,4 +153,4 @@ def test_an_entity_id_is_held_but_not_varied() -> None:
     }
     varied, report = with_variants(entities, (inflect,))
     assert [each.variant.form for each in report.refused] == ["Cups"]
-    assert varied["cups"].aliases == ["Mugs"]
+    assert varied["cups"].aliases == ("Mugs",)

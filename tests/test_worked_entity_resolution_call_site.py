@@ -294,7 +294,7 @@ def test_the_published_rung_reaches_the_forms_the_page_names(
     from dataknobs_common.ontology import Entity, MappingEntitySource
 
     vocabulary = MappingEntitySource(
-        {"k9": Entity(id="k9", type="Thing", name="K-9", aliases=[":-)", "(beagle)", "C.D.C."])}
+        {"k9": Entity(id="k9", type="Thing", name="K-9", aliases=(":-)", "(beagle)", "C.D.C."))}
     )
     written = punctuated_rung(vocabulary)
     shipped = ScanningSignal(vocabulary)

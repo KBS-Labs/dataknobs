@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, TypeVar
 
 from dataknobs_common._nested_core import _mint_tree, _walk_tree
 from dataknobs_common.config_loading import load_yaml_or_json
+from dataknobs_common.copying import FrozenMapping
 from dataknobs_common.entity_resolution.cascade import (
     AsyncCascadingResolver,
     CascadingResolver,
@@ -1205,8 +1206,8 @@ def _build_entity_types(rows: list[Mapping[str, Any]]) -> dict[str, EntityType]:
             id=type_id,
             name=str(row.get("name", "")),
             description=row.get("description"),
-            aliases=list(row.get("aliases", [])),
-            metadata=dict(row.get("metadata", {})),
+            aliases=tuple(row.get("aliases", [])),
+            metadata=FrozenMapping(row.get("metadata", {})),
             attributes=_build_attributes(row.get("attributes"), type_id),
             isa=str(parent) if parent is not None else None,
         )
@@ -1227,7 +1228,7 @@ ATTRIBUTE_ROW_KEYS: frozenset[str] = frozenset(
 _ATTRIBUTES_SECTION = "entity_types.attributes"
 
 
-def _build_attributes(declared: Any, entity_type: str) -> list[AttributeDef]:
+def _build_attributes(declared: Any, entity_type: str) -> tuple[AttributeDef, ...]:
     """An entity type's ``attributes:`` list, each row read, no name twice.
 
     ``null`` is silence, as everywhere in this loader. A mapping here -- the
@@ -1242,7 +1243,7 @@ def _build_attributes(declared: Any, entity_type: str) -> list[AttributeDef]:
     question and not this one.
     """
     if declared is None:
-        return []
+        return ()
     if not isinstance(declared, list | tuple):
         raise ValidationError(
             f"`{_ATTRIBUTES_SECTION}:` of entity type {entity_type!r} must be a list "
@@ -1272,7 +1273,7 @@ def _build_attributes(declared: Any, entity_type: str) -> list[AttributeDef]:
             )
         seen.add(attribute.name)
         built.append(attribute)
-    return built
+    return tuple(built)
 
 
 def _build_attribute(row: Mapping[str, Any], entity_type: str) -> AttributeDef:
@@ -1352,7 +1353,7 @@ def _attribute_str(
 
 def _attribute_enum_values(
     row: Mapping[str, Any], entity_type: str, attribute: str
-) -> list[str] | None:
+) -> tuple[str, ...] | None:
     """The values an enumerated attribute allows, or ``None`` for *not enumerated*.
 
     **An empty list is refused rather than read as absent.** A set of allowed
@@ -1380,7 +1381,7 @@ def _attribute_enum_values(
         _refuse_attribute_value(
             entity_type, attribute, "enum_values", values, "a list naming each value once"
         )
-    return list(values)
+    return tuple(values)
 
 
 def _attribute_field_type(
@@ -1511,8 +1512,8 @@ def _build_relation_types(rows: list[Mapping[str, Any]]) -> dict[str, RelationTy
             id=relation_id,
             name=str(row.get("name", "")),
             description=row.get("description"),
-            aliases=list(row.get("aliases", [])),
-            metadata=dict(row.get("metadata", {})),
+            aliases=tuple(row.get("aliases", [])),
+            metadata=FrozenMapping(row.get("metadata", {})),
             domain=_endpoints(row, "domain", relation_id),
             range=_endpoints(row, "range", relation_id),
             inverse_of=row.get("inverse_of"),
@@ -1539,9 +1540,9 @@ def _build_entities(rows: list[Mapping[str, Any]]) -> dict[str, Entity]:
             id=entity_id,
             type=str(_required(row, "type", "entities")),
             name=str(row.get("name", "")),
-            aliases=list(row.get("aliases", [])),
+            aliases=tuple(row.get("aliases", [])),
             description=row.get("description"),
-            metadata=dict(row.get("metadata", {})),
+            metadata=FrozenMapping(row.get("metadata", {})),
             source=_build_source_ref(row.get("source")),
         )
     return built
@@ -1560,7 +1561,7 @@ def _build_source_ref(row: Mapping[str, Any] | None) -> SourceRef | None:
     return SourceRef(
         source_id=str(row.get("source_id", "")),
         kind=str(row.get("kind", "record")),
-        locator={k: v for k, v in row.items() if k not in known},
+        locator=FrozenMapping({k: v for k, v in row.items() if k not in known}),
         projection_id=row.get("projection_id"),
     )
 
@@ -1581,7 +1582,7 @@ def _build_assertions(rows: list[Mapping[str, Any]]) -> list[Assertion]:
                 subject=subject,
                 relation=relation,
                 object=obj,
-                metadata=dict(row.get("metadata", {})),
+                metadata=FrozenMapping(row.get("metadata", {})),
                 polarity=_polarity(row.get("polarity", Polarity.ASSERTED.value), "polarity"),
             )
         )
@@ -1605,7 +1606,7 @@ def _build_term(value: Any) -> Term:
             value=value.get("value"),
             type=declared if declared is not None else FieldType.STRING,
             unit=value.get("unit"),
-            metadata=dict(value.get("metadata", {})),
+            metadata=FrozenMapping(value.get("metadata", {})),
         )
     return Literal.of(value)
 
@@ -1738,9 +1739,9 @@ def _mint_nested(
                 id=minted.id,
                 type=node_type,
                 name=minted.name,
-                aliases=list(minted.node.get("aliases", [])),
+                aliases=tuple(minted.node.get("aliases", [])),
                 description=minted.node.get("description"),
-                metadata=dict(minted.node.get("metadata", {})),
+                metadata=FrozenMapping(minted.node.get("metadata", {})),
             )
             if minted.parent_id is not None:
                 assertions.append(

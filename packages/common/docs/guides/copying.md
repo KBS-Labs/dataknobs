@@ -2,7 +2,8 @@
 
 `copy_structure` sits between `dict(value)` and `copy.deepcopy(value)`:
 it rebuilds nested dicts and lists, and passes every other value through
-unchanged.
+unchanged. `freeze_structure` is the same walk with immutable results —
+see [Freezing a structure](#freezing-a-structure).
 
 ```python
 from dataknobs_common import copy_structure
@@ -118,3 +119,59 @@ Without that reference a source freed between two calls sharing one memo
 can have its id reused by the next, and the memo then answers for an
 unrelated object. Two successive calls passing a temporary dict literal
 are enough to reproduce it.
+
+## Freezing a structure
+
+`freeze_structure` walks the way `copy_structure` does, and rebuilds every
+container immutable instead of mutable. Use it for a value something has
+*indexed*: a lookup built once over a structure is wrong the moment that
+structure changes, and a frozen one cannot.
+
+| Handed | Returned |
+|---|---|
+| a mapping | a `FrozenMapping` of frozen values |
+| a `list` or `tuple` | a `tuple` of frozen values |
+| a `set` | a `frozenset` |
+| anything else | the same object |
+
+```python
+from dataknobs_common import FrozenMapping, freeze_structure
+
+frozen = freeze_structure({"schema": {"required": ["name"]}, "tags": {"a"}})
+assert isinstance(frozen, FrozenMapping)
+assert frozen["schema"]["required"] == ("name",)
+assert frozen["tags"] == frozenset({"a"})
+```
+
+Leaves pass through for the same reason they do in `copy_structure`: a live
+object duplicated silently gives its owner a second one. So this freezes the
+*structure*, not every object reachable from it.
+
+An already-frozen value — a `FrozenMapping`, a `frozenset`, a tuple of frozen
+items — comes back as itself, so freezing twice copies nothing.
+
+**A cycle is refused**, where `copy_structure` reproduces one. A mutable copy
+can be made to hold itself; a tuple or a `FrozenMapping` cannot, since each is
+complete before anything can hold it. The `ValueError` names where:
+
+```python
+import pytest
+
+loop = {"name": "loop"}
+loop["self"] = loop
+assert copy_structure(loop)["self"] is not loop        # reproduced
+with pytest.raises(ValueError, match=r"value\['self'\] holds itself"):
+    freeze_structure(loop)                             # refused
+```
+
+### `FrozenMapping`
+
+The read-only mapping `freeze_structure` builds, and a type you can construct
+directly from any mapping or list of pairs; construction freezes what it is
+handed. It refuses `m[k] = v`, `del m[k]` and `update`, and:
+
+- **equals any mapping with the same items**, a plain `dict` included, so a
+  type that held a dict compares exactly as it did;
+- **is unhashable**, and says so to `isinstance(m, Hashable)`;
+- **pickles and deep-copies**, which `types.MappingProxyType` does not — a
+  proxy is also shallow, leaving the values under it writable.

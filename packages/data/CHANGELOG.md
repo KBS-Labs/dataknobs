@@ -1038,6 +1038,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   components. The registry hands each `kind: record` binding the provider
   keyed to its id; one keyed to an authored source is refused at load.
 
+- **`RecordEntitySource` builds entities with the frozen model's types**:
+  each projected entity's `aliases` is a tuple, and its `metadata` and its
+  `SourceRef.locator` are a `FrozenMapping`, as `dataknobs_common`'s ontology
+  types now hold. A new entity is still built per read, so nothing it answered
+  changes; what changes is that the entity handed out cannot be changed by
+  the caller it was handed to.
+
 - **The registry's authored sources answer a revision** spelled as the
   `dataknobs_common` loaders spell it: the document's version, `@`, then a
   digest of the entities bound, since the registry now passes the document's

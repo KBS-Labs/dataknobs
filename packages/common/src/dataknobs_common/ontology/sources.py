@@ -512,9 +512,16 @@ class _EntityIndex:
     hands, which is the arrangement the frozenset above exists to avoid.
 
     **The revision is digested here too, in the same construction**, so the
-    digest and the lookup maps describe one state of the entities. Computed
-    later, it could describe entities changed after the maps were built --
-    a state no lookup answers from.
+    digest and the lookup maps describe one state of the entities. That state
+    is also the only one: an entity is frozen and the mapping is the index's
+    own copy, so nothing ``get()`` can return differs from what was digested.
+
+    **The mapping is the index's own.** Construction takes a copy of the one
+    it was handed before building anything, so an entity the caller adds to
+    or removes from that mapping afterwards reaches no member -- ``get()``
+    included -- rather than reaching ``get()`` alone. Shallow on purpose: an
+    :class:`~dataknobs_common.ontology.model.Entity` is frozen, so the
+    container is the only thing left that could change.
     """
 
     entities: Mapping[str, Entity]
@@ -528,6 +535,7 @@ class _EntityIndex:
     form_edge: int | None = field(default=0, init=False)
 
     def __post_init__(self) -> None:
+        self.entities = dict(self.entities)
         forms: dict[str, set[str]] = {}
         aliases: dict[str, set[str]] = {}
         types: dict[str, set[str]] = {}
@@ -990,6 +998,11 @@ class _AssertionIndex:
     is the newest -- would have to be written into the other and would then be
     two rules that can disagree. Neither flavour holds a matcher, which is why
     a filter added to this class is added to both sources at once.
+
+    **The sequence is the index's own**, copied to a tuple at construction for
+    :class:`_EntityIndex`'s reason: ``find()`` with no criteria scans it, so
+    an assertion appended to the caller's list afterwards would be found
+    there and nowhere else.
     """
 
     assertions: Sequence[Assertion]
@@ -998,6 +1011,7 @@ class _AssertionIndex:
     by_object: dict[str, list[Assertion]] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
+        self.assertions = tuple(self.assertions)
         for assertion in self.assertions:
             self.by_id[assertion.id] = assertion
             self.by_subject.setdefault(assertion.subject, []).append(assertion)

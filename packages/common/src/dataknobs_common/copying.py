@@ -1,18 +1,30 @@
 # SPDX-FileCopyrightText: Copyright 2022-2026 KBS Labs
 # SPDX-License-Identifier: Apache-2.0
 
-"""Copy nested containers without duplicating what they hold.
+"""Copy or freeze nested containers without duplicating what they hold.
 
-One function, for the case that sits between ``dict(value)`` and
-``copy.deepcopy(value)``: a hand-out whose *structure* must be the
-caller's own while its *values* stay whatever the source had.
+Two functions over one walk, for the case that sits between ``dict(value)``
+and ``copy.deepcopy(value)``: the *structure* is rebuilt while the *values*
+stay whatever the source had.
 
-See :func:`copy_structure` for when each of the three is right.
+* :func:`copy_structure` rebuilds it mutable, so a hand-out is the caller's
+  own to change.
+* :func:`freeze_structure` rebuilds it immutable, so a value held by
+  something that indexed it cannot be changed under that index. Its mappings
+  are :class:`FrozenMapping`.
+
+See :func:`copy_structure` for when each of the three copies is right.
 """
 
-from typing import Any
+from __future__ import annotations
 
-__all__ = ["copy_structure"]
+from collections.abc import Iterator, Mapping
+from typing import Any, TypeVar
+
+__all__ = ["FrozenMapping", "copy_structure", "freeze_structure"]
+
+_KT = TypeVar("_KT")
+_VT_co = TypeVar("_VT_co", covariant=True)
 
 # The keep-alive list is filed under the memo's *own* id, which is what
 # ``copy.deepcopy`` does. It cannot collide with the id of anything being
@@ -121,3 +133,163 @@ def copy_structure(value: Any, seen: dict[int, Any] | None = None) -> Any:
             copied_list.append(copy_structure(item, seen))
         return copied_list
     return value
+
+
+class FrozenMapping(Mapping[_KT, _VT_co]):
+    """A read-only mapping whose nested containers are frozen too.
+
+    Built from any mapping, or from what ``dict()`` accepts. Construction
+    runs :func:`freeze_structure` over every value, so a dict nested inside
+    becomes a ``FrozenMapping`` and a list a tuple: nothing reachable through
+    one can be changed in place, which is the property a value indexed at
+    construction needs.
+
+    **Why not** :class:`types.MappingProxyType`. A proxy is shallow -- the
+    values under it stay writable -- and it cannot be pickled or
+    ``deepcopy``'d, which every value holding a plain dict can be. This
+    pickles and deep-copies through :meth:`__reduce__`, as the dict it holds
+    does.
+
+    **Compared as a mapping, and therefore unhashable.** It equals any
+    mapping with the same items, a plain ``dict`` included, so a type that
+    held a dict compares exactly as it did. Equality between mappings is not
+    something a hash over the items can agree with when the items are
+    unhashable, so ``__hash__`` is declared ``None`` and
+    :class:`collections.abc.Hashable` answers no rather than the call raising.
+
+    Example:
+        ```python
+        from dataknobs_common import FrozenMapping
+
+        meta = FrozenMapping({"tags": ["hound"], "size": "m"})
+        assert meta == {"tags": ("hound",), "size": "m"}
+        assert meta["tags"] == ("hound",)   # the list came back a tuple
+        ```
+    """
+
+    __slots__ = ("_data",)
+
+    _data: dict[_KT, _VT_co]
+
+    def __init__(self, items: Any = (), /) -> None:
+        """Freeze ``items``: a mapping, or an iterable of key-value pairs.
+
+        Raises:
+            ValueError: A container under ``items`` holds itself.
+        """
+        source = items if isinstance(items, Mapping) else dict(items)
+        self._data = {
+            key: _freeze(value, f"value[{key!r}]", set()) for key, value in source.items()
+        }
+
+    @classmethod
+    def _adopt(cls, data: dict[Any, Any]) -> FrozenMapping[Any, Any]:
+        """Wrap ``data``, whose values are already frozen, without walking it again."""
+        frozen: FrozenMapping[Any, Any] = cls.__new__(cls)
+        frozen._data = data
+        return frozen
+
+    def __getitem__(self, key: _KT) -> _VT_co:
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[_KT]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({self._data!r})"
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (type(self)._adopt, (self._data,))
+
+
+# Assigned after the class body for the reason ``StructuredConfig.__hash__`` is:
+# mypy reads a body ``__hash__ = None`` as an override of ``object.__hash__``.
+FrozenMapping.__hash__ = None  # type: ignore[assignment]
+
+
+def freeze_structure(value: Any) -> Any:
+    """Rebuild nested containers immutable; pass every other value through.
+
+    :func:`copy_structure`'s walk with immutable results:
+
+    ======================== ==========================================
+    Handed                   Returned
+    ======================== ==========================================
+    a ``Mapping``            a :class:`FrozenMapping` of frozen values
+    a ``list`` or ``tuple``  a ``tuple`` of frozen values
+    a ``set``                a ``frozenset``
+    anything else            the same object
+    ======================== ==========================================
+
+    **Leaves pass through, for** :func:`copy_structure`'s **reason**: a live
+    object duplicated silently gives its owner a second one. So a mutable
+    object that is not one of those containers stays mutable, and this is a
+    freeze of the *structure* rather than of everything reachable.
+
+    **An already-frozen value comes back as itself**: a ``FrozenMapping``
+    (whose construction froze it), a ``frozenset``, and a tuple whose items
+    are all already frozen. So freezing twice copies nothing.
+
+    **A cycle is refused, not reproduced.** This is where the walk departs
+    from :func:`copy_structure`, whose memo rebuilds a self-referring
+    structure the way ``copy.deepcopy`` does. A mutable copy can be made to
+    hold itself; a tuple or a ``FrozenMapping`` cannot, because each is
+    complete before anything can hold it. A subtree merely *shared* between
+    two keys is frozen once per occurrence, which loses the sharing and
+    nothing else, since neither copy can change.
+
+    Args:
+        value: The value to freeze. Any type.
+
+    Returns:
+        The value with its mappings, lists, tuples and sets rebuilt
+        immutable, and every other value the original.
+
+    Raises:
+        ValueError: A container under ``value`` holds itself. The message
+            names where.
+
+    Example:
+        ```python
+        from dataknobs_common import FrozenMapping, freeze_structure
+
+        frozen = freeze_structure({"schema": {"required": ["name"]}})
+        assert isinstance(frozen, FrozenMapping)
+        assert frozen["schema"]["required"] == ("name",)
+        ```
+    """
+    return _freeze(value, "value", set())
+
+
+def _freeze(value: Any, path: str, active: set[int]) -> Any:
+    """:func:`freeze_structure`'s walk, carrying the path and the open containers.
+
+    ``active`` holds the ids of the containers *on the current path*, not of
+    every container seen, which is what tells a cycle from a shared subtree:
+    the ids are removed on the way back out. Holding each container on the
+    path keeps its id from being reused while it is there.
+    """
+    if isinstance(value, (FrozenMapping, frozenset)):
+        return value
+    if not isinstance(value, (Mapping, list, tuple, set)):
+        return value
+    marker = id(value)
+    if marker in active:
+        raise ValueError(f"{path} holds itself, so it cannot be frozen.")
+    active.add(marker)
+    try:
+        if isinstance(value, Mapping):
+            return FrozenMapping._adopt(
+                {key: _freeze(item, f"{path}[{key!r}]", active) for key, item in value.items()}
+            )
+        if isinstance(value, set):
+            return frozenset(value)
+        items = tuple(_freeze(item, f"{path}[{index}]", active) for index, item in enumerate(value))
+        if isinstance(value, tuple) and all(a is b for a, b in zip(items, value, strict=True)):
+            return value
+        return items
+    finally:
+        active.discard(marker)

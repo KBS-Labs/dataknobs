@@ -383,6 +383,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   normalizer is not part of the revision. Compare answers for equality; do not
   parse them.
 
+- **A loaded vocabulary does not change.** The ontology's value types --
+  `Entity`, `EntityType`, `RelationType`, `AttributeDef`, `Assertion`,
+  `Literal`, `Provenance`, `SourceRef` and `ResolutionRef` -- are frozen, so
+  assigning a field raises `FrozenInstanceError`; they still compare field-wise
+  and are still unhashable. Their collections are immutable: `aliases`,
+  `attributes` and `enum_values` are tuples, and `metadata`,
+  `SourceRef.locator` and `ResolutionRef.corpus` are a `FrozenMapping`, frozen
+  all the way down. A list or dict handed to a constructor is converted, so a
+  caller passing one still works; `dataclasses.replace` derives a changed
+  entity. `MappingEntitySource`, `MappingAssertionSource` and their async twins
+  copy the mapping or sequence they are built from, so a change the caller
+  makes to it afterwards reaches no member. Together these keep `get()` and the
+  lookups, which are built once at construction, answering from one state --
+  and make a source's `revision()` describe everything `get()` returns.
+  **A list under `metadata:` reads back as a tuple**, so
+  `entity.metadata["tags"] == ["a"]` is `False`; compare against a tuple.
+
+- **`freeze_structure(value)` and `FrozenMapping`**, exported from
+  `dataknobs_common` beside `copy_structure`. `freeze_structure` is
+  `copy_structure`'s walk with immutable results: a mapping becomes a
+  `FrozenMapping`, a list or tuple a tuple, a set a `frozenset`, and any other
+  value passes through. A structure that holds itself is refused with
+  `ValueError` naming where, rather than reproduced. `FrozenMapping` refuses
+  writes, freezes what it is constructed from, equals any mapping with the same
+  items, is unhashable, and pickles and deep-copies, which
+  `types.MappingProxyType` does not.
+
 - **`fingerprint_value(value, *, path="value")`**, exported from
   `dataknobs_common`: a SHA-256 of any value's content by the canonical
   encoding `StructuredConfig.fingerprint()` uses. Unlike a config fingerprint
@@ -1328,11 +1355,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 359,
-  the nineteen beyond them being the operation family, the near-spelling rung,
+  the resolution cascade — 134 names, taking the package's `__all__` to 361,
+  the twenty-one beyond them being the operation family, the near-spelling rung,
   the surface-form catalogue, the index-source family, the edge rule's three
-  functions, `aclosing_iter`, `PluginConfig`, `naming_refusals` and
-  `fingerprint_value`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond
+  functions, `aclosing_iter`, `PluginConfig`, `naming_refusals`,
+  `fingerprint_value`, `freeze_structure` and `FrozenMapping`, each added by
+  its own entry. `declared_candidates` is inside the 134 rather than beyond
   them, which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to

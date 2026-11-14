@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Generic, NamedTuple, Protocol, runtime_ch
 # Re-exported, not used here: this module is a published import path for these
 # three and stayed one when they moved. The redundant-alias spelling of a
 # re-export is what `PLC0414` declines, so the directive names `F401` instead.
+from dataknobs_common.copying import FrozenMapping, freeze_structure
 from dataknobs_common.exceptions import ValidationError
 
 from dataknobs_common.entity_resolution.values import (  # noqa: F401
@@ -84,7 +85,7 @@ class InferenceMode(Enum):
 # only types here a resolver has to construct.
 
 
-@dataclass(eq=True, frozen=False)
+@dataclass(frozen=True)
 class SourceRef:
     """Where a projected entity or derived assertion came from.
 
@@ -96,15 +97,28 @@ class SourceRef:
     member that has to work. ``locator`` is a mapping, so a hash over the
     fields would raise; declaring the type unhashable is how a caller learns
     that from :class:`collections.abc.Hashable` rather than from the call.
+
+    **Frozen, and ``locator`` frozen all the way down**, because a source
+    indexes what it holds once, at construction: a value changed afterwards
+    would disagree with every lookup built from it. Any mapping is accepted
+    and held as a :class:`~dataknobs_common.copying.FrozenMapping`.
     """
 
     source_id: str
     kind: str
-    locator: Mapping[str, Any]
+    locator: FrozenMapping[str, Any]
     projection_id: str | None = None
 
+    # Declared in the body, as on every frozen type here: a frozen dataclass
+    # with equality otherwise generates a hash over fields that cannot hash.
+    __hash__ = None  # type: ignore[assignment]
 
-@dataclass(eq=True, frozen=False)
+    def __post_init__(self) -> None:
+        """Hold ``locator`` frozen, whatever mapping it was handed as."""
+        object.__setattr__(self, "locator", freeze_structure(self.locator))
+
+
+@dataclass(frozen=True)
 class Provenance(Generic[K]):
     """Who said a thing, on what evidence, and when.
 
@@ -116,6 +130,9 @@ class Provenance(Generic[K]):
     gives -- which is also why it is *this* record rather than a further one:
     it holds a ``SourceRef``, so a hash here would reach that mapping through
     it.
+
+    Frozen for :class:`SourceRef`'s reason: an assertion carrying it is
+    indexed at construction.
     """
 
     source: SourceRef | None = None
@@ -125,13 +142,19 @@ class Provenance(Generic[K]):
     asserted_at: datetime | None = None
     derivation: str | None = None
 
+    __hash__ = None  # type: ignore[assignment]
 
-@dataclass
+
+@dataclass(frozen=True)
 class AttributeDef:
     """One attribute an entity type declares.
 
     ``description`` is not decoration: it is what an extraction prompt is
     built from, so an empty one costs accuracy rather than tidiness.
+
+    **Compared field-wise, and unhashable; frozen**, for :class:`SourceRef`'s
+    reason -- the entity type holding it is indexed at construction.
+    ``enum_values`` is held as a tuple, whatever sequence it was handed as.
     """
 
     name: str
@@ -139,11 +162,18 @@ class AttributeDef:
     field_type: FieldType | None = None
     entity_type: str | None = None
     required: bool = False
-    enum_values: list[str] | None = None
+    enum_values: tuple[str, ...] | None = None
     description: str = ""
 
+    __hash__ = None  # type: ignore[assignment]
 
-@dataclass
+    def __post_init__(self) -> None:
+        """Hold ``enum_values`` as a tuple, whatever sequence it was handed as."""
+        if self.enum_values is not None:
+            object.__setattr__(self, "enum_values", tuple(self.enum_values))
+
+
+@dataclass(frozen=True)
 class Entity(Generic[K]):
     """A thing the vocabulary names.
 
@@ -165,18 +195,35 @@ class Entity(Generic[K]):
     :class:`EntityType` and :class:`RelationType` below bind the parameter to
     ``str`` outright: a schema id is a string wherever the instances came
     from.
+
+    **Compared field-wise, and therefore unhashable.** Two entities with the
+    same fields are one entity; ``metadata`` is a mapping, so a hash over the
+    fields would raise.
+
+    **Frozen, with immutable collections**, because a source indexes an
+    entity's id, name, aliases and type once, at construction: an entity
+    changed afterwards would show one thing from ``get()`` and be found by
+    another. ``aliases`` is held as a tuple and ``metadata`` as a
+    :class:`~dataknobs_common.copying.FrozenMapping`, frozen all the way down,
+    whatever they were handed as. Derive a changed entity with
+    :func:`dataclasses.replace`.
     """
 
     id: K
     type: str
     name: str = ""
-    aliases: list[str] = field(default_factory=list)
+    aliases: tuple[str, ...] = ()
     description: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: FrozenMapping[str, Any] = field(default_factory=FrozenMapping)
     source: SourceRef | None = None
 
+    __hash__ = None  # type: ignore[assignment]
+
     def __post_init__(self) -> None:
-        """Default the name to the id, rendered.
+        """Default the name to the id, rendered, and freeze the collections.
+
+        The writes go through ``object.__setattr__``, as a frozen dataclass's
+        own construction does, and run before anyone can hold the entity.
 
         **``str()`` here, and this is the one place in the package that renders
         a key without a codec.** The rule that forbids a default rendering
@@ -194,10 +241,12 @@ class Entity(Generic[K]):
         field already lets them do.
         """
         if not self.name:
-            self.name = str(self.id)
+            object.__setattr__(self, "name", str(self.id))
+        object.__setattr__(self, "aliases", tuple(self.aliases))
+        object.__setattr__(self, "metadata", freeze_structure(self.metadata))
 
 
-@dataclass
+@dataclass(frozen=True)
 class EntityType(Entity[str]):
     """An entity that describes a kind of entity.
 
@@ -210,7 +259,7 @@ class EntityType(Entity[str]):
     """
 
     type: str = DK_ENTITY_TYPE
-    attributes: list[AttributeDef] = field(default_factory=list)
+    attributes: tuple[AttributeDef, ...] = ()
     isa: str | None = None
     """The type this one specialises, or ``None`` for a root of the lattice.
 
@@ -234,8 +283,17 @@ class EntityType(Entity[str]):
     walk without choosing an order between branches.
     """
 
+    # Declared again, and not inherited: a frozen dataclass subclass generates
+    # its own hash over its fields unless its own body says otherwise.
+    __hash__ = None
 
-@dataclass
+    def __post_init__(self) -> None:
+        """Everything :class:`Entity` does, and hold ``attributes`` as a tuple."""
+        super().__post_init__()
+        object.__setattr__(self, "attributes", tuple(self.attributes))
+
+
+@dataclass(frozen=True)
 class RelationType(Entity[str]):
     """An entity that describes a kind of edge.
 
@@ -253,6 +311,9 @@ class RelationType(Entity[str]):
     symmetric: bool = False
     transitive: bool = False
     inference: InferenceMode = InferenceMode.ON_DEMAND
+
+    # Declared again, for :class:`EntityType`'s reason.
+    __hash__ = None
 
 
 #: A relation id to resolve, or the definition itself.
@@ -289,18 +350,27 @@ class EntityRef(Generic[K]):
     entity_id: K
 
 
-@dataclass(eq=True, frozen=False)
+@dataclass(frozen=True)
 class Literal:
     """An assertion object that is a value rather than an entity.
 
     Compared field-wise, and unhashable: two literals carrying one value are
-    one literal, which shipped tests assert, and ``metadata`` is a dict.
+    one literal, which shipped tests assert, and ``metadata`` is a mapping.
+
+    Frozen, with ``metadata`` frozen all the way down, for
+    :class:`Assertion`'s reason. ``value`` is a leaf and is held as given.
     """
 
     value: Any
     type: FieldType
     unit: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: FrozenMapping[str, Any] = field(default_factory=FrozenMapping)
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        """Hold ``metadata`` frozen, whatever mapping it was handed as."""
+        object.__setattr__(self, "metadata", freeze_structure(self.metadata))
 
     @classmethod
     def of(cls, value: Any, type: FieldType | None = None) -> Literal:
@@ -351,7 +421,7 @@ class Polarity(Enum):
     NEGATED = "negated"
 
 
-@dataclass
+@dataclass(frozen=True)
 class Assertion(Generic[K]):
     """One stated fact: a subject, a relation, and what it relates to.
 
@@ -369,13 +439,19 @@ class Assertion(Generic[K]):
     ``polarity`` is what makes *not* statable. It defaults to ``ASSERTED``, so
     every assertion written before the field existed means what it always
     meant, and a reader that ignores it reads a vocabulary of positives.
+
+    **Compared field-wise, and unhashable; frozen**, because a source indexes
+    an assertion by id, subject and object once, at construction: one changed
+    afterwards would be shown by ``get()`` and unreachable by ``find()``.
+    ``metadata`` is held frozen all the way down and ``derived_from`` as a
+    tuple, whatever they were handed as.
     """
 
     id: str
     subject: K
     relation: RelationRef
     object: Term[K]
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: FrozenMapping[str, Any] = field(default_factory=FrozenMapping)
     provenance: Provenance[K] | None = None
     derived_from: tuple[str, ...] = ()
     stale: bool = False
@@ -384,8 +460,10 @@ class Assertion(Generic[K]):
     #: ``metadata`` under a caller who passes it positionally.
     polarity: Polarity = Polarity.ASSERTED
 
+    __hash__ = None  # type: ignore[assignment]
+
     def __post_init__(self) -> None:
-        """Canonicalise the relation, so one fact has one spelling.
+        """Canonicalise the relation, so one fact has one spelling, and freeze.
 
         The generated ``__eq__`` compares the field it was given, so the same
         stated fact written by a caller holding the definition compared
@@ -393,7 +471,9 @@ class Assertion(Generic[K]):
         produced that pair -- it coerces with ``str()`` -- but a caller
         building an assertion from a ``RelationType`` it just looked up does.
         """
-        self.relation = relation_id(self.relation)
+        object.__setattr__(self, "relation", relation_id(self.relation))
+        object.__setattr__(self, "metadata", freeze_structure(self.metadata))
+        object.__setattr__(self, "derived_from", tuple(self.derived_from))
 
 
 class QualifiedId(NamedTuple):

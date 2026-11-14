@@ -81,7 +81,7 @@ def with_variants(
     varied: dict[str, Entity[str]] = {}
     for entity_id, entity in entities.items():
         forms = added.get(entity_id)
-        varied[entity_id] = replace(entity, aliases=[*entity.aliases, *forms]) if forms else entity
+        varied[entity_id] = replace(entity, aliases=(*entity.aliases, *forms)) if forms else entity
     return varied, report
 
 

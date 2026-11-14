@@ -34,6 +34,7 @@ else:
     # deletes this dependency the day the floor rises.
     from typing_extensions import TypeAliasType
 
+from dataknobs_common.copying import FrozenMapping, freeze_structure
 from dataknobs_common.entity_resolution.protocols import MembershipOracle
 from dataknobs_common.hierarchy import K
 from dataknobs_common.exceptions import ValidationError
@@ -637,7 +638,7 @@ class ResolutionResult(Generic[K]):
             signal=record.signal if record else "",
             kind=record.kind if record else EvidenceKind.INFERRED,
             compatibility=self.compatibility,
-            corpus={},
+            corpus=FrozenMapping(),
             span=record.span if record else None,
             runners_up=tuple(
                 RunnerUp(entity_id=other.entity_id, evidence=other.evidence[0])
@@ -681,7 +682,7 @@ class RunnerUp(Generic[K]):
     """
 
 
-@dataclass(eq=True, frozen=False)
+@dataclass(frozen=True)
 class ResolutionRef(Generic[K]):
     """What an entity-valued attribute was resolved on.
 
@@ -693,6 +694,11 @@ class ResolutionRef(Generic[K]):
     **Compared field-wise, and therefore unhashable**, for the reason that
     class gives: two references recording one resolution are one reference,
     and ``corpus`` is a mapping.
+
+    **Frozen, with ``corpus`` frozen all the way down**, because a
+    :class:`~dataknobs_common.ontology.model.Provenance` carries it into an
+    assertion a source indexes at construction. Any mapping is accepted and
+    held as a :class:`~dataknobs_common.copying.FrozenMapping`.
 
     **``signals`` is gone and ``signal`` and ``kind`` stand in its place.** It
     was a mapping of rung name to score, which recorded which rungs fired and
@@ -719,7 +725,7 @@ class ResolutionRef(Generic[K]):
     """
 
     compatibility: CompatibilityVerdict
-    corpus: Mapping[str, Any]
+    corpus: FrozenMapping[str, Any]
 
     span: tuple[int, int] | None = None
     """Where in :attr:`query` the match sat, half-open.
@@ -743,6 +749,13 @@ class ResolutionRef(Generic[K]):
     here, because a list of alternatives has to come back in *some* order and
     inventing a different one would be a second artifact rather than none.
     """
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        """Hold ``corpus`` frozen and ``runners_up`` as a tuple, whatever they were handed as."""
+        object.__setattr__(self, "corpus", freeze_structure(self.corpus))
+        object.__setattr__(self, "runners_up", tuple(self.runners_up))
 
 
 #: The scope axis a bare ``within`` value scopes on.

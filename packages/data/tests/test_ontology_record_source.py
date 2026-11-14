@@ -25,6 +25,7 @@ from dataknobs_common.capabilities import (
     require_capability,
     supports_capability,
 )
+from dataknobs_common.copying import FrozenMapping
 from dataknobs_common.entity_resolution.signals import AsyncScanningSignal
 from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.ontology import OntologyConfig, SourceRef
@@ -300,6 +301,36 @@ async def test_a_source_with_no_lookup_refuses_rather_than_answering_the_unfolde
 # --------------------------------------------------------------------------
 
 
+async def test_a_projected_entity_holds_the_immutable_types() -> None:
+    """A fresh entity per read, built with what the model holds.
+
+    The source never depended on its entities staying unchanged -- each read
+    builds a new one -- but the model it constructs is frozen, so what it
+    hands out is too: a tuple of aliases and frozen mappings.
+    """
+    registry, ontology = await _bound(
+        await _store(
+            {
+                "sku": "sku-1",
+                "title": "Beagle",
+                "alt_names": "hound, beagle dog",
+                "owner_team": "catalog",
+            }
+        )
+    )
+    try:
+        entity = await ontology.entity("sku-1")
+        assert entity is not None
+        assert isinstance(entity.aliases, tuple)
+        assert isinstance(entity.metadata, FrozenMapping)
+        assert entity.source is not None
+        assert isinstance(entity.source.locator, FrozenMapping)
+        with pytest.raises(TypeError):
+            entity.metadata["owner_team"] = "other"  # type: ignore[index]
+    finally:
+        await registry.close()
+
+
 async def test_get_is_a_query_because_the_projections_id_is_not_the_storage_id() -> None:
     """Measured rather than assumed, and it is why there is no read path here."""
     database = await _store({"sku": "sku-4471", "title": "Beagle"})
@@ -350,7 +381,7 @@ async def test_every_declarative_form_projects() -> None:
         assert entity.id == "sku-1"
         assert entity.type == "Product"
         assert entity.name == "Beagle"
-        assert entity.aliases == ["hound", "beagle dog"]
+        assert entity.aliases == ("hound", "beagle dog")
         assert entity.description == "A small hound."
         assert entity.metadata == {"owner_team": "catalog"}
         assert entity.source is not None
@@ -717,7 +748,7 @@ async def test_get_over_a_shared_store_answers_the_entity_row_not_a_form_row() -
         found = await ontology.entity("sku-4471")
         assert found is not None
         assert found.name == "Beagle", "a form row was projected as the entity"
-        assert found.aliases == ["hound", "beagle dog"]
+        assert found.aliases == ("hound", "beagle dog")
     finally:
         await registry.close()
 

@@ -1,17 +1,23 @@
-"""``copy_structure`` -- containers rebuilt, leaves shared.
+"""``copy_structure`` and ``freeze_structure`` -- containers rebuilt, leaves shared.
 
-The three properties that decide when this is the right copy, each
-asserted against the alternative it is chosen over: it isolates where
+The three properties that decide when ``copy_structure`` is the right copy,
+each asserted against the alternative it is chosen over: it isolates where
 ``dict()`` does not, and it shares where ``copy.deepcopy`` would not.
+
+``freeze_structure`` is the same walk with immutable results, and
+``FrozenMapping`` is the mapping it builds; their tests follow.
 """
 
 import copy
+import pickle
 import threading
+import types
+from collections.abc import Hashable
 from typing import Any
 
 import pytest
 
-from dataknobs_common import copy_structure
+from dataknobs_common import FrozenMapping, copy_structure, freeze_structure
 
 
 class TestContainersAreRebuilt:
@@ -191,3 +197,107 @@ class TestNonContainers:
 
         handed_out["tags"].add("added")
         assert "added" in source["tags"]
+
+
+class TestFrozenMapping:
+    """A read-only mapping that keeps what a plain dict can do."""
+
+    def test_it_refuses_every_write(self) -> None:
+        frozen = FrozenMapping({"k": 1})
+        with pytest.raises(TypeError):
+            frozen["k"] = 2  # type: ignore[index]
+        with pytest.raises(TypeError):
+            del frozen["k"]  # type: ignore[attr-defined]
+        with pytest.raises(AttributeError):
+            frozen.update({"k": 2})  # type: ignore[attr-defined]
+        assert frozen == {"k": 1}
+
+    def test_it_equals_a_dict_with_the_same_items_from_either_side(self) -> None:
+        assert FrozenMapping({"k": 1}) == {"k": 1}
+        assert FrozenMapping({"k": 1}) == {"k": 1}
+        assert FrozenMapping({"k": 1}) != {"k": 2}
+
+    def test_it_answers_hashable_honestly(self) -> None:
+        frozen = FrozenMapping({"k": 1})
+        assert not isinstance(frozen, Hashable)
+        with pytest.raises(TypeError):
+            hash(frozen)
+
+    def test_it_freezes_what_it_is_handed_all_the_way_down(self) -> None:
+        frozen = FrozenMapping({"tags": ["a"], "inner": {"k": [1]}})
+        assert frozen["tags"] == ("a",)
+        assert isinstance(frozen["inner"], FrozenMapping)
+        assert frozen["inner"]["k"] == (1,)
+
+    def test_it_accepts_pairs_as_dict_does(self) -> None:
+        assert FrozenMapping([("a", 1), ("b", 2)]) == {"a": 1, "b": 2}
+
+    def test_the_callers_dict_does_not_reach_it(self) -> None:
+        source = {"k": 1}
+        frozen = FrozenMapping(source)
+        source["k"] = 2
+        assert frozen["k"] == 1
+
+    def test_it_survives_pickle_and_deepcopy_where_a_proxy_does_not(self) -> None:
+        """The property that decided against ``types.MappingProxyType``."""
+        frozen = FrozenMapping({"k": {"inner": [1]}})
+
+        for twin in (pickle.loads(pickle.dumps(frozen)), copy.deepcopy(frozen)):
+            assert twin == frozen
+            assert isinstance(twin, FrozenMapping)
+            assert isinstance(twin["k"], FrozenMapping)
+
+        proxy = types.MappingProxyType({"k": 1})
+        with pytest.raises(TypeError):
+            pickle.dumps(proxy)
+
+
+class TestFreezeStructure:
+    """``copy_structure``'s walk, with immutable results."""
+
+    def test_nested_containers_become_immutable(self) -> None:
+        frozen = freeze_structure({"d": {"k": 1}, "l": [1, [2]], "s": {3}, "t": (4, [5])})
+
+        assert isinstance(frozen, FrozenMapping)
+        assert isinstance(frozen["d"], FrozenMapping)
+        assert frozen["l"] == (1, (2,))
+        assert frozen["s"] == frozenset({3})
+        assert frozen["t"] == (4, (5,))
+
+    def test_a_live_object_passes_through_by_identity(self) -> None:
+        """For ``copy_structure``'s reason: duplicating one gives its owner a second."""
+        lock = threading.Lock()
+        assert freeze_structure({"lock": lock})["lock"] is lock
+
+    @pytest.mark.parametrize(
+        "value",
+        [FrozenMapping({"k": (1,)}), frozenset({1}), (1, "a", (2,)), "text", 3],
+    )
+    def test_an_already_frozen_value_comes_back_as_itself(self, value: Any) -> None:
+        assert freeze_structure(value) is value
+
+    def test_a_tuple_holding_a_list_is_rebuilt(self) -> None:
+        source = (1, [2])
+        assert freeze_structure(source) == (1, (2,))
+        assert freeze_structure(source) is not source
+
+    def test_a_cycle_is_refused_where_copy_structure_reproduces_it(self) -> None:
+        source: dict[str, Any] = {"name": "loop"}
+        source["self"] = source
+
+        copied = copy_structure(source)
+        assert copied["self"] is copied
+
+        with pytest.raises(ValueError, match=r"value\['self'\] holds itself"):
+            freeze_structure(source)
+
+    def test_a_cycle_through_a_list_names_the_index(self) -> None:
+        source: list[Any] = [1]
+        source.append({"back": source})
+        with pytest.raises(ValueError, match=r"value\[1\]\['back'\] holds itself"):
+            freeze_structure(source)
+
+    def test_a_shared_subtree_is_not_a_cycle(self) -> None:
+        shared = [1]
+        frozen = freeze_structure({"a": shared, "b": shared})
+        assert frozen == {"a": (1,), "b": (1,)}
