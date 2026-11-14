@@ -1876,7 +1876,17 @@ _SPECS = [
 ]
 
 
-@pytest.mark.parametrize("spec", _SPECS, ids=repr)
+def _spec_id(spec: Mapping[str, Any]) -> str:
+    """A spec's test id, the same in every process.
+
+    ``repr`` of a function carries its address, which differs between xdist
+    workers, and workers that collect different ids abort the run.
+    """
+    parts = [f"{key}={getattr(value, '__name__', None) or value!r}" for key, value in spec.items()]
+    return ",".join(parts) or "empty"
+
+
+@pytest.mark.parametrize("spec", _SPECS, ids=_spec_id)
 @pytest.mark.parametrize("source_fold", [None, _squash], ids=["counted", "uncountable"])
 async def test_window_bounded_answers_what_the_built_rung_does(
     spec: dict[str, Any], source_fold: Callable[[str], str] | None
@@ -1926,7 +1936,11 @@ _NOT_A_COUNT = [
 ]
 
 
-@pytest.mark.parametrize(("rung", "key", "value"), _NOT_A_COUNT, ids=repr)
+@pytest.mark.parametrize(
+    ("rung", "key", "value"),
+    _NOT_A_COUNT,
+    ids=[f"{rung.__name__}-{key}-{value!r}" for rung, key, value in _NOT_A_COUNT],
+)
 def test_a_number_of_the_wrong_kind_is_refused_by_name(rung: type, key: str, value: Any) -> None:
     """A document's ``"4"`` or ``2.5`` is refused where it is read, naming the key.
 
