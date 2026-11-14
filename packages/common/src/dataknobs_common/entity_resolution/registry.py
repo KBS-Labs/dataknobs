@@ -41,6 +41,7 @@ from dataknobs_common.entity_resolution.signals import (
     ScanningSignal,
 )
 from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.text.tokenizers import tokenizer_from_config
 
 __all__ = ["async_signal_backends", "declared_signal_metadata", "signal_backends"]
 
@@ -80,6 +81,7 @@ def _make_scan(config: dict[str, Any]) -> MatchSignal:
         normalizer=config.get("normalizer"),
         max_window=config.get("max_window"),
         max_edge=config.get("max_edge"),
+        tokenizer=tokenizer_from_config(config.get("tokenizer")),
     )
 
 
@@ -98,12 +100,18 @@ def _make_lexical(config: dict[str, Any]) -> MatchSignal:
     # the scan. Resolving a dotted path into the function it names would let
     # a document reach any importable callable, which is a wider decision
     # than this one.
+    #
+    # ``tokenizer`` **is** resolved, on this rung and on the scan, because a
+    # name in :data:`~dataknobs_common.text.TOKENIZERS` reaches only what
+    # was registered there -- the registry is the convention the paragraph
+    # above defers to, and it is narrow by construction.
     return LexicalSignal(
         config["entities"],
         threshold=config.get("threshold", 0.85),
         scorer=config.get("scorer"),
         normalizer=config.get("normalizer"),
         max_query_tokens=config.get("max_query_tokens"),
+        tokenizer=tokenizer_from_config(config.get("tokenizer")),
     )
 
 
@@ -121,6 +129,7 @@ def _make_async_scan(config: dict[str, Any]) -> AsyncMatchSignal:
         normalizer=config.get("normalizer"),
         max_window=config.get("max_window"),
         max_edge=config.get("max_edge"),
+        tokenizer=tokenizer_from_config(config.get("tokenizer")),
     )
 
 
@@ -131,6 +140,7 @@ def _make_async_lexical(config: dict[str, Any]) -> AsyncMatchSignal:
         scorer=config.get("scorer"),
         normalizer=config.get("normalizer"),
         max_query_tokens=config.get("max_query_tokens"),
+        tokenizer=tokenizer_from_config(config.get("tokenizer")),
     )
 
 

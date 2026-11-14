@@ -16,6 +16,9 @@ Two halves, each a module of its own, and every name re-exported here so
   :mod:`dataknobs_common.registry` and :mod:`dataknobs_common.exceptions`, which
   import only the standard library, so the package still opens no edge back
   into the subpackages that import it.
+
+:mod:`~dataknobs_common.text.tokenizers` names the tokenizers a scan can run
+over, so a configuration can choose one; it imports what ``variants`` does.
 """
 
 from dataknobs_common.text.scan import (
@@ -27,6 +30,7 @@ from dataknobs_common.text.scan import (
     punctuation_edges,
     token_spans,
 )
+from dataknobs_common.text.tokenizers import TOKENIZERS, Tokenizer, tokenizer_from_config
 from dataknobs_common.text.variants import (
     DEFAULT_RULES,
     VARIANT_RULES,
@@ -52,10 +56,12 @@ from dataknobs_common.text.variants import (
 
 __all__ = [
     "DEFAULT_RULES",
+    "TOKENIZERS",
     "VARIANT_RULES",
     "Declared",
     "Refusal",
     "Rule",
+    "Tokenizer",
     "Variant",
     "Variants",
     "admit",
@@ -78,4 +84,5 @@ __all__ = [
     "split",
     "strip_prefix",
     "token_spans",
+    "tokenizer_from_config",
 ]

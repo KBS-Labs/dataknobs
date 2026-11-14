@@ -2069,6 +2069,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   calls it over `FormHit`s, and a second scanner over `probe_spans` calls it
   over its own.
 
+- **A tokenizer for the scanning rungs: `tokenizer=` on `ScanningSignal`,
+  `LexicalSignal` and their async twins, with `Tokenizer`, `TOKENIZERS` and
+  `tokenizer_from_config`** in `dataknobs_common.text` and on both doors. A
+  tokenizer is any callable returning a string's tokens as spans; the rung's
+  windows start and end on its tokens. A document names one under
+  `tokenizer:` on a `kind: scan` or `kind: lexical` rung — a name in
+  `TOKENIZERS`, or `{name: ..., <params>}` — and an unknown name is refused
+  with `ValidationError` listing the registered ones. `default` is registered
+  and is `token_spans` itself. A scan with any other tokenizer does not take
+  its window or edge bound from the source, whose counts are in default
+  tokens, so `max_window` and `max_edge` are its only caps — as for a rung with
+  its own `normalizer`. `LexicalSignal`'s bound is in characters and is
+  unchanged by a tokenizer; its `max_query_tokens` counts the tokenizer's
+  tokens.
+
 - **`SourceDescription.form_edge: int | None`, with no default**, for the
   reason `declares` has none. How many punctuation characters the widest edge
   of a declared form carries: `0` for none — a scan extends nothing — `n` for

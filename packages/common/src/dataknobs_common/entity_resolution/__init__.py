@@ -38,7 +38,9 @@ is broken.
 ``punctuation_edges``, ``edge_extensions`` and ``probe_spans`` -- and
 ``narrowest``, the rule that keeps one piece of evidence per window, are
 re-exported here beside the rungs that need them, because writing a scanning
-rung is what they are for. They stay in ``text`` itself, which imports nothing from this package, so the
+rung is what they are for, as are ``Tokenizer``, ``TOKENIZERS`` and
+``tokenizer_from_config``, which say where a scan's tokens come from. They
+stay in ``text`` itself, which imports nothing from this package, so the
 vocabulary side can fold and measure with the same policy without depending
 on it.
 
@@ -106,12 +108,15 @@ from dataknobs_common.entity_resolution.values import (
     within_memberships,
 )
 from dataknobs_common.text import (
+    TOKENIZERS,
+    Tokenizer,
     content_span,
     edge_extensions,
     narrowest,
     probe_spans,
     punctuation_edges,
     token_spans,
+    tokenizer_from_config,
 )
 
 __all__ = [
@@ -150,6 +155,8 @@ __all__ = [
     "ScopeAuthority",
     "Scoring",
     "SurfaceFormCatalog",
+    "TOKENIZERS",
+    "Tokenizer",
     "Within",
     "async_signal_backends",
     "content_span",
@@ -164,6 +171,7 @@ __all__ = [
     "refuse_negative_k",
     "signal_backends",
     "token_spans",
+    "tokenizer_from_config",
     "refuse_unknown_axes",
     "within_admits",
     "within_axes",

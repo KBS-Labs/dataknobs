@@ -874,14 +874,64 @@ rules is 90,600 extensions. `max_edge` caps it, and like `max_window` it is the
 one number that can cost an answer. A document sets both on a `kind: scan`
 rung.
 
+### Your own tokens
+
+A window starts and ends on a token, and the default token is a run of letters
+and digits. That is the right unit for most vocabularies and the wrong one for
+three kinds of form: a symbol (`$`), a unit the default splits (`1,234.50` is
+three tokens), and a name inside a script written without spaces
+(`東京タワーに行きました` is one token, so `東京タワー` is never a window). Give
+the rung tokens that reach them — any callable returning a string's tokens as
+in-order, non-overlapping half-open spans:
+
+```python
+import re
+
+from dataknobs_common.entity_resolution import ScanningSignal
+from dataknobs_common.ontology import Entity, MappingEntitySource
+from dataknobs_common.text import TOKENIZERS
+
+
+def symbols(text: str) -> list[tuple[int, int]]:
+    # Runs of letters and digits, and each other non-space character alone.
+    return [m.span() for m in re.finditer(r"[^\W_]+|[^\w\s]|_", text)]
+
+
+money = MappingEntitySource(
+    {"usd": Entity(id="usd", type="Currency", name="US dollar", aliases=("$",))}
+)
+assert ScanningSignal(money).candidates("costs $5", k=5) == []
+found = ScanningSignal(money, tokenizer=symbols, max_edge=0).candidates("costs $5", k=5)
+assert [(c.entity_id, c.evidence[0].span) for c in found] == [("usd", (6, 7))]
+
+# A document cannot write a callable, so it names one registered here; the
+# factory takes the spec's other keys as parameters.
+TOKENIZERS.register("symbols", lambda config: symbols)
+```
+
+A document then writes `tokenizer: symbols` on a `kind: scan` or
+`kind: lexical` rung, or `{name: symbols, ...}` with parameters. `default` is
+registered and is `token_spans` itself.
+
+**What a tokenizer gives up is the derived bounds.** The source measured its
+forms in default tokens, so `longest_form_tokens` and `form_edge` say nothing
+about windows over anyone else's, and a scan with its own tokenizer does not
+ask for them — exactly as for a rung with its own `normalizer`. `max_window`
+and `max_edge` are then the only caps, and a tokenizer whose tokens include the
+punctuation wants `max_edge=0`. `LexicalSignal`'s bound is
+in characters, so a tokenizer moves its windows and leaves its bound alone, and
+its `max_query_tokens` counts the tokenizer's tokens.
+
 What is worth writing yourself is a rung that asks the index a question the
 shipped one cannot, and there is a concrete one. A probe is a run of whole
 tokens, widened over the punctuation touching it as far as the vocabulary's
 own forms reach — so `(beagle)` and `C.D.C.` are found, at `(2, 10)` in
 `a (beagle), here` — but a declared form with **no** alphanumeric character in
 it — `:-)`, `<3` — has no token for a probe to start on, and is never probed at
-all. Such a form loads without complaint and is simply never found by a scan.
-A vocabulary carrying forms like those wants a different boundary:
+all. Such a form loads without complaint and is simply never found by a scan
+over the default tokens. [Your own tokens](#your-own-tokens) reaches it with
+the shipped rung; a vocabulary that wants a different boundary altogether
+writes one:
 
 <!-- worked-rung -->
 ```python
@@ -926,7 +976,7 @@ that carries both kinds of form knows before they run it. A vocabulary needing
 both composes this rung with `ScanningSignal` rather than choosing between
 them, which is what the section below is about.
 
-`token_spans` is the boundary policy the shipped scan uses — with
+`token_spans` is the boundary policy the shipped scan uses by default — with
 `edge_extensions` as its second half, reaching over punctuation beside a token
 — and it is a different question from the fold: `default_normalizer` strips and case-folds,
 which is what a whole-string lookup wants and is not what stops a scan finding
