@@ -10,8 +10,6 @@ import pytest
 
 from dataknobs_utils.file_utils import filepath_generator, write_lines
 
-RESPECIFIED = "behaviour re-specified"
-
 
 @pytest.fixture
 def tree(tmp_path: Path) -> Path:
@@ -58,7 +56,6 @@ class TestFilepathGenerator:
         got = _rel(list(filepath_generator(str(tree), descend=False, files_only=False)), tree)
         assert got == ["a.txt", "empty", "s1", "s3"]
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: files_only applies without descending")
     def test_no_descend_files_only(self, tree: Path) -> None:
         assert _rel(list(filepath_generator(str(tree), descend=False)), tree) == ["a.txt"]
 
@@ -185,9 +182,6 @@ class TestWriteLines:
         with pytest.raises(TypeError):
             write_lines("o.txt", [1, "a"], rootdir=str(tmp_path))  # type: ignore[list-item]
 
-    @pytest.mark.xfail(
-        strict=True, reason=f"{RESPECIFIED}: a failed sort leaves the target untouched"
-    )
     def test_failed_sort_leaves_target_untouched(self, tmp_path: Path) -> None:
         target = tmp_path / "o.txt"
         target.write_text("keep\n", encoding="utf-8")
@@ -195,7 +189,6 @@ class TestWriteLines:
             write_lines("o.txt", [1, "a"], rootdir=str(tmp_path))  # type: ignore[list-item]
         assert target.read_text(encoding="utf-8") == "keep\n"
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: a failed sort creates no file")
     def test_failed_sort_creates_no_file(self, tmp_path: Path) -> None:
         with pytest.raises(TypeError):
             write_lines("new.txt", [1, "a"], rootdir=str(tmp_path))  # type: ignore[list-item]

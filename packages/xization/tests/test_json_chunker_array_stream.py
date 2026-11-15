@@ -13,8 +13,6 @@ import pytest
 
 from dataknobs_xization.json.json_chunker import JSONChunker
 
-RESPECIFIED = "behaviour re-specified"
-
 
 def _stream(doc: str) -> list[tuple[str, str]]:
     return [
@@ -43,7 +41,6 @@ class TestArrayStreaming:
     def test_empty_array_yields_nothing(self) -> None:
         assert _stream("[]") == []
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: each element yields one chunk")
     def test_array_under_one_key(self) -> None:
         assert _stream('{"items":[{"title":"A"},{"title":"B"},{"title":"C"}]}') == [
             ("A", ".items[0]"),
@@ -51,34 +48,27 @@ class TestArrayStreaming:
             ("C", ".items[2]"),
         ]
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: each element yields one chunk")
     def test_element_with_nested_array(self) -> None:
         assert _stream('[{"title":"A","tags":["x","y"]},{"title":"B"}]') == [
             ("A\ntags: x, y", ".[0]"),
             ("B", ".[1]"),
         ]
 
-    @pytest.mark.xfail(
-        strict=True, reason=f"{RESPECIFIED}: elements beside shared values are chunked"
-    )
     def test_array_beside_other_keys(self) -> None:
         assert _stream('{"meta":"m","items":[{"title":"A"},{"title":"B"}]}') == [
             ("A", ".items[0]"),
             ("B", ".items[1]"),
         ]
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: a deeper record array is chunked")
     def test_deeper_array(self) -> None:
         assert _stream('{"a":{"items":[{"title":"A"}]}}') == [("A", ".a.items[0]")]
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: every sibling array is chunked")
     def test_sibling_arrays(self) -> None:
         assert _stream('{"x":[{"t":"A"}],"y":[{"t":"B"}]}') == [
             ("t: A", ".x[0]"),
             ("t: B", ".y[0]"),
         ]
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: each element yields one chunk")
     def test_matches_chunk_text_and_metadata(self) -> None:
         data = [
             {"title": "A", "sub": {"k": [1, {"z": 2}]}, "n": None, "b": True},
@@ -89,7 +79,6 @@ class TestArrayStreaming:
         assert [(c.text, c.metadata) for c in streamed] == [(c.text, c.metadata) for c in whole]
         assert [c.source_path for c in streamed] == [".[0]", ".[1]"]
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: each element yields one chunk")
     def test_chunk_index_counts_yielded_chunks(self) -> None:
         doc = '{"items":[{"title":"A","tags":["x","y"]},{"title":"B"},{"title":"C"}]}'
         chunks = list(JSONChunker().stream_chunks(io.StringIO(doc), is_jsonl=False))
@@ -112,7 +101,6 @@ class TestArrayStreaming:
             ("B", ".[1]", str(f)),
         ]
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: each element yields one chunk")
     def test_gzip_path_source(self, tmp_path: Path) -> None:
         f = tmp_path / "doc.json.gz"
         with gzip.open(f, "wt", encoding="utf-8") as out:

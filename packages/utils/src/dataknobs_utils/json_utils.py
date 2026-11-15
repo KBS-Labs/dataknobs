@@ -973,7 +973,7 @@ class Path:
         line_num: Optional line number from streaming (-1 if not tracked).
     """
 
-    def __init__(self, jq_path: str, item: Any, line_num: int = -1):
+    def __init__(self, jq_path: str, item: Any, line_num: int=-1):
         """Initialize a Path.
 
         Args:
@@ -981,44 +981,29 @@ class Path:
             item: The value at this path.
             line_num: Optional line number for ordering. Defaults to -1.
         """
-        self.jq_path = jq_path
-        self.item = item
-        self.line_num = line_num
-        self._path_elts: List[str] | None = None  # jq_path.split('.')
-        self._len: int | None = None  # Number of path elements
+        raise NotImplementedError
 
     def __repr__(self) -> str:
-        lnstr = f"{self.line_num}: " if self.line_num >= 0 else ""
-        return f"{lnstr}{self.jq_path}: {self.item}"
+        raise NotImplementedError
 
-    def __key(self) -> Union[Tuple[str, Any], int]:
-        return (self.jq_path, self.item) if self.line_num < 0 else self.line_num
-
-    def __lt__(self, other: "Path") -> bool:
-        if self.line_num < 0 or other.line_num < 0:
-            return self.jq_path < other.jq_path
-        else:
-            return self.line_num < other.line_num
+    def __lt__(self, other: 'Path') -> bool:
+        raise NotImplementedError
 
     def __hash__(self) -> int:
-        return hash(self.__key())
+        raise NotImplementedError
 
     def __eq__(self, other: object) -> bool:
-        if isinstance(other, Path):
-            return self.__key() == other.__key()
-        return NotImplemented
+        raise NotImplementedError
 
     @property
     def path_elts(self) -> List[str]:
         """Get this path's (index-qualified) elements"""
-        if self._path_elts is None:
-            self._path_elts = self.jq_path.split(".")
-        return self._path_elts
+        raise NotImplementedError
 
     @property
     def size(self) -> int:
         """Get the number of path_elements in this path."""
-        return len(self.path_elts)
+        raise NotImplementedError
 
 
 class GroupAcceptStrategy(ABC):
@@ -1050,78 +1035,44 @@ class GroupAcceptStrategy(ABC):
 class PathGroup:
     """Container for a group of related paths."""
 
-    def __init__(self, accept_strategy: GroupAcceptStrategy, first_path: Path | None = None):
-        self._all_paths: List[Path] | None = None
-        self.main_paths: Set[Path] | None = None
-        self.distributed_paths: Set[Path] | None = None
-        self.accept_strategy = accept_strategy
-        if first_path is not None:
-            self.accept(first_path, distribute=False)
+    def __init__(self, accept_strategy: GroupAcceptStrategy, first_path: Path | None=None):
+        raise NotImplementedError
 
     @property
     def num_main_paths(self) -> int:
         """Get the number of main paths in this group"""
-        return len(self.main_paths) if self.main_paths is not None else 0
+        raise NotImplementedError
 
     @property
     def num_distributed_paths(self) -> int:
         """Get the number of distributed paths in this group"""
-        return len(self.distributed_paths) if self.distributed_paths is not None else 0
+        raise NotImplementedError
 
     @property
     def size(self) -> int:
         """Get the total number of paths in this group."""
-        return self.num_main_paths + self.num_distributed_paths
+        raise NotImplementedError
 
     @property
     def paths(self) -> List[Path]:
         """Get all paths (both main and distributed)"""
-        if self._all_paths is None:
-            if self.main_paths is not None:
-                all_paths_set = self.main_paths.copy()
-                if self.distributed_paths is not None:
-                    all_paths_set.update(self.distributed_paths)
-                self._all_paths = sorted(all_paths_set)
-            elif self.distributed_paths is not None:
-                self._all_paths = sorted(self.distributed_paths)
-            else:
-                self._all_paths = []
-        return self._all_paths
+        raise NotImplementedError
 
     def as_dict(self) -> Dict[str, Any]:
         """Reconstruct the object from the paths"""
-        d: Dict[str, Any] = {}
-        if self.paths is not None:
-            for path in self.paths:
-                path_to_dict(path.jq_path, path.item, result=d)
-        return d
+        raise NotImplementedError
 
-    def accept(self, path: Path, distribute: bool = False) -> bool:
+    def accept(self, path: Path, distribute: bool=False) -> bool:
         """Add the path if it belongs in this group.
         :param path: The path to (potentially) add.
         :param distribute: True to propose the path as a distributed path
         :return: True if the path was accepted and added.
         """
-        added = False
-        add_type = self.accept_strategy.accept_path(path, self, distribute=distribute)
-        if add_type is not None:
-            if add_type == "main":
-                if self.main_paths is None:
-                    self.main_paths = {path}
-                else:
-                    self.main_paths.add(path)
-            elif self.distributed_paths is None:
-                self.distributed_paths = {path}
-            else:
-                self.distributed_paths.add(path)
-            added = True
-            self._all_paths = None
-        return added
+        raise NotImplementedError
 
-    def incorporate_paths(self, group: "PathGroup") -> None:
+    def incorporate_paths(self, group: 'PathGroup') -> None:
         """Incorporate (distribute) the group's appliccable paths into this group."""
-        for path in group.paths:
-            self.accept(path, distribute=True)
+        raise NotImplementedError
 
 
 class ArrayElementAcceptStrategy(GroupAcceptStrategy):
@@ -1136,7 +1087,7 @@ class ArrayElementAcceptStrategy(GroupAcceptStrategy):
         ref_path: Reference path for matching subsequent paths.
     """
 
-    def __init__(self, max_array_level: int = -1):
+    def __init__(self, max_array_level: int=-1):
         """Initialize the array element grouping strategy.
 
         Args:
@@ -1146,34 +1097,10 @@ class ArrayElementAcceptStrategy(GroupAcceptStrategy):
                 - 1: New record at second array level
                 - etc.
         """
-        self.max_array_level = max_array_level
-        self.ref_path: Path | None = None
+        raise NotImplementedError
 
-    def accept_path(self, path: Path, group: PathGroup, distribute: bool = False) -> str | None:
-        if distribute or "[" not in path.jq_path:
-            return "distributed"
-
-        if group.num_main_paths == 0:
-            # Accept first path with an array
-            self.ref_path = path
-            return "main"
-        else:
-            if self.ref_path is None:
-                if group.main_paths is not None:
-                    self.ref_path = next(iter(group.main_paths))
-            # All elements up through max_array_level must fully match
-            cur_array_level = -1
-            if self.ref_path is not None:
-                for idx in range(1, min(self.ref_path.size, path.size)):
-                    ref_elt = self.ref_path.path_elts[idx]
-                    path_elt = path.path_elts[idx]
-                    if ref_elt != path_elt:
-                        return None
-                    elif ref_elt[-1] == "]":
-                        cur_array_level += 1
-                        if cur_array_level >= self.max_array_level:
-                            break
-        return "main"
+    def accept_path(self, path: Path, group: PathGroup, distribute: bool=False) -> str | None:
+        raise NotImplementedError
 
 
 class PathSorter:
@@ -1190,12 +1117,7 @@ class PathSorter:
         groups: List of active PathGroup instances.
     """
 
-    def __init__(
-        self,
-        accept_strategy: GroupAcceptStrategy,
-        group_size: int = 0,
-        max_groups: int = 0,
-    ):
+    def __init__(self, accept_strategy: GroupAcceptStrategy, group_size: int=0, max_groups: int=0):
         """Initialize a PathSorter.
 
         Args:
@@ -1205,17 +1127,12 @@ class PathSorter:
             max_groups: Maximum groups kept in memory. Older groups are dropped
                 when limit is reached. 0 means unlimited. Defaults to 0.
         """
-        self.accept_strategy = accept_strategy
-        self.group_size = group_size
-        # NOTE: Must keep at least 3 groups if keeping any for propagating
-        #      distributed paths.
-        self.max_groups = max_groups if max_groups <= 0 else max(3, max_groups)
-        self.groups: List[PathGroup] | None = None
+        raise NotImplementedError
 
     @property
     def num_groups(self) -> int:
         """Get the number of groups"""
-        return len(self.groups) if self.groups is not None else 0
+        raise NotImplementedError
 
     def add_path(self, path: Path) -> PathGroup | None:
         """Add a path to the appropriate group, creating new groups as needed.
@@ -1230,38 +1147,9 @@ class PathSorter:
             PathGroup | None: The most recently closed group if one was closed,
                 otherwise None.
         """
-        result = None
-        if self.groups is None or len(self.groups) == 0:
-            self.groups = [
-                PathGroup(
-                    accept_strategy=self.accept_strategy,
-                    first_path=path,
-                )
-            ]
-        else:
-            # Assume always "incremental", such that new paths will belong in
-            # the latest group
-            latest_group = self.groups[-1]
-            if not latest_group.accept(path):
-                # Time to add a new group
-                self.close_group()
-                result = latest_group
+        raise NotImplementedError
 
-                # Start a new group
-                self.groups.append(
-                    PathGroup(
-                        accept_strategy=self.accept_strategy,
-                        first_path=path,
-                    )
-                )
-
-                # Enforce max_group limit by removing groups from the front
-                if self.max_groups > 0 and len(self.groups) >= self.max_groups:
-                    while len(self.groups) >= self.max_groups:
-                        self.groups.pop(0)
-        return result
-
-    def close_group(self, idx: int = -1, check_size: bool = True) -> PathGroup | None:
+    def close_group(self, idx: int=-1, check_size: bool=True) -> PathGroup | None:
         """Close a group, finalizing its contents.
 
         Closing a group involves:
@@ -1275,24 +1163,7 @@ class PathSorter:
         Returns:
             PathGroup | None: The closed group, or None if dropped for size.
         """
-        if self.groups is None or len(self.groups) == 0:
-            return None
-
-        if idx == -1:
-            idx = len(self.groups) - 1
-        latest_group = self.groups[idx]
-
-        # Add distributable lines from the prior group
-        if idx > 0:
-            latest_group.incorporate_paths(self.groups[idx - 1])
-
-        # Check size constraints
-        if check_size and self.group_size > 0 and len(self.groups) > 0:
-            if latest_group.size < self.group_size:
-                # Last group not "filled" ... need to drop
-                self.groups.pop()
-
-        return latest_group
+        raise NotImplementedError
 
     def accept_path(self, path: Path) -> bool:
         """Try to add a path to any existing group.
@@ -1303,13 +1174,9 @@ class PathSorter:
         Returns:
             bool: True if the path was accepted by a group, False otherwise.
         """
-        if self.groups is not None:
-            for group in self.groups:
-                if group.accept(path):
-                    return True
-        return False
+        raise NotImplementedError
 
-    def all_groups_have_size(self, group_size: int) -> bool:
+    def all_groups_have_size(self, group_size: int) -> "bool":
         """Check if all groups have a specific size.
 
         Args:
@@ -1318,12 +1185,7 @@ class PathSorter:
         Returns:
             bool: True if all groups have exactly this size, False otherwise.
         """
-        if self.groups is not None:
-            for group in self.groups:
-                if group.size != group_size:
-                    return False
-            return True
-        return False
+        raise NotImplementedError
 
 
 class RecordPathBuilder:
@@ -1342,13 +1204,7 @@ class RecordPathBuilder:
         sorter: PathSorter for grouping paths.
     """
 
-    def __init__(
-        self,
-        json_data: str,
-        output_stream: TextIO,
-        line_builder_fn: Callable[[int, int, str, Any], str],
-        timeout: int = TIMEOUT,
-    ):
+    def __init__(self, json_data: str, output_stream: TextIO, line_builder_fn: Callable[[int, int, str, Any], str], timeout: int=TIMEOUT):
         """Initialize a RecordPathBuilder.
 
         Args:
@@ -1358,51 +1214,19 @@ class RecordPathBuilder:
                 that returns a formatted string.
             timeout: Request timeout in seconds for URL sources. Defaults to 10.
         """
-        self.jdata = json_data
-        self.output_stream = output_stream
-        self.builder_fn = line_builder_fn
-        self.timeout = timeout
-        self.rec_id = 0
-        self.inum = 0
-        self.sorter: PathSorter | None = None
+        raise NotImplementedError
 
     def write_group(self, group: PathGroup) -> None:
-        for path in group.paths:
-            line = self.builder_fn(self.rec_id, path.line_num, path.jq_path, path.item)
-            print(line, file=self.output_stream)
+        raise NotImplementedError
 
     def visitor(self, item: Any, path: Tuple[Any, ...]) -> None:
-        jq_path = build_jq_path(path, keep_list_idxs=True)
-        if self.sorter is not None:
-            group = self.sorter.add_path(Path(jq_path, item, line_num=self.inum))
-        else:
-            group = None
-        if group is not None:
-            self.write_group(group)
-            self.rec_id += 1
-        self.inum += 1
+        raise NotImplementedError
 
     def stream_record_paths(self) -> None:
-        self.rec_id = 0
-        self.inum = 0
-        self.sorter = PathSorter(
-            ArrayElementAcceptStrategy(max_array_level=0),
-            max_groups=2,
-        )
-
-        stream_json_data(self.jdata, self.visitor, timeout=self.timeout)
-
-        last_group = self.sorter.close_group(check_size=False)
-        if last_group is not None:
-            self.write_group(last_group)
+        raise NotImplementedError
 
 
-def stream_record_paths(
-    json_data: str,
-    output_stream: TextIO,
-    line_builder_fn: Callable[[int, int, str, Any], str],
-    timeout: int = TIMEOUT,
-) -> None:
+def stream_record_paths(json_data: str, output_stream: TextIO, line_builder_fn: Callable[[int, int, str, Any], str], timeout: int=TIMEOUT) -> None:
     """Stream JSON and write formatted records grouped by top-level structure.
 
     Identifies top-level JSON records (typically array elements) and writes
@@ -1421,8 +1245,7 @@ def stream_record_paths(
             that returns a formatted string.
         timeout: Request timeout in seconds for URL sources. Defaults to 10.
     """
-    rpb = RecordPathBuilder(json_data, output_stream, line_builder_fn, timeout=timeout)
-    rpb.stream_record_paths()
+    raise NotImplementedError
 
 
 def get_records_df(json_data: str, timeout: int = TIMEOUT) -> pd.DataFrame:

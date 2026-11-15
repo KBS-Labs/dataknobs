@@ -12,9 +12,7 @@ from collections.abc import Callable
 from typing import List, Union
 
 
-def run_command(
-    handle_line_fn: Callable[[str], bool], command: str, args: List[str] | None = None
-) -> int:
+def run_command(handle_line_fn: Callable[[str], bool], command: str, args: List[str] | None=None) -> int:
     """Run a system command and process output line by line.
 
     Executes a command and calls a handler function for each line of output.
@@ -40,22 +38,4 @@ def run_command(
         >>> # Print files until "foo" is found:
         >>> run_command(lambda x: (print(x), x!='foo')[1], 'ls -1')
     """
-    the_args: Union[str, List[str]] = command
-    shell = True
-    if args is not None:
-        the_args = [command] + args
-        shell = False
-    process = subprocess.Popen(the_args, stdout=subprocess.PIPE, shell=shell, encoding="utf8")
-    while True:
-        if process.stdout is not None:
-            output = process.stdout.readline()
-            if output == "" and process.poll() is not None:
-                break
-            if output:
-                if not handle_line_fn(output.strip()):
-                    process.kill()
-                    break
-        else:
-            break
-    rc = process.poll()
-    return rc if rc is not None else 0
+    raise NotImplementedError

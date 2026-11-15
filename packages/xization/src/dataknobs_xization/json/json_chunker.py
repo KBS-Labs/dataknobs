@@ -304,68 +304,9 @@ class JSONChunker:
                     source_file=source_label,
                 )
 
-    def _stream_json_array(
-        self,
-        source: str | IO[str] | IO[bytes],
-        timeout: int,
-        source_file: str | None = None,
-    ) -> Iterator[JSONChunk]:
+    def _stream_json_array(self, source: str | IO[str] | IO[bytes], timeout: int, source_file: str | None=None) -> Iterator[JSONChunk]:
         """Stream from a JSON array file using json_utils infrastructure."""
-        try:
-            from dataknobs_utils.json_utils import (
-                stream_json_data,
-                PathSorter,
-                ArrayElementAcceptStrategy,
-                Path as JsonPath,
-                build_jq_path,
-            )
-        except ImportError:
-            # Fall back to loading entire file if streaming utils not available
-            if isinstance(source, (str, Path)):
-                yield from self._fallback_load(str(source))
-            else:
-                label = source_file if source_file is not None else ""
-                data = json.load(source)
-                yield from self.chunk(data, source=label)
-            return
-
-        label = (
-            source_file if source_file is not None else (source if isinstance(source, str) else "")
-        )
-
-        # Use PathSorter to group paths into records
-        sorter = PathSorter(
-            ArrayElementAcceptStrategy(max_array_level=0),
-            max_groups=2,
-        )
-
-        item_num = 0
-
-        def visitor(item: Any, path: tuple[Any, ...]) -> None:
-            nonlocal item_num
-            jq_path = build_jq_path(path, keep_list_idxs=True)
-            sorter.add_path(JsonPath(jq_path, item, line_num=item_num))
-            item_num += 1
-
-        stream_json_data(source, visitor, timeout=timeout)
-
-        # Process collected groups
-        if sorter.groups:
-            for group in sorter.groups:
-                sorter.close_group(check_size=False)
-                record_dict = group.as_dict()
-                # Handle array at root level
-                if isinstance(record_dict, dict) and len(record_dict) == 1:
-                    root_key = next(iter(record_dict.keys()))
-                    items = record_dict[root_key]
-                    if isinstance(items, list):
-                        for idx, item in enumerate(items):
-                            if isinstance(item, dict):
-                                yield self._process_item(
-                                    item,
-                                    source_path=f".{root_key}[{idx}]",
-                                    source_file=label,
-                                )
+        raise NotImplementedError
 
     def _fallback_load(self, source: str) -> Iterator[JSONChunk]:
         """Fallback: load entire file when streaming utils unavailable."""

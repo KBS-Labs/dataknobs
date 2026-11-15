@@ -21,8 +21,6 @@ from dataknobs_utils.json_utils import (
     stream_record_paths,
 )
 
-RESPECIFIED = "behaviour re-specified"
-
 
 def _line(rec_id: int, line_num: int, jq_path: str, item: Any) -> str:
     return f"{rec_id}|{line_num}|{jq_path}|{item!r}"
@@ -211,7 +209,6 @@ class TestArrayElementAcceptStrategy:
         assert s.accept_path(Path(".m", 1), g) == "distributed"
         assert s.accept_path(Path(".m", 1), g, distribute=True) == "distributed"
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: only shared context is distributed")
     def test_indexed_path_is_never_distributed(self) -> None:
         s = ArrayElementAcceptStrategy(0)
         g = _group_with_main(s, ".r[0].a")
@@ -231,20 +228,17 @@ class TestArrayElementAcceptStrategy:
         assert s.accept_path(Path(".r[1].a", 1), g) is None
         assert s.accept_path(Path(".q[0].a", 1), g) is None
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: records are keyed by index")
     def test_top_level_array_elements_are_records(self) -> None:
         s = ArrayElementAcceptStrategy(0)
         g = _group_with_main(s, "[0].a")
         assert s.accept_path(Path("[0].b[1]", 1), g) == "main"
         assert s.accept_path(Path("[1].a", 1), g) is None
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: records are keyed by index")
     def test_scalar_elements_of_top_level_array_are_records(self) -> None:
         s = ArrayElementAcceptStrategy(0)
         g = _group_with_main(s, "[0]")
         assert s.accept_path(Path("[1]", 1), g) is None
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: records are keyed by index")
     def test_array_of_arrays_keyed_by_first_index(self) -> None:
         s = ArrayElementAcceptStrategy(0)
         g = _group_with_main(s, "[0][0]")
@@ -258,13 +252,11 @@ class TestArrayElementAcceptStrategy:
         assert s.accept_path(Path(".x[0].y[1].z", 1), g) is None
         assert s.accept_path(Path(".x[1].name", 1), g) is None
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: compared over the indices both have")
     def test_level_one_shorter_path_compared_over_common_indices(self) -> None:
         s = ArrayElementAcceptStrategy(1)
         g = _group_with_main(s, ".x[0].y[0].z")
         assert s.accept_path(Path(".x[0].name", 1), g) == "main"
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: a negative level does not split")
     def test_negative_level_does_not_split(self) -> None:
         s = ArrayElementAcceptStrategy(-1)
         g = _group_with_main(s, ".r[0].a")
@@ -317,9 +309,6 @@ class TestPathSorter:
         assert last is not None
         assert Path(".meta", "m", line_num=0) in last.paths
 
-    @pytest.mark.xfail(
-        strict=True, reason=f"{RESPECIFIED}: a record holds no earlier record's paths"
-    )
     def test_closed_record_holds_no_earlier_record(self) -> None:
         s = PathSorter(ArrayElementAcceptStrategy(0))
         for i in range(3):
@@ -328,7 +317,6 @@ class TestPathSorter:
         assert closed is not None
         assert [p.jq_path for p in closed.paths] == [".r[2].a"]
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: holds at most max_groups groups")
     def test_holds_at_most_max_groups(self) -> None:
         s = PathSorter(ArrayElementAcceptStrategy(0), max_groups=3)
         counts = []
@@ -352,16 +340,12 @@ class TestPathSorter:
         assert closed.size == 2
         assert s.num_groups == 1
 
-    @pytest.mark.xfail(
-        strict=True, reason=f"{RESPECIFIED}: an undersized group is dropped and None returned"
-    )
     def test_close_group_drops_undersized_group(self) -> None:
         s = PathSorter(ArrayElementAcceptStrategy(0), group_size=2)
         s.add_path(Path(".r[0].a", 1, line_num=0))
         assert s.close_group() is None
         assert s.num_groups == 0
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: the group at idx is the one dropped")
     def test_close_group_drops_the_group_at_idx(self) -> None:
         s = PathSorter(ArrayElementAcceptStrategy(0))
         s.add_path(Path(".r[0].a", 1, line_num=0))
@@ -374,9 +358,6 @@ class TestPathSorter:
         assert s.close_group(idx=0) is None
         assert s.groups == [newest]
 
-    @pytest.mark.xfail(
-        strict=True, reason=f"{RESPECIFIED}: an undersized group is dropped and None returned"
-    )
     def test_add_path_returns_none_when_closed_group_dropped(self) -> None:
         s = PathSorter(ArrayElementAcceptStrategy(0), group_size=2)
         s.add_path(Path(".r[0].a", 1, line_num=0))
@@ -415,7 +396,6 @@ class TestStreamRecordPaths:
     def test_empty_array(self) -> None:
         assert _records("[]") == ["0|0||[]"]
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: one record per top-level array element")
     def test_top_level_array_of_objects(self) -> None:
         assert _records('[{"a":1,"b":[2,3]},{"a":4}]') == [
             "0|0|[0].a|1",
@@ -424,10 +404,6 @@ class TestStreamRecordPaths:
             "1|3|[1].a|4",
         ]
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=f"{RESPECIFIED}: a record holds its own values and earlier shared context",
-    )
     def test_shared_context(self) -> None:
         assert _records('{"meta":"x","items":[{"a":1},{"a":2}],"tail":5}') == [
             "0|0|.meta|'x'",
@@ -437,9 +413,6 @@ class TestStreamRecordPaths:
             "1|3|.tail|5",
         ]
 
-    @pytest.mark.xfail(
-        strict=True, reason=f"{RESPECIFIED}: a record holds no earlier record's paths"
-    )
     def test_nested_arrays_stay_in_their_record(self) -> None:
         assert _records('{"x":[{"y":[1,2]},{"y":[3]}]}') == [
             "0|0|.x[0].y[0]|1",
@@ -447,11 +420,9 @@ class TestStreamRecordPaths:
             "1|2|.x[1].y[0]|3",
         ]
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: one record per top-level array element")
     def test_top_level_array_of_scalars(self) -> None:
         assert _records("[1,2,3]") == ["0|0|[0]|1", "1|1|[1]|2", "2|2|[2]|3"]
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: records are keyed by index")
     def test_array_of_arrays(self) -> None:
         assert _records("[[1,2],[3]]") == ["0|0|[0][0]|1", "0|1|[0][1]|2", "1|2|[1][0]|3"]
 
@@ -532,7 +503,6 @@ class TestGetRecordsDf:
         assert list(df.columns) == ["rec_id", "line_num", "jq_path", "item"]
         assert df.values.tolist() == [[0, 0, ".a", 1], [0, 1, ".b", 2]]
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: one record per top-level array element")
     def test_records(self) -> None:
         df = get_records_df('[{"a":1},{"a":2}]')
         assert df.values.tolist() == [[0, 0, "[0].a", 1], [1, 1, "[1].a", 2]]

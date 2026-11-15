@@ -14,12 +14,7 @@ from pathlib import Path
 from typing import List, Set
 
 
-def filepath_generator(
-    rootpath: str,
-    descend: bool = True,
-    seen: Set[str] | None = None,
-    files_only: bool = True,
-) -> Generator[str, None, None]:
+def filepath_generator(rootpath: str, descend: bool=True, seen: Set[str] | None=None, files_only: bool=True) -> Generator[str, None, None]:
     """Generate all filepaths under the root path.
 
     Args:
@@ -32,23 +27,7 @@ def filepath_generator(
     Yields:
         str: Each file path found under the root path.
     """
-    if seen is None:
-        seen = set()
-    seen.add(rootpath)
-    for root, dirs, files in os.walk(rootpath, topdown=True):
-        if not descend and root != rootpath and root in seen:
-            break
-        for name in files:
-            fpath = str(Path(root) / name)
-            if fpath not in seen:
-                seen.add(fpath)
-                yield fpath
-        if not descend or not files_only:
-            for name in dirs:
-                next_root = str(Path(root) / name)
-                if next_root not in seen:
-                    seen.add(next_root)
-                    yield next_root
+    raise NotImplementedError
 
 
 def fileline_generator(filename: str, rootdir: str | None = None) -> Generator[str, None, None]:
@@ -76,7 +55,7 @@ def fileline_generator(filename: str, rootdir: str | None = None) -> Generator[s
                 yield line.strip()
 
 
-def write_lines(outfile: str, lines: List[str], rootdir: str | None = None) -> None:
+def write_lines(outfile: str, lines: List[str], rootdir: str | None=None) -> None:
     """Write lines to a file in sorted order.
 
     Automatically handles both plain text and gzip-compressed files based on
@@ -87,16 +66,7 @@ def write_lines(outfile: str, lines: List[str], rootdir: str | None = None) -> N
         lines: List of lines to write to the file.
         rootdir: Optional directory path to prepend to outfile. Defaults to None.
     """
-    if rootdir is not None:
-        outfile = str(Path(rootdir) / outfile)
-    if outfile.endswith(".gz"):
-        with gzip.open(outfile, mode="wt", encoding="utf-8") as f:
-            for line in sorted(lines):
-                print(line, file=f)
-    else:
-        with open(outfile, mode="w", encoding="utf-8") as f:
-            for line in sorted(lines):
-                print(line, file=f)
+    raise NotImplementedError
 
 
 def is_gzip_file(filepath: str) -> bool:

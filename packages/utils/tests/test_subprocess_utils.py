@@ -10,8 +10,6 @@ import pytest
 
 from dataknobs_utils.subprocess_utils import run_command
 
-RESPECIFIED = "behaviour re-specified"
-
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell semantics")
 
 
@@ -109,12 +107,10 @@ class TestRunCommand:
         assert time.monotonic() - start < 5
         assert lines == ["1", "2"]
 
-    @pytest.mark.xfail(strict=False, reason=f"{RESPECIFIED}: a stopped child's status is returned")
     def test_stop_returns_kill_status(self) -> None:
         rc = run_command(lambda line: line != "go", "echo go; sleep 10")
         assert rc == -signal.SIGKILL
 
-    @pytest.mark.xfail(strict=True, reason=f"{RESPECIFIED}: a stopped child is waited for")
     def test_stopped_child_is_reaped(self) -> None:
         pids: list[int] = []
 
@@ -128,9 +124,6 @@ class TestRunCommand:
         finally:
             _reap_or_kill(pids[0])
 
-    @pytest.mark.xfail(
-        strict=True, reason=f"{RESPECIFIED}: a raising callback kills and waits for the child"
-    )
     def test_raising_callback_kills_child_and_propagates(self) -> None:
         pids: list[int] = []
 
