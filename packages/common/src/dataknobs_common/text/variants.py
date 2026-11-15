@@ -51,8 +51,9 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Generic, TypeVar
 
-from dataknobs_common.exceptions import OperationError, ValidationError
+from dataknobs_common.exceptions import ValidationError
 from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.text._named import NamedSeam, built_from_config
 from dataknobs_common.text.scan import default_normalizer, token_spans
 
 __all__ = [
@@ -621,6 +622,15 @@ VARIANT_RULES.register("split", _split_factory)
 VARIANT_RULES.register("strip_prefix", _strip_prefix_factory)
 del _name, _rule
 
+_SEAM = NamedSeam(
+    registry=VARIANT_RULES,
+    key="rule",
+    noun="variant rule",
+    plural="rules",
+    shape="a rule name or a mapping with a 'rule' naming one",
+    context_key="rule",
+)
+
 
 def rules_from_config(specs: Sequence[str | Mapping[str, Any]]) -> tuple[Rule, ...]:
     """The rules a configuration names, built, in the order given.
@@ -638,8 +648,11 @@ def rules_from_config(specs: Sequence[str | Mapping[str, Any]]) -> tuple[Rule, .
 
     Raises:
         ValidationError: For a spec that is neither a name nor a mapping with a
-            ``rule``, a name :data:`VARIANT_RULES` does not hold, or parameters
-            the named rule refuses. The message names the rule.
+            ``rule``, a name :data:`VARIANT_RULES` does not hold, a factory
+            that fails, or one that returns something not callable. The
+            message names the rule. A factory refusing its parameters
+            (``ValueError`` or ``ValidationError``) is quoted; any other
+            failure is named by its type alone and chained as the cause.
     """
     if isinstance(specs, str | bytes) or not isinstance(specs, Sequence):
         raise ValidationError(
@@ -648,34 +661,9 @@ def rules_from_config(specs: Sequence[str | Mapping[str, Any]]) -> tuple[Rule, .
         )
     built: list[Rule] = []
     for position, spec in enumerate(specs):
-        config = {"rule": spec} if isinstance(spec, str) else spec
-        name = config.get("rule") if isinstance(config, Mapping) else None
-        if not isinstance(name, str) or not name:
-            raise ValidationError(
-                f"variant rule {position} must be a rule name or a mapping with a "
-                f"'rule' naming one; given {spec!r}",
-                context={"position": position, "spec": spec},
-            )
-        if not VARIANT_RULES.is_registered(name):
-            raise ValidationError(
-                f"unknown variant rule {name!r}. Registered rules: "
-                f"{sorted(VARIANT_RULES.list_keys())}",
-                context={"rule": name, "position": position},
-            )
-        try:
-            rule = VARIANT_RULES.create(config=dict(config))
-        except OperationError as error:
-            reason = error.__cause__ if error.__cause__ is not None else error
-            raise ValidationError(
-                f"variant rule {name!r} {reason}",
-                context={"rule": name, "position": position},
-            ) from error
-        if not callable(rule):
-            raise ValidationError(
-                f"variant rule {name!r}'s factory returned {rule!r}, which is not "
-                f"callable; a factory returns a rule",
-                context={"rule": name, "position": position},
-            )
+        name, rule = built_from_config(
+            _SEAM, spec, subject=f"variant rule {position}", context={"position": position}
+        )
         built.append(rule if _rule_name(rule) == name else _Named(rule, name))
     return tuple(built)
 

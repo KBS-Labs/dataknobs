@@ -36,10 +36,10 @@ promises to import nothing, and a registry is an import.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, cast
 
-from dataknobs_common.exceptions import OperationError, ValidationError
 from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.text._named import NamedSeam, built_from_config
 from dataknobs_common.text.scan import token_spans
 
 __all__ = ["TOKENIZERS", "Tokenizer", "tokenizer_from_config"]
@@ -66,6 +66,15 @@ TOKENIZERS: PluginRegistry[Tokenizer] = PluginRegistry(
 )
 TOKENIZERS.register("default", _default_factory)
 
+_SEAM = NamedSeam(
+    registry=TOKENIZERS,
+    key="name",
+    noun="tokenizer",
+    plural="tokenizers",
+    shape="a tokenizer name, a mapping with a 'name' naming one, or a callable",
+    context_key="tokenizer",
+)
+
 
 def tokenizer_from_config(
     spec: str | Mapping[str, Any] | Tokenizer | None,
@@ -86,39 +95,16 @@ def tokenizer_from_config(
 
     Raises:
         ValidationError: For a spec of any other shape, a name
-            :data:`TOKENIZERS` does not hold, parameters the named factory
-            refuses, or a factory that returns something not callable. The
-            message names the tokenizer and an unknown name lists the
-            registered ones.
+            :data:`TOKENIZERS` does not hold, a factory that fails, or one that
+            returns something not callable. The message names the tokenizer,
+            and an unknown name lists the registered ones. A factory refusing
+            its parameters (``ValueError`` or ``ValidationError``) is quoted;
+            any other failure is named by its type alone and chained as the
+            cause, since a factory's own text can carry a path or a URL.
     """
     if spec is None:
         return None
     if callable(spec):
         return spec
-    config = {"name": spec} if isinstance(spec, str) else spec
-    name = config.get("name") if isinstance(config, Mapping) else None
-    if not isinstance(name, str) or not name:
-        raise ValidationError(
-            f"tokenizer must be a tokenizer name, a mapping with a 'name' naming "
-            f"one, or a callable; given {spec!r}",
-            context={"spec": spec},
-        )
-    if not TOKENIZERS.is_registered(name):
-        raise ValidationError(
-            f"unknown tokenizer {name!r}. Registered tokenizers: {sorted(TOKENIZERS.list_keys())}",
-            context={"tokenizer": name},
-        )
-    try:
-        tokenizer = TOKENIZERS.create(config=dict(config))
-    except OperationError as error:
-        reason = error.__cause__ if error.__cause__ is not None else error
-        raise ValidationError(
-            f"tokenizer {name!r} {reason}", context={"tokenizer": name}
-        ) from error
-    if not callable(tokenizer):
-        raise ValidationError(
-            f"tokenizer {name!r}'s factory returned {tokenizer!r}, which is not "
-            f"callable; a factory returns a tokenizer",
-            context={"tokenizer": name},
-        )
-    return tokenizer
+    _, tokenizer = built_from_config(_SEAM, spec)
+    return cast("Tokenizer", tokenizer)

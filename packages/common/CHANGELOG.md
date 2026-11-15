@@ -495,7 +495,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prefix from a field of the context the caller hands each form. Rules are
   named in `VARIANT_RULES`, a `PluginRegistry`, so a configuration names them
   and a consumer registers rules of their own; `rules_from_config` builds a
-  list of rule specs and refuses an unknown name or parameter by name.
+  list of rule specs and refuses an unknown name or parameter by name. Any
+  other failure in a rule's factory is named by its type alone and chained as
+  the cause, so the factory's own text, which can carry a path or a URL, stays
+  out of the message.
   `dataknobs_common.text` is now a package of two modules, `scan` and
   `variants`, and every name stays importable from `dataknobs_common.text`.
 
@@ -2081,7 +2084,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   windows start and end on its tokens. A document names one under
   `tokenizer:` on a `kind: scan` or `kind: lexical` rung — a name in
   `TOKENIZERS`, or `{name: ..., <params>}` — and an unknown name is refused
-  with `ValidationError` listing the registered ones. `default` is registered
+  with `ValidationError` listing the registered ones. A factory refusing its
+  parameters (`ValueError` or `ValidationError`) is quoted in that error; any
+  other failure is named by its type alone and chained as the cause, because a
+  factory's own text can carry a path or a URL. `default` is registered
   and is `token_spans` itself. A scan with any other tokenizer does not take
   its window or edge bound from the source, whose counts are in default
   tokens, so `max_window` and `max_edge` are its only caps — as for a rung with
