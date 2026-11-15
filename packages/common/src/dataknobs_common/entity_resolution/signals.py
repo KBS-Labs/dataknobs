@@ -658,8 +658,33 @@ def _checked_max_edge(max_edge: int | None) -> int | None:
     )
 
 
+def _scan_bounds(
+    entities: EntitySource | AsyncEntitySource,
+    normalizer: Callable[[str], str] | None,
+    tokenizer: Tokenizer,
+    max_window: int | None,
+    max_edge: int | None,
+) -> tuple[int | None, int | None]:
+    """How many tokens a scan's probe may span, and how far its edge may widen.
+
+    The scan twins' shared preamble: whether the source's own measurements
+    hold for this rung, then each bound by :func:`_window_bound` and
+    :func:`_edge_bound`. ``None`` in either place means unbounded.
+    """
+    measured = _source_measures_probes(normalizer, tokenizer)
+    return (
+        _window_bound(entities, measured, max_window),
+        _edge_bound(entities, measured, max_edge),
+    )
+
+
 def _query_tokens(tokenizer: Tokenizer, query: str) -> tuple[tuple[int, int], ...]:
     """The query's tokens by ``tokenizer``, checked once where they are not the default's.
+
+    The one way every rung that takes a tokenizer gets a query's tokens. The
+    asynchronous twins call it off the event loop for any tokenizer but the
+    default, since a caller's tokenizer may load a dictionary or reach a
+    service and nothing here bounds what it does.
 
     :func:`~dataknobs_common.text.token_spans` produces valid spans by
     construction, so its output is not re-checked on every query; a caller's
@@ -1129,6 +1154,27 @@ class _RatioScorer:
         if self._matcher.quick_ratio() < self._threshold:
             return 0.0
         return self._matcher.ratio()
+
+
+def _near_forms_of_query(
+    query: str,
+    forms: Sequence[str],
+    *,
+    tokenizer: Tokenizer,
+    max_query_tokens: int | None,
+    threshold: float,
+    scorer: Callable[[str, str], float],
+    fold: Callable[[str], str],
+) -> list[tuple[str, tuple[int, int], float]]:
+    """:func:`_near_forms` over the query's tokens by ``tokenizer``, counted first.
+
+    The lexical twins' whole computation from a query and a catalogue, taking
+    only values, so the asynchronous twin hands all of it to one thread: the
+    caller's tokenizer and the scoring loop it feeds go off the loop together.
+    """
+    tokens = _query_tokens(tokenizer, query)
+    _checked_query(tokens, max_query_tokens)
+    return _near_forms(query, forms, threshold=threshold, scorer=scorer, fold=fold, tokens=tokens)
 
 
 def _scorer_for(
@@ -1645,10 +1691,10 @@ class ScanningSignal(DeclaredSignal):
 
     def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
-        measured = _source_measures_probes(self._normalizer, self._tokenizer)
-        bound = _window_bound(self._entities, measured, self._max_window)
-        edge = _edge_bound(self._entities, measured, self._max_edge)
-        tokens = None if self._tokenizer is token_spans else self._tokenizer(query)
+        bound, edge = _scan_bounds(
+            self._entities, self._normalizer, self._tokenizer, self._max_window, self._max_edge
+        )
+        tokens = _query_tokens(self._tokenizer, query)
         for span in probe_spans(query, bound, edge=edge, tokens=tokens):
             hits = self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
@@ -1845,15 +1891,14 @@ class LexicalSignal(DeclaredSignal):
         hits are all 1.0; here the order is the score's and
         :func:`_ranked` is where it is decided.
         """
-        tokens = _query_tokens(self._tokenizer, query)
-        _checked_query(tokens, self._max_query_tokens)
-        found = _near_forms(
+        found = _near_forms_of_query(
             query,
             list(self._catalogue.surface_forms()),
+            tokenizer=self._tokenizer,
+            max_query_tokens=self._max_query_tokens,
             threshold=self._threshold,
             scorer=_scorer_for(self._scorer, self._threshold),
             fold=self._fold,
-            tokens=tokens,
         )
         return _ranked(
             [
@@ -2140,10 +2185,14 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
 
     async def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
-        measured = _source_measures_probes(self._normalizer, self._tokenizer)
-        bound = _window_bound(self._entities, measured, self._max_window)
-        edge = _edge_bound(self._entities, measured, self._max_edge)
-        tokens = None if self._tokenizer is token_spans else self._tokenizer(query)
+        bound, edge = _scan_bounds(
+            self._entities, self._normalizer, self._tokenizer, self._max_window, self._max_edge
+        )
+        tokens = (
+            token_spans(query)
+            if self._tokenizer is token_spans
+            else await asyncio.to_thread(_query_tokens, self._tokenizer, query)
+        )
         for span in probe_spans(query, bound, edge=edge, tokens=tokens):
             hits = await self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
@@ -2230,22 +2279,24 @@ class AsyncLexicalSignal(AsyncDeclaredSignal):
         ``assert_no_blocking`` reports it and a test asserting the answer
         cannot see it either.
 
-        :func:`_near_forms` is a plain function taking only values, which is
-        what makes it handable to a thread -- and
+        :func:`_near_forms_of_query` is a plain function taking only values,
+        which is what makes it handable to a thread. It tokenizes the query
+        as well as scoring it, so the caller's tokenizer runs off the loop in
+        the same hop; that tokenizer may load a dictionary or reach a service.
+        And
         :func:`_scorer_for` building a scorer per query is what makes it safe
         to, since the default one is stateful and would otherwise be shared
         across whatever else the loop is running.
         """
-        tokens = _query_tokens(self._tokenizer, query)
-        _checked_query(tokens, self._max_query_tokens)
         found = await asyncio.to_thread(
-            _near_forms,
+            _near_forms_of_query,
             query,
             list(await self._catalogue.surface_forms()),
+            tokenizer=self._tokenizer,
+            max_query_tokens=self._max_query_tokens,
             threshold=self._threshold,
             scorer=_scorer_for(self._scorer, self._threshold),
             fold=self._fold,
-            tokens=tokens,
         )
         hits: list[FormHit] = []
         for form, span, score in found:

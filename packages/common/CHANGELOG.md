@@ -2093,7 +2093,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tokens, so `max_window` and `max_edge` are its only caps — as for a rung with
   its own `normalizer`. `LexicalSignal`'s bound is in characters and is
   unchanged by a tokenizer; its `max_query_tokens` counts the tokenizer's
-  tokens.
+  tokens. The async twins call any tokenizer except `token_spans` off the
+  event loop, through `asyncio.to_thread`, because a tokenizer may load a
+  dictionary or call a service. `AsyncLexicalSignal` tokenizes in the same
+  thread call that scores, so it adds no extra hop.
 
 - **`ScanningSignal.window_bounded(spec, longest_form_tokens)`** and its async
   twin's: whether a rung built from a configuration spec bounds its window
