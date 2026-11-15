@@ -2075,7 +2075,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a hit with no alphanumeric character keeps the empty core at its start and
   stays apart from its neighbours. Generic over the hit type: `ScanningSignal`
   calls it over `FormHit`s, and a second scanner over `probe_spans` calls it
-  over its own.
+  over its own. A hit whose span is not inside the text (`0 <= start <= end <=
+  len(text)`) is refused with `ValueError` naming the hit, as `probe_spans`
+  refuses a caller's token.
 
 - **A tokenizer for the scanning rungs: `tokenizer=` on `ScanningSignal`,
   `LexicalSignal` and their async twins, with `Tokenizer`, `TOKENIZERS` and
@@ -2084,10 +2086,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   windows start and end on its tokens. A document names one under
   `tokenizer:` on a `kind: scan` or `kind: lexical` rung — a name in
   `TOKENIZERS`, or `{name: ..., <params>}` — and an unknown name is refused
-  with `ValidationError` listing the registered ones. A factory refusing its
-  parameters (`ValueError` or `ValidationError`) is quoted in that error; any
-  other failure is named by its type alone and chained as the cause, because a
-  factory's own text can carry a path or a URL. `default` is registered
+  with `ValidationError` listing the registered ones, at the document doors;
+  through `signal_backends.create` it arrives as the `OperationError` wrapping
+  it. A factory refusing its parameters (`ValueError` or `ValidationError`) is
+  quoted in that error; any other failure is named by its type alone and
+  chained as the cause, because a factory's own text can carry a path or a
+  URL. `default` is registered
   and is `token_spans` itself. A scan with any other tokenizer does not take
   its window or edge bound from the source, whose counts are in default
   tokens, so `max_window` and `max_edge` are its only caps — as for a rung with
