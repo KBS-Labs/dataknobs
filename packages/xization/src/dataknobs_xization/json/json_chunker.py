@@ -499,24 +499,6 @@ class JSONChunker:
             stop.set()
             worker.join()
 
-    def _fallback_load(self, source: str) -> Iterator[JSONChunk]:
-        """Fallback: load entire file when streaming utils unavailable."""
-        import gzip
-        from pathlib import Path
-
-        source_path = Path(source)
-        if not source_path.exists():
-            return
-
-        if source.lower().endswith(".gz"):
-            with gzip.open(source_path, "rt", encoding="utf-8") as f:
-                data = json.load(f)
-        else:
-            with open(source_path, encoding="utf-8") as f:
-                data = json.load(f)
-
-        yield from self.chunk(data, source=source)
-
     def _process_item(
         self,
         item: dict[str, Any],

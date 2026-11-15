@@ -9,7 +9,6 @@ import io
 import json
 from pathlib import Path
 
-import pytest
 
 from dataknobs_xization.json.json_chunker import JSONChunker
 
@@ -110,3 +109,41 @@ class TestArrayStreaming:
             ("A\ntags: x", ".items[0]"),
             ("B", ".items[1]"),
         ]
+
+
+class _CountingReader(io.StringIO):
+    """A text stream that records how many characters have been read."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self.consumed = 0
+
+    def read(self, size: int | None = -1) -> str:
+        data = super().read(size)
+        self.consumed += len(data)
+        return data
+
+
+class TestIncrementalStreaming:
+    def test_first_chunk_arrives_before_the_source_is_read(self) -> None:
+        elements = [{"title": f"T{i}", "body": "x" * 200} for i in range(2000)]
+        text = json.dumps({"items": elements})
+        reader = _CountingReader(text)
+        chunks = JSONChunker().stream_chunks(reader, is_jsonl=False)
+        try:
+            first = next(chunks)
+            assert first.source_path == ".items[0]"
+            assert reader.consumed < len(text) // 2
+        finally:
+            chunks.close()  # type: ignore[attr-defined]
+
+    def test_closing_early_stops_reading(self) -> None:
+        elements = [{"title": f"T{i}", "body": "x" * 200} for i in range(2000)]
+        text = json.dumps(elements)
+        reader = _CountingReader(text)
+        chunks = JSONChunker().stream_chunks(reader, is_jsonl=False)
+        next(chunks)
+        chunks.close()  # type: ignore[attr-defined]
+        consumed_at_close = reader.consumed
+        assert consumed_at_close < len(text)
+        assert reader.consumed == consumed_at_close
