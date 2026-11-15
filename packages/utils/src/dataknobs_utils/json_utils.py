@@ -961,16 +961,47 @@ class JsonSchemaBuilder:
             )
 
 
-class Path:
-    """Container for a jq path with its value and optional line number.
+def _count_indices(jq_path: str) -> int:
+    """Count the ``[n]`` index occurrences in a jq path."""
+    return len(FLATTEN_IDX_RE.findall(jq_path))
 
-    Represents a single path/value pair from JSON data, with optional tracking
-    of the original line number for streaming scenarios.
+
+def _index_prefix(jq_path: str, num_indices: int) -> str:
+    """Get a jq path's prefix up to and including its ``num_indices``-th index.
+
+    Args:
+        jq_path: A jq path built with indices kept.
+        num_indices: How many indices the prefix should include. 0 gives "".
+
+    Returns:
+        str: The prefix, or the whole path if it has fewer indices.
+    """
+    if num_indices <= 0:
+        return ""
+    end = len(jq_path)
+    for count, match in enumerate(FLATTEN_IDX_RE.finditer(jq_path), start=1):
+        if count == num_indices:
+            end = match.end()
+            break
+    return jq_path[:end]
+
+
+class Path:
+    """A value at a location in a JSON document.
+
+    Two paths are equal when both have tracked line numbers and those numbers
+    are equal, or when both are untracked and their ``(jq_path, item)`` pairs
+    are equal; a tracked and an untracked path are never equal. Equal paths
+    hash equally (an untracked path's item must be hashable to be hashed).
+
+    Ordering (``<``) is by line number when both paths are tracked, and by
+    ``jq_path`` string otherwise.
 
     Attributes:
         jq_path: Fully-qualified jq-style path (e.g., '.data[0].name').
         item: The value at this path.
-        line_num: Optional line number from streaming (-1 if not tracked).
+        line_num: The position of this value in a stream, or -1 when not
+            tracked.
     """
 
     def __init__(self, jq_path: str, item: Any, line_num: int = -1):
@@ -979,41 +1010,52 @@ class Path:
         Args:
             jq_path: Fully-qualified jq-style path with indices.
             item: The value at this path.
-            line_num: Optional line number for ordering. Defaults to -1.
+            line_num: The value's position in a stream (any value >= 0), or -1
+                for "not tracked". Defaults to -1.
         """
         self.jq_path = jq_path
         self.item = item
         self.line_num = line_num
-        self._path_elts: List[str] | None = None  # jq_path.split('.')
-        self._len: int | None = None  # Number of path elements
+
+    @property
+    def _tracked(self) -> bool:
+        return self.line_num >= 0
 
     def __repr__(self) -> str:
-        lnstr = f"{self.line_num}: " if self.line_num >= 0 else ""
-        return f"{lnstr}{self.jq_path}: {self.item}"
-
-    def __key(self) -> Union[Tuple[str, Any], int]:
-        return (self.jq_path, self.item) if self.line_num < 0 else self.line_num
+        """Render as ``"<line_num>: <jq_path>: <item>"``, or without the line number when untracked."""
+        if self._tracked:
+            return f"{self.line_num}: {self.jq_path}: {self.item}"
+        return f"{self.jq_path}: {self.item}"
 
     def __lt__(self, other: "Path") -> bool:
-        if self.line_num < 0 or other.line_num < 0:
-            return self.jq_path < other.jq_path
-        else:
+        """Compare by line number when both are tracked, else by jq_path."""
+        if self._tracked and other._tracked:
             return self.line_num < other.line_num
+        return self.jq_path < other.jq_path
 
     def __hash__(self) -> int:
-        return hash(self.__key())
+        """Hash consistently with equality."""
+        if self._tracked:
+            return hash(("tracked", self.line_num))
+        return hash(("untracked", self.jq_path, self.item))
 
     def __eq__(self, other: object) -> bool:
-        if isinstance(other, Path):
-            return self.__key() == other.__key()
-        return NotImplemented
+        """Compare by line number when both are tracked, by (jq_path, item) when neither is."""
+        if not isinstance(other, Path):
+            return NotImplemented
+        if self._tracked != other._tracked:
+            return False
+        if self._tracked:
+            return self.line_num == other.line_num
+        return bool(self.jq_path == other.jq_path and self.item == other.item)
 
     @property
     def path_elts(self) -> List[str]:
-        """Get this path's (index-qualified) elements"""
-        if self._path_elts is None:
-            self._path_elts = self.jq_path.split(".")
-        return self._path_elts
+        """Get this path's (index-qualified) elements: ``jq_path`` split on ".".
+
+        For example, ".a[0].b" gives ["", "a[0]", "b"] and "" gives [""].
+        """
+        return self.jq_path.split(".")
 
     @property
     def size(self) -> int:
@@ -1048,92 +1090,121 @@ class GroupAcceptStrategy(ABC):
 
 
 class PathGroup:
-    """Container for a group of related paths."""
+    """A set of paths that together make up one record, plus shared context.
+
+    Attributes:
+        accept_strategy: The strategy deciding which paths the group takes.
+        main_paths: The paths of the record itself, or None until the first
+            main path is accepted.
+        distributed_paths: The shared context distributed into the record, or
+            None until the first distributed path is accepted.
+    """
 
     def __init__(self, accept_strategy: GroupAcceptStrategy, first_path: Path | None = None):
-        self._all_paths: List[Path] | None = None
+        """Initialize a PathGroup.
+
+        Args:
+            accept_strategy: The strategy deciding which paths the group takes.
+            first_path: Optional path offered exactly as ``accept(first_path)``
+                would offer it. The strategy may reject it, leaving the group
+                empty. Defaults to None.
+        """
+        self.accept_strategy = accept_strategy
         self.main_paths: Set[Path] | None = None
         self.distributed_paths: Set[Path] | None = None
-        self.accept_strategy = accept_strategy
         if first_path is not None:
             self.accept(first_path, distribute=False)
 
     @property
     def num_main_paths(self) -> int:
-        """Get the number of main paths in this group"""
+        """Get the number of main paths in this group (0 when None)."""
         return len(self.main_paths) if self.main_paths is not None else 0
 
     @property
     def num_distributed_paths(self) -> int:
-        """Get the number of distributed paths in this group"""
+        """Get the number of distributed paths in this group (0 when None)."""
         return len(self.distributed_paths) if self.distributed_paths is not None else 0
 
     @property
     def size(self) -> int:
-        """Get the total number of paths in this group."""
+        """Get the total number of paths in this group (main plus distributed)."""
         return self.num_main_paths + self.num_distributed_paths
 
     @property
     def paths(self) -> List[Path]:
-        """Get all paths (both main and distributed)"""
-        if self._all_paths is None:
-            if self.main_paths is not None:
-                all_paths_set = self.main_paths.copy()
-                if self.distributed_paths is not None:
-                    all_paths_set.update(self.distributed_paths)
-                self._all_paths = sorted(all_paths_set)
-            elif self.distributed_paths is not None:
-                self._all_paths = sorted(self.distributed_paths)
-            else:
-                self._all_paths = []
-        return self._all_paths
+        """Get all main and distributed paths, sorted, each appearing once."""
+        all_paths: Set[Path] = set()
+        if self.main_paths is not None:
+            all_paths.update(self.main_paths)
+        if self.distributed_paths is not None:
+            all_paths.update(self.distributed_paths)
+        return sorted(all_paths)
 
     def as_dict(self) -> Dict[str, Any]:
-        """Reconstruct the object from the paths"""
-        d: Dict[str, Any] = {}
-        if self.paths is not None:
-            for path in self.paths:
-                path_to_dict(path.jq_path, path.item, result=d)
-        return d
+        """Reconstruct the object from the paths.
+
+        Returns:
+            Dict[str, Any]: A new dict built by writing each path's item at its
+                jq path, in ``paths`` order. An empty group gives {}.
+        """
+        result: Dict[str, Any] = {}
+        for path in self.paths:
+            path_to_dict(path.jq_path, path.item, result=result)
+        return result
 
     def accept(self, path: Path, distribute: bool = False) -> bool:
-        """Add the path if it belongs in this group.
-        :param path: The path to (potentially) add.
-        :param distribute: True to propose the path as a distributed path
-        :return: True if the path was accepted and added.
+        """Add the path if the strategy says it belongs in this group.
+
+        An answer of "main" adds the path to ``main_paths``; any other non-None
+        answer adds it to ``distributed_paths``; None adds nothing.
+
+        Args:
+            path: The path to (potentially) add.
+            distribute: True to propose the path as a distributed path.
+
+        Returns:
+            bool: True if the path was accepted and added (including when an
+                equal path was already present).
         """
-        added = False
-        add_type = self.accept_strategy.accept_path(path, self, distribute=distribute)
-        if add_type is not None:
-            if add_type == "main":
-                if self.main_paths is None:
-                    self.main_paths = {path}
-                else:
-                    self.main_paths.add(path)
-            elif self.distributed_paths is None:
-                self.distributed_paths = {path}
-            else:
-                self.distributed_paths.add(path)
-            added = True
-            self._all_paths = None
-        return added
+        answer = self.accept_strategy.accept_path(path, self, distribute=distribute)
+        if answer is None:
+            return False
+        if answer == "main":
+            if self.main_paths is None:
+                self.main_paths = set()
+            self.main_paths.add(path)
+        else:
+            if self.distributed_paths is None:
+                self.distributed_paths = set()
+            self.distributed_paths.add(path)
+        return True
 
     def incorporate_paths(self, group: "PathGroup") -> None:
-        """Incorporate (distribute) the group's appliccable paths into this group."""
+        """Offer each of the group's paths, in order, to this group as distributed.
+
+        Which of them are taken is the strategy's decision.
+
+        Args:
+            group: The group whose paths to offer.
+        """
         for path in group.paths:
             self.accept(path, distribute=True)
 
 
 class ArrayElementAcceptStrategy(GroupAcceptStrategy):
-    """Strategy that groups paths by array element at a specific nesting level.
+    """Strategy making each element of an array at a chosen nesting level one record.
 
-    Creates record boundaries at array elements, treating each element as a
-    distinct record with paths that share the same array indices up to the
-    specified level.
+    Paths with no array index ("shared" paths) are always accepted as
+    distributed context. Paths with an index are only ever main paths, and
+    belong to a group when they share the group's record key: their prefix up
+    to and including the index at ``max_array_level``, compared over the
+    indices both paths have.
 
     Attributes:
         max_array_level: Array nesting level at which to create records.
-        ref_path: Reference path for matching subsequent paths.
+        ref_path: The reference path for matching subsequent paths: the first
+            main path of whichever group most recently took its first main
+            path. None initially.
     """
 
     def __init__(self, max_array_level: int = -1):
@@ -1141,173 +1212,156 @@ class ArrayElementAcceptStrategy(GroupAcceptStrategy):
 
         Args:
             max_array_level: Array nesting depth for record boundaries:
-                - -1: Ignore array levels (accept all)
-                - 0: New record at first (top-level) array
-                - 1: New record at second array level
+                - negative: Do not split by array; every indexed path belongs
+                  to the current record
+                - 0: Each element of the outermost array is a record
+                - 1: Each element of the second array level is a record
                 - etc.
         """
         self.max_array_level = max_array_level
         self.ref_path: Path | None = None
 
     def accept_path(self, path: Path, group: PathGroup, distribute: bool = False) -> str | None:
-        if distribute or "[" not in path.jq_path:
-            return "distributed"
+        """Decide how ``group`` takes ``path``.
 
+        Args:
+            path: The path to evaluate.
+            group: The group that would receive the path.
+            distribute: True when the path is offered as shared context from
+                another group.
+
+        Returns:
+            str | None: "distributed" for a shared path; None for an indexed
+                path offered as distributed; otherwise "main" when the path
+                belongs to the group's record and None when it does not.
+        """
+        num_path_idxs = _count_indices(path.jq_path)
+        if num_path_idxs == 0:
+            return "distributed"
+        if distribute:
+            return None
         if group.num_main_paths == 0:
-            # Accept first path with an array
             self.ref_path = path
             return "main"
-        else:
-            if self.ref_path is None:
-                if group.main_paths is not None:
-                    self.ref_path = next(iter(group.main_paths))
-            # All elements up through max_array_level must fully match
-            cur_array_level = -1
-            if self.ref_path is not None:
-                for idx in range(1, min(self.ref_path.size, path.size)):
-                    ref_elt = self.ref_path.path_elts[idx]
-                    path_elt = path.path_elts[idx]
-                    if ref_elt != path_elt:
-                        return None
-                    elif ref_elt[-1] == "]":
-                        cur_array_level += 1
-                        if cur_array_level >= self.max_array_level:
-                            break
-        return "main"
+        if self.max_array_level < 0:
+            return "main"
+
+        ref = self.ref_path
+        if ref is None and group.main_paths:
+            ref = next(iter(group.main_paths))
+        if ref is None:
+            return "main"
+        k = min(self.max_array_level + 1, num_path_idxs, _count_indices(ref.jq_path))
+        if _index_prefix(path.jq_path, k) == _index_prefix(ref.jq_path, k):
+            return "main"
+        return None
 
 
 class PathSorter:
-    """Sort and group paths into records based on an acceptance strategy.
-
-    Manages the incremental grouping of paths as they're streamed, creating
-    record boundaries according to the acceptance strategy and enforcing
-    size constraints.
+    """Group a stream of paths, arriving in stream order, into consecutive records.
 
     Attributes:
         accept_strategy: Strategy for determining path membership.
-        group_size: Minimum group size (groups below this are dropped).
-        max_groups: Maximum groups kept in memory.
-        groups: List of active PathGroup instances.
+        group_size: Minimum group size; a closed group smaller than this is
+            discarded. 0 or less means no minimum.
+        max_groups: Effective maximum number of groups held. 0 or less means
+            unlimited; a positive limit is never below 3.
+        groups: The held PathGroup instances, or None until the first path
+            arrives.
     """
 
     def __init__(
-        self,
-        accept_strategy: GroupAcceptStrategy,
-        group_size: int = 0,
-        max_groups: int = 0,
+        self, accept_strategy: GroupAcceptStrategy, group_size: int = 0, max_groups: int = 0
     ):
         """Initialize a PathSorter.
 
         Args:
             accept_strategy: Strategy for determining how paths are grouped.
             group_size: Minimum required group size. Groups smaller than this
-                are silently dropped when closed. 0 means no minimum. Defaults to 0.
-            max_groups: Maximum groups kept in memory. Older groups are dropped
-                when limit is reached. 0 means unlimited. Defaults to 0.
+                are dropped when closed. 0 or less means no minimum.
+                Defaults to 0.
+            max_groups: Maximum groups held. Older groups are dropped when the
+                limit is exceeded. 0 or less means unlimited; a positive value
+                is raised to at least 3. Defaults to 0.
         """
         self.accept_strategy = accept_strategy
         self.group_size = group_size
-        # NOTE: Must keep at least 3 groups if keeping any for propagating
-        #      distributed paths.
-        self.max_groups = max_groups if max_groups <= 0 else max(3, max_groups)
+        self.max_groups = max(3, max_groups) if max_groups > 0 else max_groups
         self.groups: List[PathGroup] | None = None
 
     @property
     def num_groups(self) -> int:
-        """Get the number of groups"""
+        """Get the number of groups held (0 when None)."""
         return len(self.groups) if self.groups is not None else 0
 
     def add_path(self, path: Path) -> PathGroup | None:
-        """Add a path to the appropriate group, creating new groups as needed.
+        """Add a path to the newest group, starting a new group when it is rejected.
 
-        Paths are added to the most recent group if accepted. When a path is
-        rejected, the current group is closed and a new group is created.
-
-        Args:
-            path: The path to add to a group.
-
-        Returns:
-            PathGroup | None: The most recently closed group if one was closed,
-                otherwise None.
-        """
-        result = None
-        if self.groups is None or len(self.groups) == 0:
-            self.groups = [
-                PathGroup(
-                    accept_strategy=self.accept_strategy,
-                    first_path=path,
-                )
-            ]
-        else:
-            # Assume always "incremental", such that new paths will belong in
-            # the latest group
-            latest_group = self.groups[-1]
-            if not latest_group.accept(path):
-                # Time to add a new group
-                self.close_group()
-                result = latest_group
-
-                # Start a new group
-                self.groups.append(
-                    PathGroup(
-                        accept_strategy=self.accept_strategy,
-                        first_path=path,
-                    )
-                )
-
-                # Enforce max_group limit by removing groups from the front
-                if self.max_groups > 0 and len(self.groups) >= self.max_groups:
-                    while len(self.groups) >= self.max_groups:
-                        self.groups.pop(0)
-        return result
-
-    def close_group(self, idx: int = -1, check_size: bool = True) -> PathGroup | None:
-        """Close a group, finalizing its contents.
-
-        Closing a group involves:
-        1. Incorporating distributed paths from the previous group
-        2. Optionally checking size constraints and dropping undersized groups
-
-        Args:
-            idx: Index of group to close (-1 for last). Defaults to -1.
-            check_size: If True, enforces group_size constraint. Defaults to True.
-
-        Returns:
-            PathGroup | None: The closed group, or None if dropped for size.
-        """
-        if self.groups is None or len(self.groups) == 0:
-            return None
-
-        if idx == -1:
-            idx = len(self.groups) - 1
-        latest_group = self.groups[idx]
-
-        # Add distributable lines from the prior group
-        if idx > 0:
-            latest_group.incorporate_paths(self.groups[idx - 1])
-
-        # Check size constraints
-        if check_size and self.group_size > 0 and len(self.groups) > 0:
-            if latest_group.size < self.group_size:
-                # Last group not "filled" ... need to drop
-                self.groups.pop()
-
-        return latest_group
-
-    def accept_path(self, path: Path) -> bool:
-        """Try to add a path to any existing group.
+        When the newest group rejects the path, that group is closed (as
+        ``close_group()``), a new group is started with the path, and, if
+        ``max_groups`` > 0, the oldest groups are discarded until at most
+        ``max_groups`` are held.
 
         Args:
             path: The path to add.
 
         Returns:
-            bool: True if the path was accepted by a group, False otherwise.
+            PathGroup | None: The closed group if one was closed and kept,
+                otherwise None (path accepted, first group started, or the
+                closed group discarded for size).
         """
-        if self.groups is not None:
-            for group in self.groups:
-                if group.accept(path):
-                    return True
-        return False
+        if not self.groups:
+            self.groups = [PathGroup(self.accept_strategy, first_path=path)]
+            return None
+        if self.groups[-1].accept(path):
+            return None
+        closed = self.close_group()
+        self.groups.append(PathGroup(self.accept_strategy, first_path=path))
+        if self.max_groups > 0:
+            while len(self.groups) > self.max_groups:
+                self.groups.pop(0)
+        return closed
+
+    def close_group(self, idx: int = -1, check_size: bool = True) -> PathGroup | None:
+        """Close a group, finalizing its contents.
+
+        Closing a group involves:
+        1. Incorporating the paths of the group preceding it, so it receives
+           the earlier group's shared context
+        2. If ``check_size`` and ``group_size`` > 0, removing it from
+           ``groups`` when its size is below ``group_size``
+
+        Args:
+            idx: Index of group to close (-1 for newest). Defaults to -1.
+            check_size: If True, enforces group_size constraint. Defaults to True.
+
+        Returns:
+            PathGroup | None: The closed group, or None if no groups are held or
+                the group was dropped for size.
+        """
+        if not self.groups:
+            return None
+        pos = idx if idx >= 0 else len(self.groups) + idx
+        group = self.groups[pos]
+        if pos > 0:
+            group.incorporate_paths(self.groups[pos - 1])
+        if check_size and self.group_size > 0 and group.size < self.group_size:
+            del self.groups[pos]
+            return None
+        return group
+
+    def accept_path(self, path: Path) -> bool:
+        """Offer a path to each held group in order, oldest first.
+
+        Args:
+            path: The path to add.
+
+        Returns:
+            bool: True if a group accepted the path, False otherwise.
+        """
+        if not self.groups:
+            return False
+        return any(group.accept(path) for group in self.groups)
 
     def all_groups_have_size(self, group_size: int) -> bool:
         """Check if all groups have a specific size.
@@ -1316,21 +1370,22 @@ class PathSorter:
             group_size: The size to test for.
 
         Returns:
-            bool: True if all groups have exactly this size, False otherwise.
+            bool: False when no group has ever been started (``groups`` is
+                None); otherwise whether every held group has exactly this
+                size (True for an empty list).
         """
-        if self.groups is not None:
-            for group in self.groups:
-                if group.size != group_size:
-                    return False
-            return True
-        return False
+        if self.groups is None:
+            return False
+        return all(group.size == group_size for group in self.groups)
 
 
 class RecordPathBuilder:
     """Build and output records from JSON by grouping paths.
 
-    Streams JSON data, groups paths into records using a PathSorter, and
-    writes formatted output for each record.
+    Streams JSON data, groups its values into records at array level 0 with a
+    PathSorter, and writes each record as soon as it ends. Each record holds
+    its own values plus every shared (index-free) value delivered before it
+    ends.
 
     Attributes:
         jdata: JSON data source.
@@ -1338,8 +1393,9 @@ class RecordPathBuilder:
         builder_fn: Function to format record lines.
         timeout: Request timeout for URLs.
         rec_id: Current record ID counter.
-        inum: Current item number counter.
-        sorter: PathSorter for grouping paths.
+        inum: Current item number counter (stream position).
+        sorter: PathSorter for grouping paths, or None outside
+            ``stream_record_paths``.
     """
 
     def __init__(
@@ -1367,34 +1423,49 @@ class RecordPathBuilder:
         self.sorter: PathSorter | None = None
 
     def write_group(self, group: PathGroup) -> None:
+        """Write the group's paths, in ``group.paths`` order, under the current rec_id.
+
+        Args:
+            group: The group to write.
+        """
         for path in group.paths:
             line = self.builder_fn(self.rec_id, path.line_num, path.jq_path, path.item)
-            print(line, file=self.output_stream)
+            self.output_stream.write(line + "\n")
 
     def visitor(self, item: Any, path: Tuple[Any, ...]) -> None:
-        jq_path = build_jq_path(path, keep_list_idxs=True)
+        """Handle one streamed value at stream position ``inum``.
+
+        If the value ends a record, the ended record is written and ``rec_id``
+        advances. ``inum`` always advances. Without a sorter, the value is not
+        recorded.
+
+        Args:
+            item: The streamed value.
+            path: The value's json_stream path tuple.
+        """
         if self.sorter is not None:
-            group = self.sorter.add_path(Path(jq_path, item, line_num=self.inum))
-        else:
-            group = None
-        if group is not None:
-            self.write_group(group)
-            self.rec_id += 1
+            jq_path = build_jq_path(path, keep_list_idxs=True)
+            closed = self.sorter.add_path(Path(jq_path, item, line_num=self.inum))
+            if closed is not None:
+                self.write_group(closed)
+                self.rec_id += 1
         self.inum += 1
 
     def stream_record_paths(self) -> None:
+        """Stream the JSON data and write it out one record at a time.
+
+        Resets ``rec_id`` and ``inum`` first, so calling again streams the
+        document again from scratch. Afterwards ``inum`` is the number of
+        values delivered and ``rec_id`` the id of the last record written.
+        Errors from parsing or fetching propagate.
+        """
         self.rec_id = 0
         self.inum = 0
-        self.sorter = PathSorter(
-            ArrayElementAcceptStrategy(max_array_level=0),
-            max_groups=2,
-        )
-
+        self.sorter = PathSorter(ArrayElementAcceptStrategy(max_array_level=0), max_groups=2)
         stream_json_data(self.jdata, self.visitor, timeout=self.timeout)
-
-        last_group = self.sorter.close_group(check_size=False)
-        if last_group is not None:
-            self.write_group(last_group)
+        last = self.sorter.close_group()
+        if last is not None:
+            self.write_group(last)
 
 
 def stream_record_paths(
@@ -1403,10 +1474,13 @@ def stream_record_paths(
     line_builder_fn: Callable[[int, int, str, Any], str],
     timeout: int = TIMEOUT,
 ) -> None:
-    """Stream JSON and write formatted records grouped by top-level structure.
+    """Stream JSON and write formatted records grouped by top-level array element.
 
-    Identifies top-level JSON records (typically array elements) and writes
-    formatted lines for each path within each record.
+    Values whose path has an array index belong to the record named by the
+    path's first index (a new record starts each time that changes); values
+    with no index are shared context, included in the record current when they
+    arrive and in every later record. A document with no index is one record.
+    Records are written incrementally, as each ends.
 
     Each output line represents a (rec_id, line_num, jq_path, item) tuple where:
         - rec_id: 0-based record identifier
@@ -1421,8 +1495,9 @@ def stream_record_paths(
             that returns a formatted string.
         timeout: Request timeout in seconds for URL sources. Defaults to 10.
     """
-    rpb = RecordPathBuilder(json_data, output_stream, line_builder_fn, timeout=timeout)
-    rpb.stream_record_paths()
+    RecordPathBuilder(
+        json_data, output_stream, line_builder_fn, timeout=timeout
+    ).stream_record_paths()
 
 
 def get_records_df(json_data: str, timeout: int = TIMEOUT) -> pd.DataFrame:

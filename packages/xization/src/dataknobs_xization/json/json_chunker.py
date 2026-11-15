@@ -12,8 +12,13 @@ Supports both in-memory and streaming modes for handling large files.
 
 from __future__ import annotations
 
+import contextlib
+import itertools
 import json
+import queue
 import re
+import threading
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any, Iterator, Literal
@@ -128,6 +133,101 @@ class JSONChunk:
         }
 
 
+_RECORD_QUEUE_SIZE = 16
+"""How many reassembled elements the streaming worker may hold ahead of the consumer."""
+
+_PRODUCER_POLL_SECONDS = 0.05
+"""How often a blocked streaming worker re-checks whether the consumer has stopped."""
+
+_STREAM_DONE = object()
+_UNSET = object()
+
+
+class _StopStreamingError(Exception):
+    """Raised inside the streaming worker to abandon parsing once the consumer stops."""
+
+
+def _new_container(step: Any) -> Any:
+    """Create the container a path step addresses: a list for an index, else a dict."""
+    return [] if isinstance(step, int) else {}
+
+
+def _child(container: Any, step: Any, next_step: Any) -> Any:
+    """Get (creating if needed) the child of ``container`` at ``step``."""
+    if isinstance(container, list):
+        if step == len(container):
+            container.append(_new_container(next_step))
+        return container[step]
+    if step not in container:
+        container[step] = _new_container(next_step)
+    return container[step]
+
+
+def _set_leaf(container: Any, step: Any, item: Any) -> None:
+    """Set ``item`` at ``step`` of ``container``."""
+    if isinstance(container, list) and step == len(container):
+        container.append(item)
+    else:
+        container[step] = item
+
+
+def _insert(root: Any, rel_path: tuple[Any, ...], item: Any) -> Any:
+    """Insert a leaf value into a structure being rebuilt from streamed leaves.
+
+    Args:
+        root: The structure so far, or ``_UNSET`` before the first leaf.
+        rel_path: The leaf's path relative to the structure's root. Array
+            indices arrive consecutively from 0, in document order.
+        item: The leaf value (a scalar, or an empty object or array).
+
+    Returns:
+        The structure's root, created on the first leaf.
+    """
+    if not rel_path:
+        return item
+    if root is _UNSET:
+        root = _new_container(rel_path[0])
+    container = root
+    for step, next_step in itertools.pairwise(rel_path):
+        container = _child(container, step, next_step)
+    _set_leaf(container, rel_path[-1], item)
+    return root
+
+
+class _RecordElementAssembler:
+    """Group streamed leaf values into records and rebuild each record's element.
+
+    A value's record key is its path up to and including the path's first array
+    index; a new record starts each time that key changes. A value whose path
+    has no index is shared context and belongs to no element. Each record's
+    element (the value at its record key) is passed to ``emit`` when the record
+    ends.
+    """
+
+    def __init__(self, emit: Callable[[tuple[Any, ...], Any], None]) -> None:
+        self._emit = emit
+        self._key: tuple[Any, ...] | None = None
+        self._element: Any = _UNSET
+
+    def visit(self, item: Any, path: tuple[Any, ...]) -> None:
+        """Take one streamed leaf value at ``path``."""
+        first_index = next((i for i, step in enumerate(path) if isinstance(step, int)), None)
+        if first_index is None:
+            return
+        key = path[: first_index + 1]
+        if key != self._key:
+            self.finish()
+            self._key = key
+        self._element = _insert(self._element, path[first_index + 1 :], item)
+
+    def finish(self) -> None:
+        """End the current record, if any, and emit its element."""
+        if self._key is not None:
+            self._emit(self._key, self._element)
+        self._key = None
+        self._element = _UNSET
+
+
 class JSONChunker:
     """Chunker for generating chunks from JSON data with preserved metadata.
 
@@ -193,7 +293,12 @@ class JSONChunker:
         Leverages dataknobs_utils.json_utils streaming infrastructure.
 
         Supported formats:
-        - JSON arrays: Each top-level element becomes a chunk source
+        - JSON: values are grouped into records by their first array index
+          (the outermost array each value's path passes through, at any
+          depth); each record whose array element is an object becomes one
+          chunk, with ``source_path`` set to that element's jq path (e.g.
+          ``.[0]`` or ``.items[2]``). Other elements and index-free values
+          yield no chunk. Chunks are produced as each record ends.
         - JSONL files: Each line is a complete JSON object
         - Compressed files: .gz files auto-detected and decompressed
           (only when ``source`` is a path; file-like sources must be
@@ -220,7 +325,11 @@ class JSONChunker:
         """
         self._chunk_index = 0
 
-        if hasattr(source, "read") and callable(source.read):  # type: ignore[union-attr]
+        if (
+            not isinstance(source, (str, Path))
+            and hasattr(source, "read")
+            and callable(source.read)
+        ):
             jsonl = bool(is_jsonl)
             source_label = source_file or ""
             if jsonl:
@@ -288,7 +397,8 @@ class JSONChunker:
         source_label: str,
     ) -> Iterator[JSONChunk]:
         """Yield chunks from each non-empty JSONL line in ``stream``."""
-        for line_num, raw in enumerate(stream):
+        lines: Iterable[str | bytes] = stream
+        for line_num, raw in enumerate(lines):
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
             line = text.strip()
             if not line:
@@ -310,80 +420,84 @@ class JSONChunker:
         timeout: int,
         source_file: str | None = None,
     ) -> Iterator[JSONChunk]:
-        """Stream from a JSON array file using json_utils infrastructure."""
-        try:
-            from dataknobs_utils.json_utils import (
-                stream_json_data,
-                PathSorter,
-                ArrayElementAcceptStrategy,
-                Path as JsonPath,
-                build_jq_path,
-            )
-        except ImportError:
-            # Fall back to loading entire file if streaming utils not available
-            if isinstance(source, (str, Path)):
-                yield from self._fallback_load(str(source))
-            else:
-                label = source_file if source_file is not None else ""
-                data = json.load(source)
-                yield from self.chunk(data, source=label)
-            return
+        """Stream chunks from JSON (not JSONL) using json_utils infrastructure.
+
+        The source is parsed by ``stream_json_data`` on a worker thread, which
+        groups the streamed values into records by their first array index and
+        reassembles each record's element (the array element itself, keys in
+        source order; index-free values are not part of any element). Elements
+        are handed to this generator through a bounded queue as each record
+        ends, so chunks are produced incrementally. One chunk is yielded per
+        element that is a JSON object. Closing the generator early stops the
+        worker; a parsing or fetching error is re-raised here.
+
+        Args:
+            source: Path, URL, JSON string, or file-like object.
+            timeout: Request timeout for URL sources (seconds).
+            source_file: Label attached to each chunk as ``source_file``.
+                Defaults to ``source`` when it is a string, else "".
+
+        Yields:
+            JSONChunk objects, in record order.
+        """
+        # Imported here so importing this module does not pull in json_utils'
+        # heavier dependencies until JSON streaming is actually used.
+        from dataknobs_utils.json_utils import build_jq_path, stream_json_data
 
         label = (
             source_file if source_file is not None else (source if isinstance(source, str) else "")
         )
+        records: queue.Queue[Any] = queue.Queue(maxsize=_RECORD_QUEUE_SIZE)
+        stop = threading.Event()
 
-        # Use PathSorter to group paths into records
-        sorter = PathSorter(
-            ArrayElementAcceptStrategy(max_array_level=0),
-            max_groups=2,
-        )
+        def put(entry: Any) -> None:
+            while not stop.is_set():
+                try:
+                    records.put(entry, timeout=_PRODUCER_POLL_SECONDS)
+                    return
+                except queue.Full:
+                    continue
+            raise _StopStreamingError
 
-        item_num = 0
+        assembler = _RecordElementAssembler(lambda key, element: put((key, element)))
 
-        def visitor(item: Any, path: tuple[Any, ...]) -> None:
-            nonlocal item_num
-            jq_path = build_jq_path(path, keep_list_idxs=True)
-            sorter.add_path(JsonPath(jq_path, item, line_num=item_num))
-            item_num += 1
+        def visit(item: Any, path: tuple[Any, ...]) -> None:
+            if stop.is_set():
+                raise _StopStreamingError
+            assembler.visit(item, path)
 
-        stream_json_data(source, visitor, timeout=timeout)
+        def produce() -> None:
+            try:
+                stream_json_data(source, visit, timeout=timeout)
+                assembler.finish()
+                put(_STREAM_DONE)
+            except _StopStreamingError:
+                return
+            except BaseException as err:  # handed to the consumer, which re-raises it
+                with contextlib.suppress(_StopStreamingError):
+                    put(err)
 
-        # Process collected groups
-        if sorter.groups:
-            for group in sorter.groups:
-                sorter.close_group(check_size=False)
-                record_dict = group.as_dict()
-                # Handle array at root level
-                if isinstance(record_dict, dict) and len(record_dict) == 1:
-                    root_key = next(iter(record_dict.keys()))
-                    items = record_dict[root_key]
-                    if isinstance(items, list):
-                        for idx, item in enumerate(items):
-                            if isinstance(item, dict):
-                                yield self._process_item(
-                                    item,
-                                    source_path=f".{root_key}[{idx}]",
-                                    source_file=label,
-                                )
-
-    def _fallback_load(self, source: str) -> Iterator[JSONChunk]:
-        """Fallback: load entire file when streaming utils unavailable."""
-        import gzip
-        from pathlib import Path
-
-        source_path = Path(source)
-        if not source_path.exists():
-            return
-
-        if source.lower().endswith(".gz"):
-            with gzip.open(source_path, "rt", encoding="utf-8") as f:
-                data = json.load(f)
-        else:
-            with open(source_path, encoding="utf-8") as f:
-                data = json.load(f)
-
-        yield from self.chunk(data, source=source)
+        worker = threading.Thread(target=produce, name="json-chunker-stream", daemon=True)
+        worker.start()
+        try:
+            while True:
+                entry = records.get()
+                if entry is _STREAM_DONE:
+                    return
+                if isinstance(entry, BaseException):
+                    raise entry
+                record_key, element = entry
+                if not isinstance(element, dict):
+                    continue
+                jq_path = build_jq_path(record_key, keep_list_idxs=True)
+                yield self._process_item(
+                    element,
+                    source_path=f".{jq_path}" if jq_path.startswith("[") else jq_path,
+                    source_file=label,
+                )
+        finally:
+            stop.set()
+            worker.join()
 
     def _process_item(
         self,

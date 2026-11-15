@@ -142,7 +142,13 @@ values = schema.extract_values(".user.name", "users.json")
 
 ### stream_record_paths()
 
-Extract records from JSON streams.
+Extract records from JSON streams. Each element of the outermost array a
+value's path passes through is one record. A record holds its own values plus
+the values with no array index (shared context) delivered before it ends, and
+no other record's values. Each record is written as soon as it ends, as one
+line per value from `line_builder_fn(rec_id, line_num, jq_path, item)`, where
+`line_num` is the value's position in the whole stream. A document with no
+array is a single record.
 
 ```python
 from dataknobs_utils.json_utils import stream_record_paths
