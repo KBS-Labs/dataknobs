@@ -16,10 +16,7 @@ This module includes functions for:
 ### filepath_generator()
 ```python
 def filepath_generator(
-    rootpath: str,
-    descend: bool = True,
-    seen: Optional[Set[str]] = None,
-    files_only: bool = True,
+    rootpath: str, descend: bool = True, seen: Set[str] | None = None, files_only: bool = True
 ) -> Generator[str, None, None]
 ```
 
@@ -28,7 +25,7 @@ Generate all filepaths under the root path.
 **Parameters:**
 - `rootpath` (str): The root path under which to find files
 - `descend` (bool, default=True): True to yield entries at any depth; False to yield only the root's immediate children
-- `seen` (Optional[Set[str]], default=None): Paths already reported. A path in `seen` is not yielded, though a directory in it is still traversed. The set is updated as the generator runs, so one set can be shared across calls to avoid reporting a path twice
+- `seen` (Set[str] | None, default=None): Paths already reported. A path in `seen` is not yielded, though a directory in it is still traversed. The set is updated as the generator runs, so one set can be shared across calls to avoid reporting a path twice
 - `files_only` (bool, default=True): True to generate only paths to files, with or without descending; False to include directories
 
 The root itself is never yielded. A symbolic link to a directory is yielded as a directory but not descended into. A root that does not exist yields nothing, and an unreadable subdirectory is skipped.
