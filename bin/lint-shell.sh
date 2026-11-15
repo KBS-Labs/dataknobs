@@ -76,6 +76,7 @@ STRICT_SCRIPTS=(
     "bin/docs-serve.sh"
     "bin/ensure-network.sh"
     "bin/setup-git-config.sh"
+    "bin/test-output-detail.sh"  # what the gate shows about a failed suite
     "bin/update-model-limits.sh"
     "setup-dk.sh"  # the installer four documentation pages tell you to run
 )

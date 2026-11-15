@@ -345,6 +345,12 @@ printf '%s\n' "$TIMESTAMP" > "$OUTPUT_DIR/.run-in-progress"
 RECORDS_FILE="$OUTPUT_DIR/check-records.jsonl"
 : > "$RECORDS_FILE"
 
+# The output file of each test suite that failed, one per line, appended by
+# report_failed_suite where the suite's exit status is read and listed by
+# print_failure_details at the end. Truncated for the reason above.
+FAILED_SUITES_FILE="$OUTPUT_DIR/failed-suites.txt"
+: > "$FAILED_SUITES_FILE"
+
 # record_check <name> <exit_code> [--tool T] [--skipped true|false]
 #              --duration <seconds|null> [--field key=<json>]
 #
@@ -1197,23 +1203,9 @@ if [ "$SKIP_TESTS" != "yes" ]; then
     # workspace`) rather than by directory, so this script holds no second
     # answer to where they live.
 
-    # The useful part of a pytest output file: the FAILED lines when there are
-    # any, otherwise the tail. A run can exit non-zero without producing a
-    # single FAILED line — a usage error, a collection error, an import error
-    # and an internal error all do — and a summary that reports a failure while
-    # naming nothing sends the reader to the artifacts to find out what broke.
-    # Echoes nothing when the file records no failure, so callers can test for
-    # emptiness before printing a header.
-    print_test_output_detail() {
-        local clean failed
-        clean=$(sed 's/\x1b\[[0-9;]*m//g' "$1" 2>/dev/null)
-        failed=$(echo "$clean" | grep -E '^FAILED ' || true)
-        if [ -n "$failed" ]; then
-            echo "$failed" | sed 's/^/    /'
-        elif echo "$clean" | grep -qE '^ERROR: usage:|^INTERNALERROR|^ERROR |errors during collection'; then
-            echo "$clean" | tail -12 | sed 's/^/    /'
-        fi
-    }
+    # What a failed suite shows, and the report flags that make it show it:
+    # see the helper's own header.
+    source "$PROJECT_ROOT/bin/test-output-detail.sh"
 
     if [ "$PR_MODE" = "yes" ]; then
         # PR/All/Full mode: Run unit and integration tests separately with artifacts
@@ -1221,12 +1213,12 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         # Build common test flags
         TEST_FLAGS="$TEST_PARALLEL_FLAG $TEST_VERBOSITY_FLAG"
 
-        # Always capture failure and skip reasons in output files for the summary
-        # -rf = show FAILED lines, -rs = show SKIPPED reasons
+        # Always capture failure, error and skip reasons in output files for the
+        # summary: GATE_PYTEST_REPORT_FLAGS, in bin/test-output-detail.sh.
         if [ -z "$PYTEST_ARGS" ]; then
-            PYTEST_ARGS="-rfs"
+            PYTEST_ARGS="$GATE_PYTEST_REPORT_FLAGS"
         else
-            PYTEST_ARGS="-rfs $PYTEST_ARGS"
+            PYTEST_ARGS="$GATE_PYTEST_REPORT_FLAGS $PYTEST_ARGS"
         fi
 
         # Helper: run unit tests for a single package, saving artifacts.
@@ -1266,11 +1258,7 @@ if [ "$SKIP_TESTS" != "yes" ]; then
 
             if [ $test_exit -ne 0 ] && [ $test_exit -ne 5 ]; then
                 print_error "Unit tests failed for $pkg"
-                # Show failed test names inline (strip ANSI codes first)
-                if [ -f "$OUTPUT_DIR/unit-test-output-$pkg.txt" ]; then
-                    sed 's/\x1b\[[0-9;]*m//g' "$OUTPUT_DIR/unit-test-output-$pkg.txt" 2>/dev/null | \
-                        grep -E '^FAILED ' | sed 's/^/    /' || true
-                fi
+                report_failed_suite "$OUTPUT_DIR/unit-test-output-$pkg.txt" "$FAILED_SUITES_FILE"
                 return $test_exit
             else
                 print_success "Unit tests passed for $pkg"
@@ -1382,7 +1370,7 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             if [ $workspace_exit -ne 0 ] && [ $workspace_exit -ne 5 ]; then
                 UNIT_TEST_STATUS=$workspace_exit
                 print_error "Workspace tests failed"
-                print_test_output_detail "$OUTPUT_DIR/unit-test-output-workspace.txt"
+                report_failed_suite "$OUTPUT_DIR/unit-test-output-workspace.txt" "$FAILED_SUITES_FILE"
             else
                 print_success "Workspace tests passed"
             fi
@@ -1424,11 +1412,7 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                 if [ $local_exit -ne 0 ] && [ $local_exit -ne 5 ]; then
                     INTEGRATION_TEST_STATUS=$local_exit
                     print_error "Integration tests failed for $pkg"
-                    # Show failed test names inline (strip ANSI codes first)
-                    if [ -f "$OUTPUT_DIR/integration-test-output-$pkg.txt" ]; then
-                        sed 's/\x1b\[[0-9;]*m//g' "$OUTPUT_DIR/integration-test-output-$pkg.txt" 2>/dev/null | \
-                            grep -E '^FAILED ' | sed 's/^/    /' || true
-                    fi
+                    report_failed_suite "$OUTPUT_DIR/integration-test-output-$pkg.txt" "$FAILED_SUITES_FILE"
                 else
                     print_success "Integration tests passed for $pkg"
                 fi
@@ -1473,19 +1457,10 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             echo ""
             echo -e "${RED}── Test Failure Details ──${NC}"
 
-            # Collect all FAILED lines from unit and integration output files
-            # Strip ANSI codes before matching since pytest uses colored output
-            for output_file in "$OUTPUT_DIR"/unit-test-output-*.txt "$OUTPUT_DIR"/integration-test-output-*.txt; do
-                if [ -f "$output_file" ]; then
-                    detail=$(print_test_output_detail "$output_file")
-                    if [ -n "$detail" ]; then
-                        pkg_label=$(basename "$output_file" .txt | sed 's/.*-output-//')
-                        test_type=$(basename "$output_file" .txt | sed 's/-test-output-.*//')
-                        echo -e "  ${YELLOW}$test_type ($pkg_label):${NC}"
-                        echo "$detail"
-                    fi
-                fi
-            done
+            # Every suite whose verdict was a failure, as recorded where it
+            # was reached -- not every output file, which passing suites
+            # leave too.
+            print_failure_details "$FAILED_SUITES_FILE"
 
             echo -e "${RED}──────────────────────────${NC}"
             echo ""
