@@ -2886,6 +2886,22 @@ def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
     when every one of them would then be bounded; otherwise ``max_window`` is
     the only remedy named.
 
+    **The edge is the second bound, refused on the same terms.** A probe that
+    starts or ends on a token is widened over the punctuation beside it, as far
+    as the source's ``form_edge`` allows -- see
+    :attr:`~dataknobs_common.ontology.SourceDescription.form_edge`. A live
+    table declaring none leaves the whole run, and so does a rung with its own
+    ``tokenizer`` or ``normalizer``, which does not trust a declared one. The
+    run is in the caller's text, so the read count is the caller's to choose:
+    one token between two runs of *r* punctuation characters is
+    ``(r + 1) ** 2 - 1`` reads, 90,600 for two 300-character rules. That is
+    the window's reason for refusing, so the edge is refused too. Which kinds
+    widen this way is read from ``bounded_by_form_edge``, whether a spec is
+    bounded is asked through ``edge_bounded``, a kind publishing no answer is
+    bounded exactly when the binding declares ``form_edge``, and the remedy is
+    asked per spec, as for the window. A document missing both bounds is told
+    both in one error.
+
     **Declared rungs only**, which is the sibling's scope and for its reason:
     a document with no ``resolver:`` section gets the default composition,
     whose scan nothing in the document names. That case belongs where the rung
@@ -2901,24 +2917,61 @@ def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
     if lookup is None:
         return
     longest = lookup.longest_form_tokens
-    unbounded: set[str] = set()
+    edge = lookup.form_edge
+    window_unbounded: set[str] = set()
+    edge_unbounded: set[str] = set()
     a_count_would_bound = True
+    an_edge_would_bound = True
     for spec in _declared_rungs(config):
         kind = str(spec.get("kind", ""))
         metadata = async_signal_backends.get_metadata(kind)
-        if not metadata.get("bounded_by_longest_form"):
-            continue
-        ask = metadata.get("window_bounded")
-        bounded = ask(spec, longest) if callable(ask) else longest is not None
-        if not bounded:
-            unbounded.add(kind)
-            # Would a declared count bound it? Any positive count asks that.
-            if callable(ask) and not ask(spec, 1):
-                a_count_would_bound = False
-    if not unbounded:
+        if metadata.get("bounded_by_longest_form"):
+            ask = metadata.get("window_bounded")
+            if not (ask(spec, longest) if callable(ask) else longest is not None):
+                window_unbounded.add(kind)
+                # Would a declared count bound it? Any positive count asks that.
+                if callable(ask) and not ask(spec, 1):
+                    a_count_would_bound = False
+        if metadata.get("bounded_by_form_edge"):
+            ask = metadata.get("edge_bounded")
+            if not (ask(spec, edge) if callable(ask) else edge is not None):
+                edge_unbounded.add(kind)
+                # Would a declared edge bound it? Any edge asks that; 0 is one.
+                if callable(ask) and not ask(spec, 0):
+                    an_edge_would_bound = False
+    if not window_unbounded and not edge_unbounded:
         return
-    scanning = sorted(unbounded)
-    if longest is None and a_count_would_bound:
+    parts: list[str] = []
+    if window_unbounded:
+        parts.append(
+            _an_unbounded_window(
+                binding, sorted(window_unbounded), longest is None and a_count_would_bound
+            )
+        )
+    if edge_unbounded:
+        parts.append(
+            _an_unbounded_edge(
+                binding,
+                sorted(edge_unbounded),
+                edge is None and an_edge_would_bound,
+                first=not window_unbounded,
+            )
+        )
+    raise ValidationError(
+        ". ".join(parts),
+        context={
+            "source_id": binding,
+            "rungs": sorted(window_unbounded | edge_unbounded),
+            "window_rungs": sorted(window_unbounded),
+            "edge_rungs": sorted(edge_unbounded),
+            "surface_forms_table": lookup.table,
+        },
+    )
+
+
+def _an_unbounded_window(binding: str, rungs: list[str], a_count_would_bound: bool) -> str:
+    """The window half of the refusal, naming the remedy that would bound ``rungs``."""
+    if a_count_would_bound:
         remedy = (
             "A live table cannot be counted, so the binding must declare "
             "`surface_forms.longest_form_tokens:`, or the rung must cap its own "
@@ -2931,16 +2984,41 @@ def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
             "-- a `tokenizer:` or `normalizer:` of its own is what stops the "
             "shipped scan trusting it -- so cap its window with `max_window:`"
         )
-    raise ValidationError(
-        f"binding {binding!r} is read by {scanning}, which probes every window "
+    return (
+        f"binding {binding!r} is read by {rungs}, which probes every window "
         f"of a query unless something bounds that enumeration. {remedy} -- "
         f"without a bound the scan spends n(n+1)/2 reads per query, each one a "
-        f"round trip",
-        context={
-            "source_id": binding,
-            "rungs": scanning,
-            "surface_forms_table": lookup.table,
-        },
+        f"round trip"
+    )
+
+
+def _an_unbounded_edge(
+    binding: str, rungs: list[str], an_edge_would_bound: bool, *, first: bool
+) -> str:
+    """The edge half of the refusal, naming the remedy that would bound ``rungs``.
+
+    Its own sentence after the window half when both bounds are missing, so a
+    document lacking both is told both at once.
+    """
+    if an_edge_would_bound:
+        remedy = (
+            "A live table cannot be measured, so the binding must declare "
+            "`surface_forms.form_edge:` (`0` when no form has punctuation at "
+            "either end), or the rung must cap the widening with `max_edge:`"
+        )
+    else:
+        remedy = (
+            "An edge in `surface_forms.form_edge:` is measured beside default "
+            "tokens under the source's fold, and this rung does not trust one "
+            "-- a `tokenizer:` or `normalizer:` of its own is what stops the "
+            "shipped scan trusting it -- so cap the widening with `max_edge:`"
+        )
+    lead = f"binding {binding!r} is read by {rungs}, which" if first else f"{rungs} also"
+    return (
+        f"{lead} widens a probe over the punctuation beside it unless "
+        f"something bounds how far. {remedy} -- without a bound, one token "
+        f"between two runs of r punctuation characters costs (r + 1)**2 - 1 "
+        f"reads, each one a round trip"
     )
 
 

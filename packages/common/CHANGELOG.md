@@ -2105,6 +2105,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same classmethod on its own class: the answer is not inherited, because a
   subclass's factory may read the spec differently, so a subclass that wants
   to be asked defines it and delegates to `super()`.
+  `ScanningSignal.edge_bounded(spec, form_edge)` is the same question about
+  the second bound, how far a probe widens over punctuation, published as
+  `edge_bounded` on the same terms beside a third class fact,
+  `bounded_by_form_edge` (true on the two scan twins only). Each answer reads
+  its cap first (`max_window`, `max_edge`), so a capped spec builds no
+  tokenizer to answer.
 
 - **`SourceDescription.form_edge: int | None`, with no default**, for the
   reason `declares` has none. How many punctuation characters the widest edge

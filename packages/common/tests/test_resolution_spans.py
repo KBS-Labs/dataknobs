@@ -1941,6 +1941,71 @@ async def test_window_bounded_answers_what_the_built_rung_does(
     assert answer is not probed_every_window
 
 
+#: One token between two six-character runs: the window bound has nothing to
+#: cut, so the probes count only how far each one widens over punctuation --
+#: ``(6 + 1) ** 2`` when nothing bounds it.
+_RULED = "======word======"
+_EVERY_EXTENSION = 7 * 7
+
+
+@pytest.mark.usefixtures("registered_names")
+@pytest.mark.parametrize(
+    "spec", [*_SPECS, {"max_edge": 2}, {"tokenizer": _same_tokens, "max_edge": 0}], ids=_spec_id
+)
+@pytest.mark.parametrize("source_fold", [None, _squash], ids=["measured", "unmeasured"])
+async def test_edge_bounded_answers_what_the_built_rung_does(
+    spec: dict[str, Any], source_fold: Callable[[str], str] | None
+) -> None:
+    """``edge_bounded``'s answer, checked against the probes a built rung spends.
+
+    The window parity test's method for the second bound. A source whose fold
+    merges token boundaries declares no edge, so it reports ``None``; the
+    other reports ``0``. Bounded means fewer probes than every extension.
+    """
+    sync_source = CountingEntitySource(RETRIEVERS, normalizer=source_fold)
+    async_source = AsyncCountingEntitySource(RETRIEVERS, normalizer=source_fold)
+    edge = sync_source.describe().form_edge
+    assert (edge is None) == (source_fold is not None)
+
+    signal_backends.create("scan", {"entities": sync_source, **spec}).candidates(_RULED, k=5)
+    await async_signal_backends.create("scan", {"entities": async_source, **spec}).candidates(
+        _RULED, k=5
+    )
+    assert sync_source.probes == async_source.probes
+    widened_over_every_character = sync_source.probes == _EVERY_EXTENSION
+
+    answer = ScanningSignal.edge_bounded(spec, edge)
+    assert AsyncScanningSignal.edge_bounded(spec, edge) is answer
+    assert signal_backends.get_metadata("scan")["edge_bounded"](spec, edge) is answer
+    assert answer is not widened_over_every_character
+
+
+def test_edge_bounded_builds_no_tokenizer_when_the_spec_caps_its_edge() -> None:
+    """``max_edge`` settles the answer, as ``max_window`` settles the window's."""
+    builds: list[Mapping[str, Any]] = []
+
+    def counting(config: Mapping[str, Any]) -> Any:
+        builds.append(config)
+        return _same_tokens
+
+    TOKENIZERS.register("counting", counting)
+    try:
+        for edge in (None, 0):
+            assert ScanningSignal.edge_bounded({"tokenizer": "counting", "max_edge": 0}, edge)
+        assert builds == []
+        assert not ScanningSignal.edge_bounded({"tokenizer": "counting"}, 0)
+        assert len(builds) == 1
+    finally:
+        TOKENIZERS.unregister("counting")
+
+
+def test_edge_bounded_refuses_a_cap_of_the_wrong_kind() -> None:
+    with pytest.raises(ValidationError, match="max_edge"):
+        ScanningSignal.edge_bounded({"max_edge": "1"}, 0)
+    with pytest.raises(ValidationError, match="max_edge"):
+        AsyncScanningSignal.edge_bounded({"max_edge": -1}, 0)
+
+
 def test_window_bounded_builds_no_tokenizer_when_the_spec_caps_its_window() -> None:
     """A ``max_window`` settles the answer, so a tokenizer factory is not run to reach it.
 
@@ -2039,3 +2104,26 @@ def test_only_a_class_that_answers_for_itself_publishes_window_bounded() -> None
 
     assert declared_signal_metadata(Answers, {})["window_bounded"]({"window": 3}, None) is True
     assert declared_signal_metadata(ScanningSignal, {})["window_bounded"]({}, 4) is True
+
+
+def test_only_a_class_that_answers_for_itself_publishes_edge_bounded() -> None:
+    """The edge answer follows the window answer's rule: the fact inherits, the answer does not."""
+
+    class FixedTokens(AsyncScanningSignal):
+        """Registered by a factory that passes a tokenizer the spec never names."""
+
+    class Answers(AsyncScanningSignal):
+        @classmethod
+        def edge_bounded(cls, spec: Mapping[str, Any], form_edge: int | None) -> bool:
+            return spec.get("edge") is not None
+
+    inherited = declared_signal_metadata(FixedTokens, {})
+    assert "edge_bounded" not in inherited
+    assert inherited["bounded_by_form_edge"] is True
+
+    assert declared_signal_metadata(Answers, {})["edge_bounded"]({"edge": 1}, None) is True
+    assert declared_signal_metadata(ScanningSignal, {})["edge_bounded"]({}, 0) is True
+    for lexical in (LexicalSignal, AsyncLexicalSignal):
+        metadata = declared_signal_metadata(lexical, {})
+        assert metadata["bounded_by_form_edge"] is False, "a lexical rung never widens over an edge"
+        assert "edge_bounded" not in metadata

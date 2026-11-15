@@ -475,6 +475,35 @@ def _window_bounded(spec: Mapping[str, Any], longest_form_tokens: int | None) ->
     return _source_measures_probes(normalizer, tokenizer) and longest_form_tokens is not None
 
 
+def _edge_bounded(spec: Mapping[str, Any], form_edge: int | None) -> bool:
+    """Whether a scan built from ``spec`` bounds how far it widens over punctuation.
+
+    :func:`_edge_bound`'s decision asked of a configuration, as
+    :func:`_window_bounded` asks :func:`_window_bound`'s: for a door that
+    refuses before anything is built, holding only the spec and the
+    ``form_edge`` the binding declares. Bounded when the spec sets
+    ``max_edge``, or when the rung would trust the source's edge and the source
+    has one.
+
+    ``max_edge`` is read first and settles the answer, so a spec setting it
+    builds no tokenizer here. Over a binding that reaches for data, a rung
+    with its own tokenizer must set it to load, so every document that loads
+    takes that path. Otherwise ``normalizer`` and ``tokenizer`` are read
+    through the factories' checks, and :func:`_source_measures_probes` is the
+    rule both this answer and the rung consult.
+
+    Raises:
+        ValidationError: For a ``max_edge`` that is not a whole number of at
+            least zero; and, when no ``max_edge`` is set, for a ``normalizer``
+            that is not callable or a ``tokenizer`` the registry cannot build.
+    """
+    if _checked_max_edge(spec.get("max_edge")) is not None:
+        return True
+    normalizer = _checked_callable(spec.get("normalizer"), "normalizer")
+    tokenizer = tokenizer_from_config(spec.get("tokenizer"))
+    return _source_measures_probes(normalizer, tokenizer) and form_edge is not None
+
+
 def _checked_count(value: object, name: str, at_least: int, consequence: str) -> int | None:
     """``value`` as given, when it is ``None`` or a whole number of at least ``at_least``.
 
@@ -1210,6 +1239,22 @@ class DeclaredSignal:
     #: blocks a composition that works.
     bounded_by_longest_form = False
 
+    #: Whether this rung widens its probes over punctuation, as far as the
+    #: vocabulary's widest punctuated edge -- **overridable**, and the third
+    #: fact a composition can be refused against before anything is built.
+    #:
+    #: A rung setting this True reads
+    #: :attr:`~dataknobs_common.ontology.SourceDescription.form_edge` to learn
+    #: how far a probe may extend over the punctuation beside its tokens. A
+    #: source answering ``None`` leaves the whole run, and the run is in the
+    #: caller's text: one token between two runs of *r* punctuation characters
+    #: is ``(r + 1) ** 2 - 1`` probes. As for :attr:`bounded_by_longest_form`,
+    #: what that costs depends on the source, so what this enables is a door's
+    #: refusal rather than a rule here.
+    #:
+    #: The default is False, for the same reason as the fact above.
+    bounded_by_form_edge = False
+
     #: What kind of number this rung's score is -- **overridable**. The
     #: default marks it as carrying none, which is the truth for a rung whose
     #: hits carry no
@@ -1498,6 +1543,7 @@ class ScanningSignal(DeclaredSignal):
     key = "scan"
     reads_surface_forms = True
     bounded_by_longest_form = True
+    bounded_by_form_edge = True
 
     def __init__(
         self,
@@ -1575,6 +1621,27 @@ class ScanningSignal(DeclaredSignal):
             ValidationError: For a spec the factory would refuse.
         """
         return _window_bounded(spec, longest_form_tokens)
+
+    @classmethod
+    def edge_bounded(cls, spec: Mapping[str, Any], form_edge: int | None) -> bool:
+        """Whether a rung built from ``spec`` bounds how far it widens over punctuation.
+
+        :meth:`window_bounded`'s sibling for the second bound: a source
+        reporting ``form_edge`` (``None`` for one that declares none) and a
+        rung spec as a document writes it. True when the spec sets
+        ``max_edge``, or when it names no ``normalizer`` and no tokenizer but
+        the default and the source has an edge -- the same rule the rung
+        applies to itself when it runs.
+
+        Published under ``edge_bounded`` in a rung's metadata, on the same
+        terms as :meth:`window_bounded`: only from a class whose own body
+        defines it. A rung declaring ``bounded_by_form_edge`` that publishes
+        none is treated as bounded exactly when the source declares an edge.
+
+        Raises:
+            ValidationError: For a spec the factory would refuse.
+        """
+        return _edge_bounded(spec, form_edge)
 
     def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
@@ -1866,6 +1933,22 @@ class AsyncDeclaredSignal:
     #: blocks a composition that works.
     bounded_by_longest_form = False
 
+    #: Whether this rung widens its probes over punctuation, as far as the
+    #: vocabulary's widest punctuated edge -- **overridable**, and the third
+    #: fact a composition can be refused against before anything is built.
+    #:
+    #: A rung setting this True reads
+    #: :attr:`~dataknobs_common.ontology.SourceDescription.form_edge` to learn
+    #: how far a probe may extend over the punctuation beside its tokens. A
+    #: source answering ``None`` leaves the whole run, and the run is in the
+    #: caller's text: one token between two runs of *r* punctuation characters
+    #: is ``(r + 1) ** 2 - 1`` probes. As for :attr:`bounded_by_longest_form`,
+    #: what that costs depends on the source, so what this enables is a door's
+    #: refusal rather than a rule here.
+    #:
+    #: The default is False, for the same reason as the fact above.
+    bounded_by_form_edge = False
+
     #: What kind of number this rung's score is -- **overridable**. The
     #: default marks it as carrying none, which is the truth for a rung whose
     #: hits carry no
@@ -2008,6 +2091,7 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
     key = "scan"
     reads_surface_forms = True
     bounded_by_longest_form = True
+    bounded_by_form_edge = True
 
     def __init__(
         self,
@@ -2044,6 +2128,15 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
             ValidationError: For a spec the factory would refuse.
         """
         return _window_bounded(spec, longest_form_tokens)
+
+    @classmethod
+    def edge_bounded(cls, spec: Mapping[str, Any], form_edge: int | None) -> bool:
+        """:meth:`ScanningSignal.edge_bounded`, answered identically.
+
+        Raises:
+            ValidationError: For a spec the factory would refuse.
+        """
+        return _edge_bounded(spec, form_edge)
 
     async def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []

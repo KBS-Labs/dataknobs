@@ -175,9 +175,11 @@ class SurfaceFormLookup:
             in this table carries -- one for ``(beagle)`` or ``C.D.C.`` --
             ``0`` where no form has punctuation at either end, or None where
             the binding declares nothing. Declared for ``longest_form_tokens``'s
-            reason. Unlike that key, its absence is not refused: a scan told
-            nothing extends a window over every run of punctuation beside it,
-            which costs lookups and loses no answer
+            reason, and refused alike: a scan told nothing extends a window
+            over every run of punctuation beside it, which loses no answer but
+            costs a round trip per extension, and the run is the caller's
+            text -- so a declared scan is refused at load over a binding that
+            declares none, unless the rung sets ``max_edge``
     """
 
     table: str

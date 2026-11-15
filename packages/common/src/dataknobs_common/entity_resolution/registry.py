@@ -163,7 +163,8 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
 
     ``bounded_by_longest_form`` is here for the same reason and answers a
     different door's question: whether this rung's cost depends on a number
-    the source may not be able to supply. Both are derived rather than
+    the source may not be able to supply, and ``bounded_by_form_edge`` asks
+    it about the second such number. All three are derived rather than
     restated, because two spellings of one fact drift and the drift is
     silent: a rung marked here and not on the class refuses nothing, and a
     rung marked on the class and not here is not refused early.
@@ -199,12 +200,20 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
     gets no entry, so its metadata is what it was, and a door reading the
     key falls back to *bounded exactly when the source declares a count*.
 
-    **Unlike the two facts, it is not inherited.** The answer reads a spec
+    ``edge_bounded``, ``(spec, form_edge) -> bool``, is the same question about
+    the second bound, beside the third fact, ``bounded_by_form_edge``: whether
+    the rung widens its probes over punctuation as far as the source's
+    ``form_edge`` allows -- see
+    :meth:`~dataknobs_common.entity_resolution.ScanningSignal.edge_bounded`.
+    A rung with the fact and no answer falls back to *bounded exactly when the
+    source declares an edge*.
+
+    **Unlike the facts, the answers are not inherited.** The answer reads a spec
     the way the class's own factory does, and a subclass is usually
     registered with a factory of its own -- one that fixes a tokenizer in
     code, say, which no spec names -- so an inherited answer could accept a
     scan that enumerates every window. Only a class whose own body defines
-    ``window_bounded`` publishes it; a subclass that reads its spec as its
+    ``window_bounded`` or ``edge_bounded`` publishes it; a subclass that reads its spec as its
     parent's factory does says so by defining it and delegating to
     ``super()``.
     Signal metadata is read through ``get_metadata`` and never serialised,
@@ -219,16 +228,19 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
 
     Returns:
         A new dict: ``base``, plus each fact read off ``rung``, plus
-        ``window_bounded`` where ``rung``'s own body defines it.
+        ``window_bounded`` and ``edge_bounded`` where ``rung``'s own body
+        defines them.
     """
     metadata = dict(
         base,
         reads_surface_forms=getattr(rung, "reads_surface_forms", False),
         bounded_by_longest_form=getattr(rung, "bounded_by_longest_form", False),
+        bounded_by_form_edge=getattr(rung, "bounded_by_form_edge", False),
     )
-    window_bounded = getattr(rung, "window_bounded", None)
-    if "window_bounded" in vars(rung) and callable(window_bounded):
-        metadata["window_bounded"] = window_bounded
+    for question in ("window_bounded", "edge_bounded"):
+        answer = getattr(rung, question, None)
+        if question in vars(rung) and callable(answer):
+            metadata[question] = answer
     return metadata
 
 
@@ -344,6 +356,7 @@ SEMANTIC_ASYNC_MARK_METADATA = {
     "requires_install": "pip install dataknobs-data",
     "reads_surface_forms": False,
     "bounded_by_longest_form": False,
+    "bounded_by_form_edge": False,
 }
 async_signal_backends.declare_unavailable(
     "semantic",

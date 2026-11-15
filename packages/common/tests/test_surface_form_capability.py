@@ -378,6 +378,7 @@ class _ConsumerRung:
     key = "consumer"
     reads_surface_forms = True
     bounded_by_longest_form = True
+    bounded_by_form_edge = True
 
 
 def test_a_rung_that_declares_nothing_is_read_as_declaring_nothing() -> None:
@@ -393,6 +394,7 @@ def test_a_rung_that_declares_nothing_is_read_as_declaring_nothing() -> None:
         "flavour": "sync",
         "reads_surface_forms": False,
         "bounded_by_longest_form": False,
+        "bounded_by_form_edge": False,
     }
 
 
@@ -408,6 +410,7 @@ def test_a_consumers_rung_declares_on_the_class_and_the_registry_reports_it() ->
 
     assert metadata["reads_surface_forms"] is True
     assert metadata["bounded_by_longest_form"] is True
+    assert metadata["bounded_by_form_edge"] is True
     assert metadata["needs_io"] is True
 
 
