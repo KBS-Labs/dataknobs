@@ -27,9 +27,11 @@ Generate all filepaths under the root path.
 
 **Parameters:**
 - `rootpath` (str): The root path under which to find files
-- `descend` (bool, default=True): True to descend into subdirectories
-- `seen` (Optional[Set[str]], default=None): Set of filepaths and/or directories to ignore
-- `files_only` (bool, default=True): True to generate only paths to files; False to include directories
+- `descend` (bool, default=True): True to yield entries at any depth; False to yield only the root's immediate children
+- `seen` (Optional[Set[str]], default=None): Paths already reported. A path in `seen` is not yielded, though a directory in it is still traversed. The set is updated as the generator runs, so one set can be shared across calls to avoid reporting a path twice
+- `files_only` (bool, default=True): True to generate only paths to files, with or without descending; False to include directories
+
+The root itself is never yielded. A symbolic link to a directory is yielded as a directory but not descended into. A root that does not exist yields nothing, and an unreadable subdirectory is skipped.
 
 **Yields:** Each file path (str)
 
@@ -254,7 +256,7 @@ except Exception as e:
 - Use generators for memory-efficient processing of large files
 - The `fileline_generator` automatically handles gzip files without loading entire file into memory
 - Files are processed line-by-line, suitable for large datasets
-- The `filepath_generator` uses `os.walk()` internally for efficient directory traversal
+- The `filepath_generator` is lazy: it lists one directory at a time as it is consumed
 
 ## Integration with Other Modules
 

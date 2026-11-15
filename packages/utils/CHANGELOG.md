@@ -111,6 +111,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the download runs as root or outside the downloading account's home
     directory, and `nltk.download(..., extract=True)` forces it.
 
+### Fixed
+
+- **`stream_record_paths`, `get_records_df` and `RecordPathBuilder` write each
+  record once.** A record holds its own values plus the shared values (those
+  with no array index) delivered before it ends, and no other record's values.
+  Before, every record repeated all the records before it, so
+  `[{"a":1,"b":[2,3]},{"a":4}]` came out as four growing records rather than
+  two. Records are keyed by array index, so each element of a top-level array
+  is its own record (`[1,2,3]` is three records), and arrays of arrays group
+  correctly. The behaviour lives in `ArrayElementAcceptStrategy`, which now
+  distributes only shared values and treats a negative `max_array_level` as
+  "do not split by array", as documented.
+- **`PathSorter` honours its documented limits.** An undersized group is the
+  one at `close_group`'s `idx` that is dropped, `close_group` then returns
+  `None`, and `add_path` returns `None` when the group it closed was dropped.
+  `add_path` holds up to `max_groups` groups, not one fewer.
+- **`filepath_generator(descend=False)` honours `files_only`**, yielding only
+  files unless `files_only=False`.
+- **`write_lines` sorts before opening its target**, so a list that cannot be
+  sorted raises `TypeError` and leaves an existing file untouched.
+- **`run_command` waits for a child it stops.** When the callback returns a
+  false value, the child is killed and waited for, and its exit status is
+  returned (`-9` on POSIX), not usually `0`. A callback that raises has the
+  child killed and waited for before the exception propagates, so no child is
+  left running or unreaped.
+
 ## v2.0.2 - 2026-08-26
 
 ### Fixed

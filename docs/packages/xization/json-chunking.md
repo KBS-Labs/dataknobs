@@ -109,9 +109,16 @@ class JSONChunker:
 
     def stream_chunks(
         self,
-        file_path: str | Path,
+        source: str | Path | IO[str] | IO[bytes],
+        timeout: int = 10,
+        is_jsonl: bool | None = None,
+        source_file: str | None = None,
     ) -> Iterator[JSONChunk]:
-        """Stream chunks from JSON/JSONL file."""
+        """Stream chunks from a JSON or JSONL source.
+
+        For JSON, one chunk per object element of the record array, produced
+        as each element ends, so memory use does not grow with the document.
+        """
 ```
 
 ### JSONChunk

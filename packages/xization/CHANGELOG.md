@@ -65,6 +65,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`JSONChunker.stream_chunks` yields each element of a JSON array once.** A
+  JSON (not JSONL) source yields one chunk per object element of its record
+  array, in order, with `source_path` naming the element (`.[0]`,
+  `.items[2]`, `.a.items[0]`), and `text` and `metadata` matching what
+  `JSONChunker.chunk` gives that element. Before, an array under a key yielded
+  its elements repeatedly (`{"items":[A,B,C]}` gave A, B, A, B, C), an element
+  containing a nested array appeared twice, and an array beside other keys or
+  nested deeper yielded nothing. Chunks are produced as each element ends, so
+  memory use does not grow with the size of the document. A document with no
+  array still yields no chunks.
+
 - **`get_hyphen_slash_expansions_fn` substitutes where the pattern it is given
   matches.** Only the split read `hyphen_slash_re`; the substitutions used the
   combined hyphen, slash and space pattern whatever was passed, so a

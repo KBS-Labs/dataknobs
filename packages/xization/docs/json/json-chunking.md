@@ -181,15 +181,26 @@ class JSONChunker:
 
     def stream_chunks(
         self,
-        file_path: str | Path,
+        source: str | Path | IO[str] | IO[bytes],
+        timeout: int = 10,
+        is_jsonl: bool | None = None,
+        source_file: str | None = None,
     ) -> Iterator[JSONChunk]:
-        """Stream chunks from a JSON or JSONL file.
+        """Stream chunks from a JSON or JSONL source.
 
-        Supports .json, .jsonl, .ndjson formats.
-        Also supports gzipped files (.json.gz, .jsonl.gz).
+        A path's extension selects JSONL (.jsonl, .ndjson) or JSON, and
+        gzipped files (.json.gz, .jsonl.gz) are decompressed. A file-like
+        source needs ``is_jsonl``. For JSON, each object element of the
+        record array (the outermost array its values pass through) becomes
+        one chunk, with ``source_path`` naming the element (``.[0]``,
+        ``.items[2]``). Chunks are produced as each element ends, so memory
+        use does not grow with the size of the document.
 
         Args:
-            file_path: Path to JSON file
+            source: Path, URL, JSON string, or file-like object
+            timeout: Request timeout for URLs (seconds)
+            is_jsonl: Override JSONL detection; required for file-like sources
+            source_file: Label attached to each chunk as ``source_file``
 
         Yields:
             JSONChunk objects
