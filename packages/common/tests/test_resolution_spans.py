@@ -1864,13 +1864,35 @@ def test_an_unknown_tokenizer_name_is_refused_with_the_registered_names() -> Non
     )
 
 
+@pytest.fixture
+def registered_names() -> Any:
+    """Tokenizer names a document can write, for specs that reach the registry.
+
+    ``same_tokens`` builds :func:`_same_tokens` and takes any parameters, so a
+    ``{name: ..., <param>: ...}`` mapping reaches its factory. ``spans_alias``
+    builds :func:`token_spans` *itself* under another name, which is why a
+    door asking about a registered name has to build it: the trust rule reads
+    the built function's identity, and only the factory knows it.
+    """
+    TOKENIZERS.register("same_tokens", lambda config: _same_tokens)
+    TOKENIZERS.register("spans_alias", lambda config: token_spans)
+    yield
+    TOKENIZERS.unregister("same_tokens")
+    TOKENIZERS.unregister("spans_alias")
+
+
 _SPECS = [
     {},
     {"max_window": 3},
     {"tokenizer": "default"},
+    {"tokenizer": {"name": "default"}},
     {"tokenizer": token_spans},
     {"tokenizer": _same_tokens},
     {"tokenizer": _same_tokens, "max_window": 3},
+    {"tokenizer": "same_tokens"},
+    {"tokenizer": "same_tokens", "max_window": 3},
+    {"tokenizer": {"name": "same_tokens", "label": "unused"}},
+    {"tokenizer": "spans_alias"},
     {"normalizer": str.casefold},
     {"normalizer": str.casefold, "max_window": 3},
 ]
@@ -1886,6 +1908,7 @@ def _spec_id(spec: Mapping[str, Any]) -> str:
     return ",".join(parts) or "empty"
 
 
+@pytest.mark.usefixtures("registered_names")
 @pytest.mark.parametrize("spec", _SPECS, ids=_spec_id)
 @pytest.mark.parametrize("source_fold", [None, _squash], ids=["counted", "uncountable"])
 async def test_window_bounded_answers_what_the_built_rung_does(
@@ -1916,6 +1939,34 @@ async def test_window_bounded_answers_what_the_built_rung_does(
     assert AsyncScanningSignal.window_bounded(spec, count) is answer
     assert signal_backends.get_metadata("scan")["window_bounded"](spec, count) is answer
     assert answer is not probed_every_window
+
+
+def test_window_bounded_builds_no_tokenizer_when_the_spec_caps_its_window() -> None:
+    """A ``max_window`` settles the answer, so a tokenizer factory is not run to reach it.
+
+    The door asks before anything is built, and a tokenizer factory may load a
+    segmenter's dictionary. Over a live binding a rung naming its own tokenizer
+    must set ``max_window`` to load at all, so every document that loads takes
+    this path and pays for no build at the door. Without the cap the answer
+    turns on the built function's identity and the factory runs, once per ask.
+    """
+    builds: list[Mapping[str, Any]] = []
+
+    def counting(config: Mapping[str, Any]) -> Any:
+        builds.append(config)
+        return _same_tokens
+
+    TOKENIZERS.register("counting", counting)
+    try:
+        for longest in (None, 4):
+            assert ScanningSignal.window_bounded(
+                {"tokenizer": "counting", "max_window": 3}, longest
+            )
+        assert builds == []
+        assert not ScanningSignal.window_bounded({"tokenizer": "counting"}, 4)
+        assert len(builds) == 1
+    finally:
+        TOKENIZERS.unregister("counting")
 
 
 _NOT_A_COUNT = [
