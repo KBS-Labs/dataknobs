@@ -728,7 +728,7 @@ def _roots(path: Path) -> tuple[list[tuple[Any, Shape, int]], int]:
     for fence in code_fences(path):
         if fence.lang in YAML_FENCE:
             try:
-                composed = [node for node in yaml.compose_all(fence.body) if node is not None]
+                composed = list(yaml.compose_all(fence.body))
             except yaml.YAMLError:
                 declined += 1
                 continue
