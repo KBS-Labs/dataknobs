@@ -32,6 +32,7 @@ from dataknobs_bots.reasoning.wizard import (
     _is_json_safe,
 )
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_bots.reasoning.wizard_types import partition_wizard_data
 from dataknobs_common.exceptions import SerializationError
 from dataknobs_common.serialization import sanitize_for_json
 from dataknobs_llm.conversations import ConversationManager
@@ -601,7 +602,7 @@ class TestIsJsonSafe:
 
 
 class TestPartitionData:
-    """Tests for WizardReasoning._partition_data()."""
+    """Tests for partition_wizard_data(), with a wizard's ephemeral keys."""
 
     def test_classifies_ephemeral_keys(self) -> None:
         """Known ephemeral keys end up in transient dict."""
@@ -614,7 +615,7 @@ class TestPartitionData:
             "_message": "user input",
         }
 
-        persistent, transient, _saved = reasoning._partition_data(data)
+        persistent, transient, _saved = partition_wizard_data(data, reasoning.ephemeral_keys)
 
         assert "topic" in persistent
         assert "_corpus" in transient
@@ -635,7 +636,7 @@ class TestPartitionData:
             "_target_count": 50,
         }
 
-        persistent, transient, _saved = reasoning._partition_data(data)
+        persistent, transient, _saved = partition_wizard_data(data, reasoning.ephemeral_keys)
 
         assert persistent == data  # All should be persistent
         assert transient == {}
@@ -650,7 +651,7 @@ class TestPartitionData:
             "_corpus_id": "corpus-abc",
         }
 
-        persistent, transient, _saved = reasoning._partition_data(data)
+        persistent, transient, _saved = partition_wizard_data(data, reasoning.ephemeral_keys)
 
         assert "topic" in persistent
         assert "_corpus_id" in persistent
@@ -667,7 +668,7 @@ class TestPartitionData:
         }
 
         with caplog.at_level(logging.WARNING):
-            persistent, transient, saved = reasoning._partition_data(data)
+            persistent, transient, saved = partition_wizard_data(data, reasoning.ephemeral_keys)
 
         assert persistent == {"topic": "Math"}
         assert saved == {"topic": "Math"}
@@ -681,9 +682,9 @@ class TestPartitionData:
         handles = [NonSerializableObject() for _ in range(50)]
 
         with caplog.at_level(logging.WARNING):
-            reasoning._partition_data({"handles": handles})
+            partition_wizard_data({"handles": handles}, reasoning.ephemeral_keys)
 
-        [record] = [r for r in caplog.records if r.name == "dataknobs_bots.reasoning.wizard"]
+        [record] = [r for r in caplog.records if r.name == "dataknobs_bots.reasoning.wizard_types"]
         message = record.getMessage()
         assert "[0] (type=NonSerializableObject)" in message
         assert "[2] (type=NonSerializableObject)" in message
@@ -696,18 +697,22 @@ class TestPartitionData:
         readings = {"t1": [20.5, math.nan, 21.0], "t2": {"min": math.nan, "max": 30.0}}
 
         with caplog.at_level(logging.WARNING):
-            persistent, transient, saved = reasoning._partition_data({"readings": readings})
+            persistent, transient, saved = partition_wizard_data(
+                {"readings": readings}, reasoning.ephemeral_keys
+            )
 
         assert persistent == {"readings": readings}
         assert transient == {}
         assert saved == {"readings": {"t1": [20.5, None, 21.0], "t2": {"min": None, "max": 30.0}}}
-        assert [r for r in caplog.records if r.name == "dataknobs_bots.reasoning.wizard"] == []
+        assert [
+            r for r in caplog.records if r.name == "dataknobs_bots.reasoning.wizard_types"
+        ] == []
 
     def test_saved_is_the_persistent_part_converted(self) -> None:
         reasoning = _make_wizard()
         data = {"status": Status.ACTIVE, "price": Priced(), "_corpus": "x", "fn": len}
 
-        persistent, _transient, saved = reasoning._partition_data(data)
+        persistent, _transient, saved = partition_wizard_data(data, reasoning.ephemeral_keys)
 
         assert saved == sanitize_for_json(persistent)
         assert saved == {"status": "active", "price": {"amount": "9.05"}}
@@ -716,7 +721,7 @@ class TestPartitionData:
         reasoning = _make_wizard()
         data = {"status": Status.ACTIVE, "price": Priced()}
 
-        persistent, transient, _saved = reasoning._partition_data(data)
+        persistent, transient, _saved = partition_wizard_data(data, reasoning.ephemeral_keys)
 
         assert persistent == data
         assert transient == {}
@@ -750,7 +755,7 @@ class TestPartitionData:
             "_corpus_id": "corpus-bio",
         }
 
-        persistent, transient, _saved = reasoning._partition_data(data)
+        persistent, transient, _saved = partition_wizard_data(data, reasoning.ephemeral_keys)
 
         assert "topic" in persistent
         assert "_corpus_id" in persistent
@@ -943,3 +948,161 @@ class TestPartitionData:
 
         assert "Topic: Math" in result
         assert "Error: LLM timeout" in result
+
+
+_CONFIGURED = {
+    "name": "test-wizard",
+    "version": "1.0",
+    "settings": {
+        "ephemeral_keys": ["_dedup_result"],
+        "per_turn_keys": ["_turn_note"],
+    },
+    "stages": [
+        {
+            "name": "welcome",
+            "is_start": True,
+            "prompt": "Hello",
+            "transitions": [{"target": "done"}],
+        },
+        {"name": "done", "is_end": True, "prompt": "Done"},
+    ],
+}
+
+
+def _copy_of_live_data() -> dict[str, Any]:
+    """A working dict as a frame or a snapshot copies it mid-turn."""
+    return {
+        "topic": "Math",
+        "_message": "user input",
+        "_intent": "create",
+        "_dedup_result": {"is_duplicate": False},
+        "_turn_note": "this turn only",
+        "record": {"a": 1, "live": NonSerializableObject()},
+        "score": math.nan,
+    }
+
+
+def _state_holding_copies(data: dict[str, Any] | None = None) -> WizardState:
+    from dataknobs_bots.reasoning.observability import create_transition_record
+
+    state = WizardState(current_stage="welcome", data=dict(data or {"topic": "Math"}))
+    state.subflow_stack.append(
+        SubflowContext(
+            parent_stage="welcome",
+            parent_data=_copy_of_live_data(),
+            parent_history=["welcome"],
+            return_stage="welcome",
+            result_mapping={},
+            subflow_network="sub",
+        )
+    )
+    state.transitions.append(
+        create_transition_record(
+            from_stage="welcome",
+            to_stage="done",
+            trigger="user_input",
+            data_snapshot=_copy_of_live_data(),
+        )
+    )
+    return state
+
+
+_KEPT_COPY = {"topic": "Math", "score": None}
+
+
+class TestOnePersistenceRule:
+    """The main data, each subflow frame and each transition snapshot are
+    stored by the same rule, wherever the state is serialized from.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_save_applies_the_rule_to_frames_and_snapshots(
+        self, conversation_manager: ConversationManager
+    ) -> None:
+        """Ephemeral keys stay out, and a live object keeps its key out whole."""
+        loader = WizardConfigLoader()
+        reasoning = WizardReasoning(
+            wizard_fsm=loader.load_from_dict(_CONFIGURED), strict_validation=False
+        )
+        state = _state_holding_copies()
+
+        await reasoning._save_wizard_state(conversation_manager, state)
+
+        stored = json.loads(json.dumps(conversation_manager.metadata, allow_nan=False))
+        fsm_state = stored["wizard"]["fsm_state"]
+        assert fsm_state["subflow_stack"][0]["parent_data"] == _KEPT_COPY
+        assert fsm_state["transitions"][0]["data_snapshot"] == _KEPT_COPY
+
+    @pytest.mark.asyncio
+    async def test_a_popped_frame_restored_from_storage_brings_back_no_ephemeral_key(
+        self, conversation_manager: ConversationManager
+    ) -> None:
+        reasoning = _make_wizard()
+        state = _state_holding_copies()
+
+        await reasoning._save_wizard_state(conversation_manager, state)
+        stored = json.loads(json.dumps(conversation_manager.metadata, allow_nan=False))
+        conversation_manager.metadata["wizard"] = stored["wizard"]
+        restored = reasoning._get_wizard_state(conversation_manager)
+        restored.data.pop("topic")
+        reasoning._subflows.handle_pop(restored)
+
+        assert "_message" not in restored.data
+        assert "_intent" not in restored.data
+        assert restored.data["topic"] == "Math"
+
+    def test_to_dict_is_json_writable(self) -> None:
+        """A live object, a NaN, and an ephemeral key, in the data and in copies."""
+        state = _state_holding_copies(
+            {"topic": "Math", "_message": "hi", "score": math.nan, "live": NonSerializableObject()}
+        )
+
+        payload = json.loads(json.dumps(state.to_dict(), allow_nan=False))
+
+        assert payload["data"] == {"topic": "Math", "score": None}
+        # Without the wizard's settings, only the framework keys are known.
+        expected_copy = {**_KEPT_COPY, "_dedup_result": {"is_duplicate": False}}
+        expected_copy["_turn_note"] = "this turn only"
+        assert payload["subflow_stack"][0]["parent_data"] == expected_copy
+        assert payload["transitions"][0]["data_snapshot"] == expected_copy
+
+    def test_to_dict_survives_a_snapshot_value_that_cannot_be_copied(self) -> None:
+        """A transition snapshot is not deep-copied on its way out."""
+        import threading
+
+        state = _state_holding_copies()
+        assert state.transitions[0].data_snapshot is not None
+        state.transitions[0].data_snapshot["lock"] = threading.Lock()
+
+        payload = json.loads(json.dumps(state.to_dict(), allow_nan=False))
+
+        assert "lock" not in payload["transitions"][0]["data_snapshot"]
+
+    def test_serialize_state_applies_the_wizards_ephemeral_keys(self) -> None:
+        loader = WizardConfigLoader()
+        reasoning = WizardReasoning(
+            wizard_fsm=loader.load_from_dict(_CONFIGURED), strict_validation=False
+        )
+        state = _state_holding_copies(_copy_of_live_data())
+
+        payload = json.loads(json.dumps(reasoning.serialize_state(state), allow_nan=False))
+
+        assert payload["data"] == _KEPT_COPY
+        assert payload["subflow_stack"][0]["parent_data"] == _KEPT_COPY
+        assert payload["transitions"][0]["data_snapshot"] == _KEPT_COPY
+        assert "_message" in state.data, "serializing does not change the state"
+
+    @pytest.mark.asyncio
+    async def test_the_save_stores_what_serialize_state_returns(
+        self, conversation_manager: ConversationManager
+    ) -> None:
+        loader = WizardConfigLoader()
+        reasoning = WizardReasoning(
+            wizard_fsm=loader.load_from_dict(_CONFIGURED), strict_validation=False
+        )
+        state = _state_holding_copies(_copy_of_live_data())
+
+        await reasoning._save_wizard_state(conversation_manager, state)
+
+        stored = conversation_manager.metadata["wizard"]["fsm_state"]
+        assert stored == reasoning.serialize_state(state)

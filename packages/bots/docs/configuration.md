@@ -2811,9 +2811,16 @@ transient, even if not declared in `ephemeral_keys`. Each value is walked once b
 `sanitize_for_json`, and the converted form that walk returns is what is stored, so
 the check and the save cannot disagree. A value holding a live object, a key
 `json.dumps` cannot write, or itself stays transient, with a warning naming what
-was found (`Non-serializable key 'handle' (type=dict) moved to transient: conn
-(type=Connection)`). The check is per top-level key, so one live object anywhere in
-a value keeps that whole key out of storage for the turn.
+was found (`Non-serializable key 'handle' in data (type=dict) kept out of storage:
+conn (type=Connection)`). The check is per top-level key, so one live object anywhere
+in a value keeps that whole key out of storage for the turn.
+
+The same rule, `partition_wizard_data` in `dataknobs_bots.reasoning.wizard_types`,
+stores each subflow frame's saved parent data and each transition's data snapshot,
+which are copies of `data` taken earlier in the conversation. Ephemeral keys are
+left out of them too, so a subflow that returns after a restore does not bring back
+a `_message` or `_intent` from the turn it was pushed. A value kept out of a copy is
+logged at DEBUG, since it was reported when the data holding it was saved.
 
 A value the save converts is persisted in its converted form: a dataclass as a
 dict, an `Enum` as its value, an object whose `to_dict()` returns a dict as that
