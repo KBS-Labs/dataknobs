@@ -123,6 +123,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: How many of a value's problems the transient-routing warning names. The
+#: list grows with the value (one entry per live handle in a list of them)
+#: and is logged on every save, so the rest are counted rather than listed.
+_PROBLEMS_LOGGED = 3
+
 
 #: Placeholder ``wizard_config`` value for the pre-built-FSM construction
 #: path. ``WizardReasoning.__init__`` receives an already-built ``WizardFSM``
@@ -1703,8 +1708,9 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         Keys in ``self._ephemeral_keys`` are routed to transient. Every other
         key's value is walked once by ``sanitize_and_report``. A value the
         walk would drop part of (a live object, a ``to_dict()`` that raises,
-        a value that holds itself) is routed to transient whole, as a safety
-        net, and logged as a warning naming what was found. Any other value
+        a dict key JSON cannot write, a value that holds itself) is routed
+        to transient whole, as a safety net, and logged as a warning naming
+        the first few things found and how many more there were. Any other value
         is persistent, and its converted form is what the save writes: an
         ``Enum`` as its value, an object as its ``to_dict()``, a NaN as
         ``None``.
@@ -1731,11 +1737,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
                 continue
             converted, problems = sanitize_and_report(value)
             if problems:
+                shown = ", ".join(problems[:_PROBLEMS_LOGGED])
+                more = len(problems) - _PROBLEMS_LOGGED
                 logger.warning(
-                    "Non-serializable key '%s' (type=%s) moved to transient: %s",
+                    "Non-serializable key '%s' (type=%s) moved to transient: %s%s",
                     key,
                     type(value).__name__,
-                    ", ".join(problems),
+                    shown,
+                    f" (+{more} more)" if more > 0 else "",
                 )
                 transient[key] = value
             else:

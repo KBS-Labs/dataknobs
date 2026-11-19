@@ -676,6 +676,20 @@ class TestPartitionData:
         assert "conn (type=NonSerializableObject)" in caplog.text
         assert "self (cycle)" in caplog.text
 
+    def test_the_warning_names_a_few_problems_and_counts_the_rest(self, caplog: Any) -> None:
+        reasoning = _make_wizard()
+        handles = [NonSerializableObject() for _ in range(50)]
+
+        with caplog.at_level(logging.WARNING):
+            reasoning._partition_data({"handles": handles})
+
+        [record] = [r for r in caplog.records if r.name == "dataknobs_bots.reasoning.wizard"]
+        message = record.getMessage()
+        assert "[0] (type=NonSerializableObject)" in message
+        assert "[2] (type=NonSerializableObject)" in message
+        assert "[3]" not in message
+        assert message.endswith("(+47 more)")
+
     def test_a_nested_nan_keeps_its_key_persistent(self, caplog: Any) -> None:
         """A sparse record is saved with its other values, the NaN as None."""
         reasoning = _make_wizard()

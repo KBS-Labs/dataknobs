@@ -565,6 +565,11 @@ class _Priced:
         return {"price": 2.5}
 
 
+class _Unpriced:
+    def to_dict(self) -> dict[str, Any]:
+        raise ValueError("no price list loaded")
+
+
 class TestSanitizeAndReport:
     """One walk gives both what ``sanitize_for_json`` returns and what it would report."""
 
@@ -590,10 +595,12 @@ class TestSanitizeAndReport:
             [_Reading("t", math.inf), object()],
         ],
     )
-    def test_agrees_with_the_two_functions_it_joins(self, value: Any) -> None:
+    def test_agrees_with_what_sanitize_for_json_returns_and_raises(self, value: Any) -> None:
         data, dropped = sanitize_and_report(value)
         assert data == sanitize_for_json(value)
-        assert dropped == validate_json_safe(value)
+        with pytest.raises(SerializationError) as caught:
+            sanitize_for_json(value, on_drop="error")
+        assert dropped == caught.value.context["dropped_paths"]
 
     def test_to_dict_is_called_once(self) -> None:
         priced = _Priced()
@@ -601,6 +608,11 @@ class TestSanitizeAndReport:
         assert priced.calls == 1
 
     def test_nothing_is_logged(self, caplog: Any) -> None:
+        """Not even the DEBUG lines sanitize_for_json writes for these."""
         with caplog.at_level(logging.DEBUG, logger="dataknobs_common.serialization"):
-            sanitize_and_report({"fn": len})
-        assert [r for r in caplog.records if r.levelno > logging.DEBUG] == []
+            sanitize_for_json({"n": math.nan, "u": _Unpriced()})
+        assert len(caplog.records) == 3
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_common.serialization"):
+            sanitize_and_report({"n": math.nan, "u": _Unpriced(), "fn": len})
+        assert caplog.records == []
