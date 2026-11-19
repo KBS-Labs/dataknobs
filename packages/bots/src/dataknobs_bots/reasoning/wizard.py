@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from dataknobs_common.copying import copy_structure
 from dataknobs_common.lifecycle import aclose_if_owned
 from dataknobs_common.paths import safe_join_or_raise
-from dataknobs_common.serialization import sanitize_for_json
+from dataknobs_common.serialization import sanitize_for_json, validate_json_safe
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.conversations.storage import ConversationNode, get_node_by_id
@@ -1698,9 +1698,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
     def _partition_data(self, data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         """Partition a flat working dict into persistent and transient parts.
 
-        Keys in ``self._ephemeral_keys`` are routed to transient.  Keys not
-        in the ephemeral set but failing the ``_is_json_safe`` check are
-        also routed to transient as a safety net (and logged as warnings).
+        Keys in ``self._ephemeral_keys`` are routed to transient.  A key
+        not in the ephemeral set whose value the save would not keep whole
+        (``validate_json_safe`` reports something in it, as ``is_json_safe``
+        does) is also routed to transient as a safety net, and logged as a
+        warning naming what was found. So everything persistent is saved
+        whole, and the save has nothing of it to drop.
 
         Args:
             data: Flat working dict containing all wizard state keys.
@@ -1713,11 +1716,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         for key, value in data.items():
             if key in self._ephemeral_keys:
                 transient[key] = value
-            elif not _is_json_safe(value):
+                continue
+            problems = validate_json_safe(value)
+            if problems:
                 logger.warning(
-                    "Non-serializable key '%s' (type=%s) moved to transient",
+                    "Non-serializable key '%s' (type=%s) moved to transient: %s",
                     key,
                     type(value).__name__,
+                    ", ".join(problems),
                 )
                 transient[key] = value
             else:

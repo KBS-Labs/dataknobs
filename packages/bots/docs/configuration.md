@@ -2805,8 +2805,16 @@ Transforms continue writing to the flat `data` dict as before — the partition 
 transparent. At save time, ephemeral keys are separated into `WizardState.transient`
 (available to templates and UI metadata) while only persistent keys reach storage.
 
-As a safety net, any value that fails a JSON-serializability check is automatically
-moved to transient (with a warning log), even if not declared in `ephemeral_keys`.
+As a safety net, any value the save would not keep whole is automatically moved to
+transient, even if not declared in `ephemeral_keys`. The check is
+`validate_json_safe` from `dataknobs_common.serialization`, the check that belongs
+to the `sanitize_for_json` call the save writes through, so the two agree: a live
+object, a NaN or infinite float, a key `json.dumps` cannot write, or a value that
+holds itself stays transient, with a warning naming what was found
+(`Non-serializable key 'score' (type=float) moved to transient: <root> (non-finite
+float nan)`). A value the save converts is persisted in its converted form: a
+dataclass as a dict, an `Enum` as its value, an object whose `to_dict()` returns a
+dict as that dict. After a restore, the key holds that converted form.
 
 **Per-Turn Keys:**
 

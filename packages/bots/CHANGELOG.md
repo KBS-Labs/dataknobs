@@ -193,6 +193,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The wizard persists exactly what its save keeps whole.** A key not
+  declared ephemeral used to be routed by `is_json_safe`, a separate copy of
+  the JSON-safety rules that had drifted from the `sanitize_for_json` call the
+  save writes through. `is_json_safe` now answers with
+  `dataknobs_common.serialization.validate_json_safe`, so the two agree, with
+  these visible effects:
+  - an `Enum` value, an object whose `to_dict()` returns a dict, and a dict
+    with non-`str` keys are now persisted, in the form the save converts them
+    to, where they were kept live for the turn and absent after a restore. A
+    caller comparing the restored value with an `Enum` member now sees its
+    value (`"active"`), not a missing key;
+  - a NaN or infinite float stays live for the turn instead of being saved:
+    JSON cannot write it;
+  - a value that holds itself is moved to transient, where the check raised
+    `RecursionError` and the save failed;
+  - the warning for a key moved to transient names what was found in it
+    (`... moved to transient: <root> (non-finite float nan)`).
+
 - **A config that does not fit its class answers 422 through the API
   handlers.** `DEFAULT_ERROR_POLICY` has a row for `ConfigFieldError`
   (`dataknobs-common`): 422, with message and `detail` disclosed, as its
