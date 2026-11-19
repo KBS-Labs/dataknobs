@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`sanitize_for_json` returns `None` for a value it drops at the top
+  level.** A dropped value is left out of the container holding it, but a
+  top-level value has none, and the function returned its private marker
+  object instead: not JSON, so `json.dumps` of the result raised `TypeError`.
+  This reached `sanitize_for_json(Decimal("1"))`, a bare `object()`, an
+  `Enum` whose value has no rule, and an object whose `to_dict()` raises or
+  returns something other than a dict, under `on_drop="silent"` (the default)
+  and `"warn"`. `on_drop="error"` still raises. The docs no longer say sets,
+  bytes and `datetime` values are handled: they have no rule and are dropped.
+
 - **An ontology document's own top level is read for its shape**, as its rows
   are. `OntologyConfig` is a closed key set, so a misspelt section is refused
   by name with the nearest one (`entites:` is asked about `entities:`) instead

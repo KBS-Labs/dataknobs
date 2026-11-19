@@ -780,9 +780,15 @@ values (functions, asyncio tasks, custom objects).
 
 ### sanitize_for_json()
 
-Recursively traverses a value and drops anything that isn't JSON-serializable
-(dicts, lists, strings, numbers, booleans, None). Handles dataclasses, sets,
-tuples, bytes, datetime, Enum, and objects with `to_dict()`.
+Recursively traverses a value and drops anything that isn't JSON-serializable.
+It keeps `None`, booleans, numbers, strings, dicts and lists; converts tuples
+to lists, dataclasses to dicts (field by field), an `Enum` to its value, and an
+object with a `to_dict()` returning a dict to that dict. Anything else is
+dropped, including sets, bytes and `datetime` values.
+
+A dropped value is left out of the dict, list or dataclass that holds it. A
+value dropped at the top level has no container to be left out of, so
+`sanitize_for_json` returns `None` for it (or raises, with `on_drop="error"`).
 
 ```python
 from dataknobs_common.serialization import sanitize_for_json

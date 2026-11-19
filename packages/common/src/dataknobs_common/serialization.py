@@ -342,6 +342,11 @@ def sanitize_for_json(
     - Object with ``to_dict()`` → call ``to_dict()``
     - Anything else → dropped (behaviour controlled by *on_drop*)
 
+    A dropped value is left out of the ``dict``, list or dataclass that
+    holds it. A value dropped at the top level has no container to be
+    left out of, so the result is ``None`` (unless *on_drop* is
+    ``"error"``, which raises).
+
     Args:
         value: Any Python value to sanitize.
         on_drop: What to do when a non-serializable value is encountered.
@@ -353,7 +358,8 @@ def sanitize_for_json(
         _dropped: Internal — accumulator for ``on_drop="error"`` mode.
 
     Returns:
-        A JSON-safe version of *value*.
+        A JSON-safe version of *value*; ``None`` when *value* itself is
+        dropped.
 
     Raises:
         SerializationError: When *on_drop* is ``"error"`` and at least one
@@ -372,6 +378,11 @@ def sanitize_for_json(
             context={"dropped_paths": _dropped},
         )
 
+    # The walk marks a dropped value with a private sentinel, which its
+    # containers filter out. A dropped top-level value has no container,
+    # so the sentinel must not escape to the caller: it is not JSON.
+    if result is _SENTINEL:
+        return None
     return result
 
 

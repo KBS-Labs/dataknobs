@@ -10,8 +10,10 @@ Validates:
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import Enum, IntEnum
 from typing import Any
 
@@ -212,3 +214,55 @@ class TestEnumHandling:
         paths = validate_json_safe({"x": _ExoticEnum.ODD})
         assert len(paths) == 1
         assert "x" in paths[0]
+
+
+class _RaisingToDict:
+    def to_dict(self) -> dict[str, Any]:
+        raise RuntimeError("cannot describe itself")
+
+
+class _ListToDict:
+    def to_dict(self) -> list[int]:
+        return [1, 2]
+
+
+class TestTopLevelDrop:
+    """A value dropped at the top level still yields a JSON-safe result.
+
+    A dropped child is left out of its container, but a top-level value
+    has no container to be left out of. The result must still be
+    something ``json.dumps`` accepts, so a dropped top-level value is
+    ``None``.
+    """
+
+    @pytest.mark.parametrize("on_drop", ["silent", "warn"])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            Decimal("1"),
+            object(),
+            _ExoticEnum.ODD,
+            _RaisingToDict(),
+            _ListToDict(),
+        ],
+        ids=[
+            "decimal",
+            "object",
+            "enum-with-unrepresentable-value",
+            "to-dict-raises",
+            "to-dict-not-a-dict",
+        ],
+    )
+    def test_dropped_top_level_value_is_none(self, value: Any, on_drop: str) -> None:
+        result = sanitize_for_json(value, on_drop=on_drop)
+        assert result is None
+        assert json.dumps(result) == "null"
+
+    def test_warn_still_names_the_root(self, caplog: Any) -> None:
+        with caplog.at_level(logging.WARNING):
+            sanitize_for_json(Decimal("1"), on_drop="warn")
+        assert "<root>" in caplog.text
+
+    def test_error_mode_still_raises_at_the_root(self) -> None:
+        with pytest.raises(SerializationError, match="<root>"):
+            sanitize_for_json(Decimal("1"), on_drop="error")
