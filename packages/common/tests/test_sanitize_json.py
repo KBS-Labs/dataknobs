@@ -323,3 +323,50 @@ class TestDictKeys:
         paths = validate_json_safe({_ExoticEnum.ODD: 1})
         assert len(paths) == 1
         assert "key type=_ExoticEnum" in paths[0]
+
+
+class TestCycles:
+    """A value that holds itself is dropped where it repeats, not recursed into.
+
+    Only the containers on the current path count: a value reached twice by
+    two different routes is not a cycle, and is carried both times.
+    """
+
+    @staticmethod
+    def _looped() -> dict[str, Any]:
+        state: dict[str, Any] = {"name": "draft", "items": [1]}
+        state["items"].append(state)
+        return state
+
+    @pytest.mark.parametrize("on_drop", ["silent", "warn"])
+    def test_the_repeat_is_dropped(self, on_drop: str) -> None:
+        result = sanitize_for_json(self._looped(), on_drop=on_drop)
+        assert result == {"name": "draft", "items": [1]}
+        json.dumps(result)
+
+    def test_warn_names_the_repeat(self, caplog: Any) -> None:
+        with caplog.at_level(logging.WARNING):
+            sanitize_for_json(self._looped(), on_drop="warn")
+        assert "items[1]" in caplog.text
+        assert "cycle" in caplog.text
+
+    def test_error_mode_raises_on_a_cycle(self) -> None:
+        with pytest.raises(SerializationError) as exc_info:
+            sanitize_for_json(self._looped(), on_drop="error")
+        assert exc_info.value.context["dropped_paths"] == ["items[1] (cycle)"]
+
+    def test_validate_flags_a_cycle(self) -> None:
+        assert validate_json_safe(self._looped()) == ["items[1] (cycle)"]
+
+    def test_a_shared_value_is_not_a_cycle(self) -> None:
+        shared = [1, 2]
+        assert sanitize_for_json({"a": shared, "b": shared}) == {"a": [1, 2], "b": [1, 2]}
+        assert validate_json_safe({"a": shared, "b": shared}) == []
+
+
+class TestOnDropModes:
+    """``on_drop`` names one of three modes; anything else is refused."""
+
+    def test_an_unknown_mode_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="on_drop must be one of"):
+            sanitize_for_json({"a": 1}, on_drop="eror")
