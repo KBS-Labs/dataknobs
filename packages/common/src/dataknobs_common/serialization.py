@@ -397,8 +397,9 @@ class _Walk:
     follows nesting as deep as a plain recursive function would.
 
     What every policy shares lives here: the rules for an ``Enum``, a
-    non-finite float, a JSON scalar, a list or tuple and a dataclass's fields; the path, kept as steps
-    and written out only when something is reported; and the guard against a
+    non-finite float, a JSON scalar, a list or tuple and a dataclass's
+    fields; the path, kept as steps and written out only when something is
+    reported; and the guard against a
     value that holds itself. The guard records the values open on the
     current path, not every value seen, so a value reached by two routes is
     walked both times and only a true cycle is reported.
@@ -547,7 +548,7 @@ class _Sanitize(_Walk):
         return self._drop(path, "cycle")
 
     def _non_finite(self, value: float, path: _Path) -> Any:
-        return self._drop(path, f"non-finite float {value!r}")
+        return self._drop(path, f"non-finite float {float(value)!r}")
 
     def _dict(self, value: Any, path: _Path) -> Any:
         if not isinstance(value, dict):
@@ -557,7 +558,7 @@ class _Sanitize(_Walk):
             for k, v in value.items():
                 key = _json_key(k)
                 if key is _SENTINEL:
-                    self._drop((*path, ("key", k)), f"key type={type(k).__name__}")
+                    self._drop((*path, ("key", k)), _unwritable_key(k))
                     continue
                 yield ("key", key), key, v
 
@@ -684,7 +685,9 @@ class _AsData(_Walk):
 
     def _non_finite(self, value: float, path: _Path) -> Any:
         self._refuse(
-            path, f" is a non-finite float ({value!r}), which JSON cannot write", type="float"
+            path,
+            f" is a non-finite float ({float(value)!r}), which JSON cannot write",
+            type="float",
         )
 
     def _to_dict(self, value: Any, path: _Path) -> Any:
@@ -756,9 +759,10 @@ def sanitize_for_json(value: Any, on_drop: OnDrop = "silent") -> Any:
       reader refuses)
     - ``None``, ``bool``, ``int``, ``float``, ``str`` → pass through
     - ``dict`` → recurse on values; drop entries whose values are not
-      convertible. A key is kept if it is a ``str``, ``int``, ``float``,
-      ``bool`` or ``None`` (the keys ``json.dumps`` accepts); an ``Enum``
-      key becomes its value; an entry with any other key is dropped
+      convertible. A key is kept if it is a ``str``, ``int``, finite
+      ``float``, ``bool`` or ``None`` (the keys ``json.dumps`` accepts); an
+      ``Enum`` key becomes its value; an entry with any other key, a NaN or
+      infinite float among them, is dropped
     - ``list`` / ``tuple`` → recurse on elements; filter out non-convertible items
     - dataclass instance → field-by-field recursive sanitization. This rule
       comes first, so a dataclass's own ``to_dict()`` is not called
@@ -814,13 +818,28 @@ def _json_key(key: Any) -> Any:
 
     ``json.dumps`` writes ``str``, ``int``, ``float``, ``bool`` and ``None``
     keys and raises ``TypeError`` on any other. An ``Enum`` key is read as
-    its value, as an ``Enum`` value is.
+    its value, as an ``Enum`` value is. A NaN or infinite float key is
+    refused too: ``json.dumps`` writes it as ``"NaN"`` only when it may
+    write non-finite floats at all, and two NaN keys are two entries that
+    would be written as one.
     """
     while isinstance(key, Enum):
         key = key.value
+    if isinstance(key, float) and not math.isfinite(key):
+        return _SENTINEL
     if key is None or isinstance(key, (str, int, float, bool)):
         return key
     return _SENTINEL
+
+
+def _unwritable_key(key: Any) -> str:
+    """What is reported for a dict key :func:`_json_key` refused."""
+    value = key
+    while isinstance(value, Enum):
+        value = value.value
+    if isinstance(value, float):
+        return f"non-finite float key {float(value)!r}"
+    return f"key type={type(key).__name__}"
 
 
 def _text_key(key: Any) -> str:

@@ -23,7 +23,8 @@ from typing import Any
 import pytest
 
 from dataknobs_common.exceptions import SerializationError
-from dataknobs_common.serialization import sanitize_for_json, validate_json_safe
+from dataknobs_common.serialization import as_data, sanitize_for_json, validate_json_safe
+from dataknobs_common.testing import requires_package
 
 
 class TestSanitizeForJsonSilent:
@@ -437,6 +438,10 @@ class _Ratio(Enum):
     UNDEFINED = math.nan
 
 
+class _Measure(float):
+    """A float subclass, as a units library or numpy's float64 is."""
+
+
 @dataclass
 class _Reading:
     sensor: str
@@ -492,3 +497,48 @@ class TestNonFiniteFloats:
 
     def test_a_finite_float_is_kept(self) -> None:
         assert sanitize_for_json({"x": -0.0, "y": 1e308}) == {"x": -0.0, "y": 1e308}
+
+    def test_silent_logs_at_debug(self, caplog: Any) -> None:
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_common.serialization"):
+            sanitize_for_json({"x": math.nan})
+        assert "non-finite float nan" in caplog.text
+
+    def test_a_float_subclass_is_judged_by_its_value(self) -> None:
+        assert sanitize_for_json({"x": _Measure(math.inf), "y": _Measure(2.0)}) == {"y": 2.0}
+        assert validate_json_safe([_Measure(math.nan)]) == ["[0] (non-finite float nan)"]
+
+    @requires_package("numpy")
+    def test_a_numpy_float_is_reported_as_a_float(self) -> None:
+        import numpy as np
+
+        assert validate_json_safe({"x": np.float64("inf")}) == ["x (non-finite float inf)"]
+        with pytest.raises(SerializationError, match=r"non-finite float \(inf\)"):
+            as_data(np.float64("inf"))
+
+
+class TestNonFiniteKeys:
+    """A NaN or infinite key is dropped with its entry, as its value would be.
+
+    ``json.dumps`` writes such a key as ``"NaN"``, but refuses it under
+    ``allow_nan=False``; and two NaN keys are two entries, written as one.
+    """
+
+    @pytest.mark.parametrize("key", _NON_FINITE)
+    def test_dropped_with_its_entry(self, key: float) -> None:
+        result = sanitize_for_json({key: 1, "ok": 2})
+        assert result == {"ok": 2}
+        json.dumps(result, allow_nan=False)
+
+    def test_reported_at_its_path(self) -> None:
+        assert validate_json_safe({"a": {math.inf: 1}}) == ["a.inf (non-finite float key inf)"]
+
+    def test_an_enum_key_whose_value_is_nan_is_dropped(self) -> None:
+        assert sanitize_for_json({_Ratio.UNDEFINED: 1, "ok": 2}) == {"ok": 2}
+
+    def test_two_nan_keys_raise_under_error(self) -> None:
+        with pytest.raises(SerializationError) as caught:
+            sanitize_for_json({float("nan"): 1, float("nan"): 2}, on_drop="error")
+        assert caught.value.context["dropped_paths"] == [
+            "nan (non-finite float key nan)",
+            "nan (non-finite float key nan)",
+        ]

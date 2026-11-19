@@ -780,9 +780,9 @@ for JSON serialization. There are two policies over one walk, for two purposes:
 | | `sanitize_for_json` | `as_data` |
 |---|---|---|
 | for | state that may hold live objects (functions, asyncio tasks), saved as far as it can be | a value that must arrive whole, such as a reply made of nested frozen dataclasses |
-| order | `Enum`, non-finite float, primitives, `dict`, list/tuple, dataclass, `to_dict()` | `using`, `Enum`, primitives, `to_dict()`, dataclass, any `Mapping`, list/tuple, set |
+| order | `Enum`, non-finite float, primitives, `dict`, list/tuple, dataclass, `to_dict()` | `using`, `Enum`, non-finite float, primitives, `to_dict()`, dataclass, any `Mapping`, list/tuple, set |
 | a mapping | `dict` only; keys kept as they are | any `Mapping`; keys written as text the way `json.dumps` writes them, two keys written the same refused |
-| NaN, infinity | dropped, reported by `on_drop` | refused |
+| NaN, infinity | dropped, reported by `on_drop`; as a key, its entry dropped | refused; as a key, written as text (`"NaN"`, `"Infinity"`) |
 | a set | dropped | a sorted list |
 | a `to_dict()` that raises | dropped | refused, the original as `__cause__` |
 | no rule | dropped, reported by `on_drop` | refused at once, naming the path |
@@ -805,9 +805,12 @@ A NaN or infinite float is dropped too, and reported as a `non-finite float`
 or `Infinity`, which is not JSON: `JSON.parse` and a Postgres `jsonb` column
 refuse it, though Python's own `json.loads` reads it back.
 
-A dict keeps the keys `json.dumps` can write (`str`, `int`, `float`, `bool`,
-`None`), and an `Enum` key becomes its value. An entry whose key is anything
-else, a tuple for instance, is dropped and reported like any other drop.
+A dict keeps the keys `json.dumps` can write (`str`, `int`, a finite `float`,
+`bool`, `None`), and an `Enum` key becomes its value. An entry whose key is
+anything else, a tuple for instance, is dropped and reported like any other
+drop. So is an entry whose key is a NaN or infinite float
+(`a.inf (non-finite float key inf)`): `json.dumps` refuses that key under
+`allow_nan=False`, and two NaN keys are two entries it would write as one.
 
 A dropped value is left out of the dict, list or dataclass that holds it. A
 value dropped at the top level has no container to be left out of, so
