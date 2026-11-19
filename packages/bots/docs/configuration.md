@@ -2806,15 +2806,22 @@ transparent. At save time, ephemeral keys are separated into `WizardState.transi
 (available to templates and UI metadata) while only persistent keys reach storage.
 
 As a safety net, any value the save would not keep whole is automatically moved to
-transient, even if not declared in `ephemeral_keys`. The check is
-`validate_json_safe` from `dataknobs_common.serialization`, the check that belongs
-to the `sanitize_for_json` call the save writes through, so the two agree: a live
-object, a NaN or infinite float, a key `json.dumps` cannot write, or a value that
-holds itself stays transient, with a warning naming what was found
-(`Non-serializable key 'score' (type=float) moved to transient: <root> (non-finite
-float nan)`). A value the save converts is persisted in its converted form: a
-dataclass as a dict, an `Enum` as its value, an object whose `to_dict()` returns a
-dict as that dict. After a restore, the key holds that converted form.
+transient, even if not declared in `ephemeral_keys`. Each value is walked once by
+`sanitize_and_report` from `dataknobs_common.serialization`, under the rules of
+`sanitize_for_json`, and the converted form that walk returns is what is stored, so
+the check and the save cannot disagree. A value holding a live object, a key
+`json.dumps` cannot write, or itself stays transient, with a warning naming what
+was found (`Non-serializable key 'handle' (type=dict) moved to transient: conn
+(type=Connection)`). The check is per top-level key, so one live object anywhere in
+a value keeps that whole key out of storage for the turn.
+
+A value the save converts is persisted in its converted form: a dataclass as a
+dict, an `Enum` as its value, an object whose `to_dict()` returns a dict as that
+dict, and a NaN or infinite float as `None`, so a sparse record keeps its other
+values and a list keeps every position. After a restore, the key holds that
+converted form. Storage that writes JSON (SQLite, Postgres) also writes every dict
+key as text, so `{1: "produce"}` comes back as `{"1": "produce"}`; the in-memory
+backend keeps the key as it was.
 
 **Per-Turn Keys:**
 

@@ -510,8 +510,8 @@ class _Sanitize(_Walk):
     A dropped value is the private ``_SENTINEL``, which its container leaves
     out, and is reported according to *on_drop*; under ``"error"`` each drop
     is added to *dropped*. Paths are written ``a.b[0]``, with ``<root>`` for
-    the value itself. *quiet* leaves out the
-    DEBUG line for a ``to_dict()`` that raised, for a caller that only asks.
+    the value itself. *quiet* leaves out the DEBUG lines for a ``to_dict()``
+    that raised and for a non-finite float, for a caller that only asks.
     """
 
     def __init__(self, on_drop: str, dropped: list[str], *, quiet: bool = False) -> None:
@@ -548,7 +548,16 @@ class _Sanitize(_Walk):
         return self._drop(path, "cycle")
 
     def _non_finite(self, value: float, path: _Path) -> Any:
-        return self._drop(path, f"non-finite float {float(value)!r}")
+        # Written as null, as ``JSON.stringify`` writes it, rather than
+        # dropped: a drop takes the rest of a record's key with it in a
+        # caller that keeps only what nothing was dropped from, and moves
+        # every later item of a list down one place. Converted, so not
+        # reported, as an Enum is not.
+        if not self._quiet:
+            logger.debug(
+                "Writing non-finite float %r at '%s' as null", float(value), self._label(path)
+            )
+        return None
 
     def _dict(self, value: Any, path: _Path) -> Any:
         if not isinstance(value, dict):
@@ -754,9 +763,11 @@ def sanitize_for_json(value: Any, on_drop: OnDrop = "silent") -> Any:
     - ``Enum`` member → its ``.value`` (recursively sanitized), so
       ``StrEnum`` / ``IntEnum`` collapse to a plain ``str`` / ``int``
       rather than leaking an enum instance into the output
-    - a NaN or infinite ``float`` → dropped, since JSON cannot write it
-      (``json.dumps`` would write ``NaN`` / ``Infinity``, which a strict
-      reader refuses)
+    - a NaN or infinite ``float`` → ``None``, as ``JSON.stringify`` writes
+      it, since JSON has no form for it (``json.dumps`` would write ``NaN``
+      / ``Infinity``, which a strict reader refuses). This is a conversion,
+      not a drop: it is not reported, and a list keeps every position. It
+      is lossy, so NaN, an infinity and ``None`` read back the same
     - ``None``, ``bool``, ``int``, ``float``, ``str`` → pass through
     - ``dict`` → recurse on values; drop entries whose values are not
       convertible. A key is kept if it is a ``str``, ``int``, finite
@@ -859,13 +870,37 @@ def _text_key(key: Any) -> str:
     return str(key)
 
 
+def sanitize_and_report(value: Any) -> tuple[Any, list[str]]:
+    """What :func:`sanitize_for_json` returns, and what it would report, in one walk.
+
+    For a caller that decides by the report what to do with the result —
+    keeping a value only when nothing was dropped from it, say — and would
+    otherwise walk it twice, calling each ``to_dict()`` twice. The rules are
+    those of :func:`sanitize_for_json`; nothing is logged or raised.
+
+    Args:
+        value: Any Python value. It is never modified.
+
+    Returns:
+        ``(data, dropped)``: *value* as :func:`sanitize_for_json` returns it,
+        and each dropped value's path and what was found there, as
+        :func:`validate_json_safe` returns them. An empty *dropped* means
+        *data* is all of *value*.
+    """
+    dropped: list[str] = []
+    result = _Sanitize("error", dropped, quiet=True).walk(value, ())
+    return (None if result is _SENTINEL else result), dropped
+
+
 def validate_json_safe(value: Any) -> list[str]:
     """Return paths of non-serializable values without modifying the input.
 
     The same walk as :func:`sanitize_for_json` with ``on_drop="error"``,
     returning what that would raise for rather than raising: each entry is
     a path and what was found there, as in ``"a.b (type=function)"``. The
-    input is never modified.
+    input is never modified. A value the walk converts (an ``Enum``, a NaN)
+    is not reported. To have the converted value as well, use
+    :func:`sanitize_and_report`, which walks once for both.
 
     Args:
         value: Any Python value to check.
@@ -874,9 +909,7 @@ def validate_json_safe(value: Any) -> list[str]:
         List of key paths to non-serializable values.  An empty list
         means *value* is fully JSON-safe.
     """
-    paths: list[str] = []
-    _Sanitize("error", paths, quiet=True).walk(value, ())
-    return paths
+    return sanitize_and_report(value)[1]
 
 
 def as_data(value: Any, *, using: Using | None = None) -> Any:
@@ -1044,6 +1077,7 @@ _NO_RULE = object()
 __all__ = [
     "Serializable",
     "sanitize_for_json",
+    "sanitize_and_report",
     "validate_json_safe",
     "as_data",
     "fields_data",

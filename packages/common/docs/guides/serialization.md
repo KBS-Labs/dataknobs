@@ -782,7 +782,7 @@ for JSON serialization. There are two policies over one walk, for two purposes:
 | for | state that may hold live objects (functions, asyncio tasks), saved as far as it can be | a value that must arrive whole, such as a reply made of nested frozen dataclasses |
 | order | `Enum`, non-finite float, primitives, `dict`, list/tuple, dataclass, `to_dict()` | `using`, `Enum`, non-finite float, primitives, `to_dict()`, dataclass, any `Mapping`, list/tuple, set |
 | a mapping | `dict` only; keys kept as they are | any `Mapping`; keys written as text the way `json.dumps` writes them, two keys written the same refused |
-| NaN, infinity | dropped, reported by `on_drop`; as a key, its entry dropped | refused; as a key, written as text (`"NaN"`, `"Infinity"`) |
+| NaN, infinity | `None`, not reported; as a key, its entry dropped and reported | refused; as a key, written as text (`"NaN"`, `"Infinity"`) |
 | a set | dropped | a sorted list |
 | a `to_dict()` that raises | dropped | refused, the original as `__cause__` |
 | no rule | dropped, reported by `on_drop` | refused at once, naming the path |
@@ -790,6 +790,7 @@ for JSON serialization. There are two policies over one walk, for two purposes:
 | paths | `notes.tare`, `items[1]`, `<root>` | `value.notes['tare']`, `value.items[1]` |
 
 `validate_json_safe` reports what `sanitize_for_json` would drop, without dropping it.
+`sanitize_and_report` gives both answers from one walk.
 
 ### sanitize_for_json()
 
@@ -800,10 +801,15 @@ object with a `to_dict()` returning a dict to that dict. A dataclass is
 converted field by field even when it defines its own `to_dict()`. Anything
 else is dropped, including sets, bytes and `datetime` values.
 
-A NaN or infinite float is dropped too, and reported as a `non-finite float`
-(`reading.value (non-finite float nan)`). `json.dumps` would write it as `NaN`
-or `Infinity`, which is not JSON: `JSON.parse` and a Postgres `jsonb` column
-refuse it, though Python's own `json.loads` reads it back.
+A NaN or infinite float is written as `None`, as `JSON.stringify` writes it.
+`json.dumps` would write it as `NaN` or `Infinity`, which is not JSON:
+`JSON.parse` and a Postgres `jsonb` column refuse it, though Python's own
+`json.loads` reads it back. Writing `None` keeps the key that holds it, the
+rest of its record and every position in its list, so `[20.5, nan, 21.0]`
+gives `[20.5, None, 21.0]`. It is a conversion rather than a drop, so it is
+not reported, as an `Enum` is not. It is lossy: NaN, an infinity and `None`
+all read back as `None`. A value that must keep the difference belongs with
+`as_data`, which refuses it.
 
 A dict keeps the keys `json.dumps` can write (`str`, `int`, a finite `float`,
 `bool`, `None`), and an `Enum` key becomes its value. An entry whose key is
@@ -874,6 +880,31 @@ if not problems:
 It is the same walk as `sanitize_for_json(value, on_drop="error")`, and each
 entry is what that call's `SerializationError` would list in
 `context["dropped_paths"]`.
+
+### sanitize_and_report()
+
+Both answers from one walk: what `sanitize_for_json` returns, and what it
+would report. For a caller that decides by the report what to do with the
+data, and would otherwise walk the value twice, calling each `to_dict()`
+twice. Nothing is logged or raised.
+
+```python
+from dataknobs_common.serialization import sanitize_and_report
+
+data, dropped = sanitize_and_report({"name": "Alice", "callback": some_function})
+# data == {"name": "Alice"}
+# dropped == ["callback (type=function)"]
+
+if not dropped:
+    store(data)  # all of the value, already converted
+```
+
+**Parameters:**
+- `value` (Any): The value to sanitize. It is never modified.
+
+**Returns:** `tuple[Any, list[str]]`: the value as `sanitize_for_json` returns
+it, and the paths `validate_json_safe` returns. An empty list means the data is
+all of the value.
 
 ### as_data()
 

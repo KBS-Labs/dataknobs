@@ -60,9 +60,13 @@ class Status(Enum):
 
 
 class Priced:
-    """An object that chose its own JSON shape."""
+    """An object that chose its own JSON shape, counting how often it is asked."""
+
+    def __init__(self) -> None:
+        self.calls = 0
 
     def to_dict(self) -> dict[str, Any]:
+        self.calls += 1
         return {"amount": "9.05"}
 
 
@@ -549,11 +553,15 @@ class TestIsJsonSafe:
 
     @pytest.mark.parametrize(
         "value",
-        [math.nan, [math.inf], {"score": -math.inf}, {math.nan: 1}],
-        ids=["nan", "inf-in-list", "-inf-in-dict", "nan-key"],
+        [math.nan, [math.inf], {"score": -math.inf}],
+        ids=["nan", "inf-in-list", "-inf-in-dict"],
     )
-    def test_non_finite_floats_are_not_safe(self, value: Any) -> None:
-        assert not _is_json_safe(value)
+    def test_non_finite_floats_are_safe(self, value: Any) -> None:
+        """The save writes them as None, so it keeps the value whole."""
+        assert _is_json_safe(value)
+
+    def test_a_non_finite_key_is_not_safe(self) -> None:
+        assert not _is_json_safe({math.nan: 1})
 
     def test_unwritable_key_is_not_safe(self) -> None:
         assert not _is_json_safe({(1, 2): "pair"})
@@ -606,7 +614,7 @@ class TestPartitionData:
             "_message": "user input",
         }
 
-        persistent, transient = reasoning._partition_data(data)
+        persistent, transient, _saved = reasoning._partition_data(data)
 
         assert "topic" in persistent
         assert "_corpus" in transient
@@ -627,7 +635,7 @@ class TestPartitionData:
             "_target_count": 50,
         }
 
-        persistent, transient = reasoning._partition_data(data)
+        persistent, transient, _saved = reasoning._partition_data(data)
 
         assert persistent == data  # All should be persistent
         assert transient == {}
@@ -642,7 +650,7 @@ class TestPartitionData:
             "_corpus_id": "corpus-abc",
         }
 
-        persistent, transient = reasoning._partition_data(data)
+        persistent, transient, _saved = reasoning._partition_data(data)
 
         assert "topic" in persistent
         assert "_corpus_id" in persistent
@@ -650,23 +658,51 @@ class TestPartitionData:
         assert "_unknown_live_object" not in persistent
 
     def test_routes_what_the_save_would_drop(self, caplog: Any) -> None:
-        """A NaN or a value that holds itself stays live, with the reason logged."""
+        """A live object or a value that holds itself stays live, with the reason logged."""
         reasoning = _make_wizard()
-        data = {"topic": "Math", "score": math.nan, "loop": _holds_itself()}
+        data = {
+            "topic": "Math",
+            "handle": {"id": 1, "conn": NonSerializableObject()},
+            "loop": _holds_itself(),
+        }
 
         with caplog.at_level(logging.WARNING):
-            persistent, transient = reasoning._partition_data(data)
+            persistent, transient, saved = reasoning._partition_data(data)
 
         assert persistent == {"topic": "Math"}
-        assert set(transient) == {"score", "loop"}
-        assert "non-finite float nan" in caplog.text
+        assert saved == {"topic": "Math"}
+        assert set(transient) == {"handle", "loop"}
+        assert "handle" in caplog.text
+        assert "conn (type=NonSerializableObject)" in caplog.text
         assert "self (cycle)" in caplog.text
+
+    def test_a_nested_nan_keeps_its_key_persistent(self, caplog: Any) -> None:
+        """A sparse record is saved with its other values, the NaN as None."""
+        reasoning = _make_wizard()
+        readings = {"t1": [20.5, math.nan, 21.0], "t2": {"min": math.nan, "max": 30.0}}
+
+        with caplog.at_level(logging.WARNING):
+            persistent, transient, saved = reasoning._partition_data({"readings": readings})
+
+        assert persistent == {"readings": readings}
+        assert transient == {}
+        assert saved == {"readings": {"t1": [20.5, None, 21.0], "t2": {"min": None, "max": 30.0}}}
+        assert [r for r in caplog.records if r.name == "dataknobs_bots.reasoning.wizard"] == []
+
+    def test_saved_is_the_persistent_part_converted(self) -> None:
+        reasoning = _make_wizard()
+        data = {"status": Status.ACTIVE, "price": Priced(), "_corpus": "x", "fn": len}
+
+        persistent, _transient, saved = reasoning._partition_data(data)
+
+        assert saved == sanitize_for_json(persistent)
+        assert saved == {"status": "active", "price": {"amount": "9.05"}}
 
     def test_keeps_what_the_save_converts(self) -> None:
         reasoning = _make_wizard()
         data = {"status": Status.ACTIVE, "price": Priced()}
 
-        persistent, transient = reasoning._partition_data(data)
+        persistent, transient, _saved = reasoning._partition_data(data)
 
         assert persistent == data
         assert transient == {}
@@ -700,7 +736,7 @@ class TestPartitionData:
             "_corpus_id": "corpus-bio",
         }
 
-        persistent, transient = reasoning._partition_data(data)
+        persistent, transient, _saved = reasoning._partition_data(data)
 
         assert "topic" in persistent
         assert "_corpus_id" in persistent
@@ -772,8 +808,8 @@ class TestPartitionData:
     ) -> None:
         """What the partition keeps is saved whole, and nothing it keeps is dropped.
 
-        An Enum is saved as its value. A NaN is kept live, so the save has
-        nothing to drop and logs no drop.
+        An Enum is saved as its value and a NaN as None; the live value stays
+        in memory, persistent, for the rest of the turn.
         """
         reasoning = _make_wizard()
 
@@ -786,10 +822,57 @@ class TestPartitionData:
 
         saved_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
         assert saved_data["status"] == "active"
-        assert "score" not in saved_data
-        assert math.isnan(state.transient["score"])
+        assert saved_data["score"] is None
+        assert math.isnan(state.data["score"])
+        assert "score" not in state.transient
         dropped = [r for r in caplog.records if r.name == "dataknobs_common.serialization"]
         assert dropped == []
+
+    @pytest.mark.asyncio
+    async def test_a_save_calls_to_dict_once_for_storage(
+        self, conversation_manager: ConversationManager
+    ) -> None:
+        """One call for the response metadata, one for what is stored.
+
+        The partition and the save share one walk, so the stored value is
+        not converted twice. The response metadata is built from the state
+        before the artifact syncs and the partition, so it walks on its own.
+        """
+        reasoning = _make_wizard()
+        price = Priced()
+        state = reasoning._get_wizard_state(conversation_manager)
+        state.data["price"] = price
+
+        await reasoning._save_wizard_state(conversation_manager, state)
+
+        assert price.calls == 2
+        saved_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
+        assert saved_data["price"] == {"amount": "9.05"}
+
+    @pytest.mark.asyncio
+    async def test_restored_from_json_storage(
+        self, conversation_manager: ConversationManager
+    ) -> None:
+        """Saved, written as JSON and read back, as SQLite or Postgres storage does.
+
+        The converted forms come back, not the originals: an Enum as its
+        value, a NaN as None, and a non-str key as text, since JSON writes
+        every key as a string. The in-memory backend keeps the key as it was.
+        """
+        reasoning = _make_wizard()
+        state = reasoning._get_wizard_state(conversation_manager)
+        state.data["status"] = Status.ACTIVE
+        state.data["readings"] = [1.0, math.nan, 3.0]
+        state.data["aisles"] = {1: "produce"}
+
+        await reasoning._save_wizard_state(conversation_manager, state)
+        stored = json.loads(json.dumps(conversation_manager.metadata, allow_nan=False))
+        conversation_manager.metadata["wizard"] = stored["wizard"]
+        restored = reasoning._get_wizard_state(conversation_manager)
+
+        assert restored.data["status"] == "active"
+        assert restored.data["readings"] == [1.0, None, 3.0]
+        assert restored.data["aisles"] == {"1": "produce"}
 
     @pytest.mark.asyncio
     async def test_metadata_data_includes_transient_for_ui(

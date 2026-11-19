@@ -5,7 +5,8 @@ Validates:
 - on_drop="warn" logs at WARNING with key path
 - on_drop="error" raises SerializationError listing dropped paths
 - diagnostic paths for nested dicts, lists, and dataclasses
-- a NaN or infinite float is dropped, as JSON cannot write it
+- a NaN or infinite float is written as null, as JSON cannot write it
+- sanitize_and_report converts and reports in one walk
 - validate_json_safe returns paths without modifying input
 """
 
@@ -23,7 +24,12 @@ from typing import Any
 import pytest
 
 from dataknobs_common.exceptions import SerializationError
-from dataknobs_common.serialization import as_data, sanitize_for_json, validate_json_safe
+from dataknobs_common.serialization import (
+    as_data,
+    sanitize_and_report,
+    sanitize_for_json,
+    validate_json_safe,
+)
 from dataknobs_common.testing import requires_package
 
 
@@ -429,6 +435,9 @@ class TestSignatures:
     def test_validate_takes_a_value(self) -> None:
         assert list(inspect.signature(validate_json_safe).parameters) == ["value"]
 
+    def test_sanitize_and_report_takes_a_value(self) -> None:
+        assert list(inspect.signature(sanitize_and_report).parameters) == ["value"]
+
     def test_strict_mode_cannot_be_turned_off_by_an_extra_argument(self) -> None:
         with pytest.raises(TypeError):
             sanitize_for_json(object(), on_drop="error", _dropped=[])  # type: ignore[call-arg]
@@ -452,66 +461,69 @@ _NON_FINITE = [math.nan, math.inf, -math.inf]
 
 
 class TestNonFiniteFloats:
-    """NaN and infinity have no JSON form, so they are dropped and reported.
+    """NaN and infinity are written as ``null``, as ``JSON.stringify`` writes them.
 
     ``json.dumps`` would write them as ``NaN`` / ``Infinity``, which a strict
-    reader (``JSON.parse``, a Postgres ``jsonb`` column) refuses.
+    reader (``JSON.parse``, a Postgres ``jsonb`` column) refuses. Writing
+    ``null`` keeps everything around the value: the key that holds it, the
+    rest of a record, and the position of every later item in a list.
     """
 
     @pytest.mark.parametrize("number", _NON_FINITE)
-    def test_dropped_from_a_dict(self, number: float) -> None:
+    def test_written_as_null_in_a_dict(self, number: float) -> None:
         result = sanitize_for_json({"x": number, "y": 1.5})
-        assert result == {"y": 1.5}
+        assert result == {"x": None, "y": 1.5}
         assert json.loads(json.dumps(result, allow_nan=False)) == result
 
     @pytest.mark.parametrize("number", _NON_FINITE)
-    def test_dropped_from_a_list(self, number: float) -> None:
-        assert sanitize_for_json([1.0, number, 2.0]) == [1.0, 2.0]
+    def test_a_list_keeps_its_positions(self, number: float) -> None:
+        assert sanitize_for_json([1.0, number, 2.0]) == [1.0, None, 2.0]
 
     @pytest.mark.parametrize("number", _NON_FINITE)
-    def test_dropped_at_the_top_level(self, number: float) -> None:
+    def test_written_as_null_at_the_top_level(self, number: float) -> None:
         assert sanitize_for_json(number) is None
 
-    def test_dropped_from_a_dataclass_field(self) -> None:
-        assert sanitize_for_json(_Reading("t1", math.nan)) == {"sensor": "t1"}
+    def test_a_sparse_record_keeps_its_other_values(self) -> None:
+        readings = {"t1": [20.5, math.nan, 21.0], "t2": {"min": math.nan, "max": 30.0}}
+        assert sanitize_for_json(readings) == {
+            "t1": [20.5, None, 21.0],
+            "t2": {"min": None, "max": 30.0},
+        }
 
-    def test_an_enum_whose_value_is_nan_is_dropped(self) -> None:
-        assert sanitize_for_json({"r": _Ratio.UNDEFINED}) == {}
+    def test_a_dataclass_field_is_kept_as_null(self) -> None:
+        assert sanitize_for_json(_Reading("t1", math.nan)) == {"sensor": "t1", "value": None}
 
-    def test_warn_names_the_path(self, caplog: Any) -> None:
+    def test_an_enum_whose_value_is_nan_is_null(self) -> None:
+        assert sanitize_for_json({"r": _Ratio.UNDEFINED}) == {"r": None}
+
+    def test_nothing_is_reported_in_any_mode(self, caplog: Any) -> None:
+        value = {"a": [0.5, math.inf], "b": -math.inf}
         with caplog.at_level(logging.WARNING):
-            sanitize_for_json({"a": [0.5, math.inf]}, on_drop="warn")
-        assert "a[1]" in caplog.text
-        assert "non-finite float inf" in caplog.text
-
-    def test_error_raises_naming_each(self) -> None:
-        with pytest.raises(SerializationError) as caught:
-            sanitize_for_json({"a": math.nan, "b": -math.inf}, on_drop="error")
-        assert caught.value.context["dropped_paths"] == [
-            "a (non-finite float nan)",
-            "b (non-finite float -inf)",
-        ]
-
-    def test_validate_reports_them(self) -> None:
-        assert validate_json_safe({"x": math.inf, "ok": 0.0}) == ["x (non-finite float inf)"]
+            assert sanitize_for_json(value, on_drop="warn") == {"a": [0.5, None], "b": None}
+        assert caplog.records == []
+        assert sanitize_for_json(value, on_drop="error") == {"a": [0.5, None], "b": None}
+        assert validate_json_safe(value) == []
 
     def test_a_finite_float_is_kept(self) -> None:
         assert sanitize_for_json({"x": -0.0, "y": 1e308}) == {"x": -0.0, "y": 1e308}
 
-    def test_silent_logs_at_debug(self, caplog: Any) -> None:
+    def test_logged_at_debug_with_its_path(self, caplog: Any) -> None:
         with caplog.at_level(logging.DEBUG, logger="dataknobs_common.serialization"):
-            sanitize_for_json({"x": math.nan})
-        assert "non-finite float nan" in caplog.text
+            sanitize_for_json({"x": [1.0, math.nan]})
+        assert "x[1]" in caplog.text
+        assert "nan" in caplog.text
 
     def test_a_float_subclass_is_judged_by_its_value(self) -> None:
-        assert sanitize_for_json({"x": _Measure(math.inf), "y": _Measure(2.0)}) == {"y": 2.0}
-        assert validate_json_safe([_Measure(math.nan)]) == ["[0] (non-finite float nan)"]
+        assert sanitize_for_json({"x": _Measure(math.inf), "y": _Measure(2.0)}) == {
+            "x": None,
+            "y": 2.0,
+        }
 
     @requires_package("numpy")
-    def test_a_numpy_float_is_reported_as_a_float(self) -> None:
+    def test_a_numpy_float_is_written_as_null(self) -> None:
         import numpy as np
 
-        assert validate_json_safe({"x": np.float64("inf")}) == ["x (non-finite float inf)"]
+        assert sanitize_for_json({"x": np.float64("inf")}) == {"x": None}
         with pytest.raises(SerializationError, match=r"non-finite float \(inf\)"):
             as_data(np.float64("inf"))
 
@@ -542,3 +554,53 @@ class TestNonFiniteKeys:
             "nan (non-finite float key nan)",
             "nan (non-finite float key nan)",
         ]
+
+
+class _Priced:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        self.calls += 1
+        return {"price": 2.5}
+
+
+class TestSanitizeAndReport:
+    """One walk gives both what ``sanitize_for_json`` returns and what it would report."""
+
+    def test_a_safe_value_is_converted_with_nothing_reported(self) -> None:
+        assert sanitize_and_report({"s": _Ratio.UNDEFINED, "n": [1, math.nan]}) == (
+            {"s": None, "n": [1, None]},
+            [],
+        )
+
+    def test_what_is_dropped_is_left_out_and_reported(self) -> None:
+        data, dropped = sanitize_and_report({"ok": 1, "fn": len, "deep": {"x": object()}})
+        assert data == {"ok": 1, "deep": {}}
+        assert dropped == ["fn (type=builtin_function_or_method)", "deep.x (type=object)"]
+
+    def test_a_dropped_value_at_the_top_is_none(self) -> None:
+        assert sanitize_and_report(object()) == (None, ["<root> (type=object)"])
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"a": 1, "b": [_Ratio.UNDEFINED, Decimal("1.5")]},
+            {(1, 2): "tuple key", "ok": {"x": len}},
+            [_Reading("t", math.inf), object()],
+        ],
+    )
+    def test_agrees_with_the_two_functions_it_joins(self, value: Any) -> None:
+        data, dropped = sanitize_and_report(value)
+        assert data == sanitize_for_json(value)
+        assert dropped == validate_json_safe(value)
+
+    def test_to_dict_is_called_once(self) -> None:
+        priced = _Priced()
+        assert sanitize_and_report({"p": priced}) == ({"p": {"price": 2.5}}, [])
+        assert priced.calls == 1
+
+    def test_nothing_is_logged(self, caplog: Any) -> None:
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_common.serialization"):
+            sanitize_and_report({"fn": len})
+        assert [r for r in caplog.records if r.levelno > logging.DEBUG] == []

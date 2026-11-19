@@ -1063,7 +1063,9 @@ Recursively traverse a value and drop anything not JSON-serializable. Keeps
 dataclasses to dicts, an `Enum` to its value, and an object whose `to_dict()`
 returns a dict to that dict. A dataclass is converted field by field even when
 it defines its own `to_dict()`. Anything else is dropped, including sets, bytes
-and `datetime` values, and a NaN or infinite float, which JSON cannot write. A
+and `datetime` values. A NaN or infinite float, which JSON cannot write, becomes
+`None`, as `JSON.stringify` writes it; that is a conversion and is not
+reported, so a list keeps every position. A
 dict keeps the keys `json.dumps` can write (`str`, `int`, a finite `float`,
 `bool`, `None`), an `Enum` key becomes its value, and an entry with any other
 key, a NaN or infinite one included, is dropped. A container that holds itself
@@ -1120,6 +1122,27 @@ problems = validate_json_safe({"name": "ok", "fn": some_function})
 
 if not problems:
     print("Fully JSON-safe")
+```
+
+#### `sanitize_and_report(value: Any) -> tuple[Any, list[str]]`
+
+What `sanitize_for_json` returns and what it would report, from one walk, for a
+caller that decides by the report what to do with the data. Nothing is logged
+or raised, and the input is not modified.
+
+**Parameters:**
+- `value` (Any): The value to sanitize
+
+**Returns:**
+- `tuple[Any, list[str]]`: the data, as `sanitize_for_json` returns it, and
+  the dropped paths, as `validate_json_safe` returns them
+
+**Example:**
+```python
+from dataknobs_common.serialization import sanitize_and_report
+
+data, dropped = sanitize_and_report({"name": "ok", "fn": some_function})
+# ({"name": "ok"}, ["fn (type=function)"])
 ```
 
 #### `as_data(value: Any, *, using: Using | None = None) -> Any`

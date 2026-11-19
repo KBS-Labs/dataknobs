@@ -1210,11 +1210,11 @@ def is_json_safe(value: Any) -> bool:
 
     The save writes state through ``sanitize_for_json``, so this is that
     function's own check, ``validate_json_safe``, with nothing reported.
-    A value is safe when nothing in it would be dropped: JSON scalars other
-    than a NaN or infinite float, dicts with keys ``json.dumps`` can write,
-    lists, tuples, and the values the save converts (a dataclass field by
-    field, an ``Enum`` to its value, an object whose ``to_dict()`` returns a
-    dict). A value that holds itself is not safe, and is answered rather
+    A value is safe when nothing in it would be dropped: JSON scalars,
+    dicts with keys ``json.dumps`` can write, lists, tuples, and the values
+    the save converts (a dataclass field by field, an ``Enum`` to its value,
+    an object whose ``to_dict()`` returns a dict, a NaN or infinite float to
+    ``None``). A value that holds itself is not safe, and is answered rather
     than recursed into without bound.
 
     Args:
