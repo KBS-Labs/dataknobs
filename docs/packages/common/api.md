@@ -1052,16 +1052,22 @@ if is_deserializable(User):
 
 #### `sanitize_for_json(value: Any, on_drop: str = "silent") -> Any`
 
-Recursively traverse a value and drop anything not JSON-serializable. Handles
-dicts, lists, dataclasses, sets, tuples, bytes, datetime, Enum, and objects
-with `to_dict()`.
+Recursively traverse a value and drop anything not JSON-serializable. Keeps
+`None`, booleans, numbers, strings, dicts and lists; converts tuples to lists,
+dataclasses to dicts, an `Enum` to its value, and an object whose `to_dict()`
+returns a dict to that dict. A dataclass is converted field by field even when
+it defines its own `to_dict()`. Anything else is dropped, including sets, bytes
+and `datetime` values. A dict keeps the keys `json.dumps` can write (`str`,
+`int`, `float`, `bool`, `None`), an `Enum` key becomes its value, and an entry
+with any other key is dropped.
 
 **Parameters:**
 - `value` (Any): The value to sanitize
 - `on_drop` (str): Drop behavior — `"silent"` (DEBUG log, default), `"warn"` (WARNING log with key path), `"error"` (raises `SerializationError` listing all dropped paths)
 
 **Returns:**
-- `Any`: JSON-safe copy with non-serializable values removed
+- `Any`: JSON-safe copy with non-serializable values removed; `None` when
+  `value` itself is dropped
 
 **Raises:**
 - `SerializationError`: When `on_drop="error"` and non-serializable values are found

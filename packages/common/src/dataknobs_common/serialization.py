@@ -336,11 +336,20 @@ def sanitize_for_json(
       ``StrEnum`` / ``IntEnum`` collapse to a plain ``str`` / ``int``
       rather than leaking an enum instance into the output
     - ``None``, ``bool``, ``int``, ``float``, ``str`` → pass through
-    - ``dict`` → recurse on values; drop entries whose values are not convertible
+    - ``dict`` → recurse on values; drop entries whose values are not
+      convertible. A key is kept if it is a ``str``, ``int``, ``float``,
+      ``bool`` or ``None`` (the keys ``json.dumps`` accepts); an ``Enum``
+      key becomes its value; an entry with any other key is dropped
     - ``list`` / ``tuple`` → recurse on elements; filter out non-convertible items
-    - dataclass instance → field-by-field recursive sanitization
-    - Object with ``to_dict()`` → call ``to_dict()``
+    - dataclass instance → field-by-field recursive sanitization. This rule
+      comes first, so a dataclass's own ``to_dict()`` is not called
+    - Object with ``to_dict()`` returning a ``dict`` → that dict, recursively
     - Anything else → dropped (behaviour controlled by *on_drop*)
+
+    A dropped value is left out of the ``dict``, list or dataclass that
+    holds it. A value dropped at the top level has no container to be
+    left out of, so the result is ``None`` (or, with *on_drop* ``"error"``,
+    :class:`SerializationError` is raised).
 
     Args:
         value: Any Python value to sanitize.
@@ -353,7 +362,8 @@ def sanitize_for_json(
         _dropped: Internal — accumulator for ``on_drop="error"`` mode.
 
     Returns:
-        A JSON-safe version of *value*.
+        A JSON-safe version of *value*; ``None`` when *value* itself is
+        dropped.
 
     Raises:
         SerializationError: When *on_drop* is ``"error"`` and at least one
@@ -372,6 +382,11 @@ def sanitize_for_json(
             context={"dropped_paths": _dropped},
         )
 
+    # The walk marks a dropped value with a private sentinel, which its
+    # containers filter out. A dropped top-level value has no container,
+    # so the sentinel must not escape to the caller: it is not JSON.
+    if result is _SENTINEL:
+        return None
     return result
 
 
@@ -393,14 +408,20 @@ def _sanitize_recursive(
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
 
-    # Dicts: recurse on values
+    # Dicts: keys JSON can write, then recurse on values
     if isinstance(value, dict):
         result = {}
         for k, v in value.items():
-            child_path = f"{_path}.{k}" if _path else str(k)
+            key = _json_key(k)
+            if key is _SENTINEL:
+                _record_drop(
+                    _child_path(_path, k), f"key type={type(k).__name__}", on_drop, _dropped
+                )
+                continue
+            child_path = _child_path(_path, key)
             sanitized = _sanitize_recursive(v, on_drop, child_path, _dropped)
             if sanitized is not _SENTINEL:
-                result[k] = sanitized
+                result[key] = sanitized
         return result
 
     # Lists/tuples: recurse on elements, filter non-convertible
@@ -439,17 +460,42 @@ def _sanitize_recursive(
             logger.debug("to_dict() failed for %s, dropping", type(value).__name__)
 
     # Not convertible — handle according to on_drop mode
-    path_label = _path or "<root>"
-    type_name = type(value).__name__
-
-    if on_drop == "warn":
-        logger.warning("Dropping non-serializable '%s' (type=%s)", path_label, type_name)
-    elif on_drop == "error" and _dropped is not None:
-        _dropped.append(f"{path_label} (type={type_name})")
-    else:
-        logger.debug("Dropping non-serializable value of type %s", type_name)
-
+    _record_drop(_path or "<root>", f"type={type(value).__name__}", on_drop, _dropped)
     return _SENTINEL
+
+
+def _child_path(path: str, key: Any) -> str:
+    """The diagnostic path of a dict entry under *path*."""
+    return f"{path}.{key}" if path else str(key)
+
+
+def _json_key(key: Any) -> Any:
+    """Return *key* as a key ``json.dumps`` accepts, or ``_SENTINEL``.
+
+    ``json.dumps`` writes ``str``, ``int``, ``float``, ``bool`` and ``None``
+    keys and raises ``TypeError`` on any other. An ``Enum`` key is read as
+    its value, as an ``Enum`` value is.
+    """
+    while isinstance(key, Enum):
+        key = key.value
+    if key is None or isinstance(key, (str, int, float, bool)):
+        return key
+    return _SENTINEL
+
+
+def _record_drop(
+    path_label: str,
+    what: str,
+    on_drop: str,
+    _dropped: list[str] | None,
+) -> None:
+    """Report one dropped value or entry according to *on_drop*."""
+    if on_drop == "warn":
+        logger.warning("Dropping non-serializable '%s' (%s)", path_label, what)
+    elif on_drop == "error" and _dropped is not None:
+        _dropped.append(f"{path_label} ({what})")
+    else:
+        logger.debug("Dropping non-serializable value at '%s' (%s)", path_label, what)
 
 
 def validate_json_safe(value: Any, _path: str = "") -> list[str]:
@@ -479,8 +525,11 @@ def validate_json_safe(value: Any, _path: str = "") -> list[str]:
 
     if isinstance(value, dict):
         for k, v in value.items():
-            child_path = f"{_path}.{k}" if _path else str(k)
-            paths.extend(validate_json_safe(v, child_path))
+            key = _json_key(k)
+            if key is _SENTINEL:
+                paths.append(f"{_child_path(_path, k)} (key type={type(k).__name__})")
+                continue
+            paths.extend(validate_json_safe(v, _child_path(_path, key)))
         return paths
 
     if isinstance(value, (list, tuple)):
