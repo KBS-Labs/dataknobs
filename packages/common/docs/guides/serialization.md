@@ -783,8 +783,13 @@ values (functions, asyncio tasks, custom objects).
 Recursively traverses a value and drops anything that isn't JSON-serializable.
 It keeps `None`, booleans, numbers, strings, dicts and lists; converts tuples
 to lists, dataclasses to dicts (field by field), an `Enum` to its value, and an
-object with a `to_dict()` returning a dict to that dict. Anything else is
-dropped, including sets, bytes and `datetime` values.
+object with a `to_dict()` returning a dict to that dict. A dataclass is
+converted field by field even when it defines its own `to_dict()`. Anything
+else is dropped, including sets, bytes and `datetime` values.
+
+A dict keeps the keys `json.dumps` can write (`str`, `int`, `float`, `bool`,
+`None`), and an `Enum` key becomes its value. An entry whose key is anything
+else, a tuple for instance, is dropped and reported like any other drop.
 
 A dropped value is left out of the dict, list or dataclass that holds it. A
 value dropped at the top level has no container to be left out of, so
@@ -816,7 +821,8 @@ except SerializationError as e:
 - `value` (Any): The value to sanitize
 - `on_drop` (str): `"silent"` (default), `"warn"`, or `"error"`
 
-**Returns:** A JSON-safe copy of the input with non-serializable values removed.
+**Returns:** A JSON-safe copy of the input with non-serializable values removed;
+`None` when the input itself is dropped.
 
 ### validate_json_safe()
 

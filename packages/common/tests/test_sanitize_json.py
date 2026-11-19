@@ -266,3 +266,60 @@ class TestTopLevelDrop:
     def test_error_mode_still_raises_at_the_root(self) -> None:
         with pytest.raises(SerializationError, match="<root>"):
             sanitize_for_json(Decimal("1"), on_drop="error")
+
+
+class TestDictKeys:
+    """A dict key JSON cannot write is not carried into the result.
+
+    ``json.dumps`` accepts ``str``, ``int``, ``float``, ``bool`` and
+    ``None`` keys. An ``Enum`` key becomes its value, as an ``Enum`` value
+    does. Any other key drops its entry, reported like any other drop, so
+    the result is always something ``json.dumps`` accepts.
+    """
+
+    def test_json_legal_keys_are_kept_as_they_are(self) -> None:
+        data = {"s": 1, 2: "i", 1.5: "f", True: "b", None: "n"}
+        assert sanitize_for_json(data) == data
+
+    def test_enum_key_becomes_its_value(self) -> None:
+        result = sanitize_for_json({_Color.RED: 1, _Level.LOW: 2})
+        assert result == {"red": 1, 1: 2}
+        assert all(type(k) in (str, int) for k in result)
+        json.dumps(result)
+
+    @pytest.mark.parametrize("on_drop", ["silent", "warn"])
+    @pytest.mark.parametrize(
+        "key",
+        [(1, 2), frozenset({"a"}), _ExoticEnum.ODD],
+        ids=["tuple", "frozenset", "enum-with-unrepresentable-value"],
+    )
+    def test_unwritable_key_drops_its_entry(self, key: Any, on_drop: str) -> None:
+        result = sanitize_for_json({key: 1, "ok": 2}, on_drop=on_drop)
+        assert result == {"ok": 2}
+        json.dumps(result)
+
+    def test_unwritable_nested_key_drops_only_its_entry(self) -> None:
+        result = sanitize_for_json({"outer": {(1, 2): 1, "keep": 2}})
+        assert result == {"outer": {"keep": 2}}
+
+    def test_warn_names_the_dropped_key(self, caplog: Any) -> None:
+        with caplog.at_level(logging.WARNING):
+            sanitize_for_json({"outer": {(1, 2): 1}}, on_drop="warn")
+        assert "outer.(1, 2)" in caplog.text
+        assert "key type=tuple" in caplog.text
+
+    def test_error_mode_raises_on_an_unwritable_key(self) -> None:
+        with pytest.raises(SerializationError) as exc_info:
+            sanitize_for_json({"outer": {(1, 2): 1}}, on_drop="error")
+        assert exc_info.value.context["dropped_paths"] == ["outer.(1, 2) (key type=tuple)"]
+
+    def test_validate_flags_an_unwritable_key(self) -> None:
+        assert validate_json_safe({"outer": {(1, 2): 1}}) == ["outer.(1, 2) (key type=tuple)"]
+
+    def test_validate_accepts_an_enum_key(self) -> None:
+        assert validate_json_safe({_Color.RED: 1, _Level.LOW: 2}) == []
+
+    def test_validate_flags_an_enum_key_with_an_unrepresentable_value(self) -> None:
+        paths = validate_json_safe({_ExoticEnum.ODD: 1})
+        assert len(paths) == 1
+        assert "key type=_ExoticEnum" in paths[0]
