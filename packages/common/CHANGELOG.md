@@ -7,23 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Added
-
-- **`as_data` and `fields_data`: values as data, refused rather than dropped.**
-  `as_data(value, *, using=None)` walks a value into JSON-shaped data for a
-  value that must arrive whole, such as a reply made of nested frozen
-  dataclasses. Where `sanitize_for_json` drops what it cannot convert, it
-  raises `SerializationError` naming the path (`value.notes['tare']`, also in
-  `context["path"]`). It uses a dataclass's own `to_dict()` before its fields,
-  carries a set as a sorted list and any `Mapping` as a dict with text keys
-  written as `json.dumps` writes them, and refuses two keys that would be
-  written the same, a NaN or infinite float, and a value that holds itself.
-  `using` is a per-call table of serialisers by type (exported as `Using`),
-  applied at every depth but not again to a serialiser's own result. `fields_data(value,
-  **replaced)` is a dataclass's fields with some given in place of their value,
-  refusing a name that is not a field. Both run on one traversal with
-  `sanitize_for_json` and `validate_json_safe`, each a policy over it.
-
 ### Fixed
 
 - **A value that holds itself no longer crashes `sanitize_for_json` or
@@ -466,6 +449,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.sources` still binds the name, so no existing import breaks.
 
 ### Added
+
+- **`as_data` and `fields_data`: values as data, refused rather than dropped.**
+  `as_data(value, *, using=None)` walks a value into JSON-shaped data for a
+  value that must arrive whole, such as a reply made of nested frozen
+  dataclasses. Where `sanitize_for_json` drops what it cannot convert, it
+  raises `SerializationError` naming the path (`value.notes['tare']`, also in
+  `context["path"]`). It uses a dataclass's own `to_dict()` before its fields,
+  carries a set as a sorted list and any `Mapping` as a dict with text keys
+  written as `json.dumps` writes them, and refuses two keys that would be
+  written the same, a NaN or infinite float, and a value that holds itself.
+  `using` is a per-call table of serialisers by type (exported as `Using`),
+  applied at every depth but not again to a serialiser's own result.
+  `fields_data(value, **replaced)` is a dataclass's fields with some given in
+  place of their value, refusing a name that is not a field. Both run on one traversal with
+  `sanitize_for_json` and `validate_json_safe`, each a policy over it.
 
 - **A source says which state of its vocabulary is answering.**
   `EntitySource.revision()` and `AsyncEntitySource.revision()` (awaitable on
