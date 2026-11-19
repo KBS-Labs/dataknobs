@@ -396,9 +396,10 @@ class _Walk:
     :meth:`walk`, so one level of nesting costs one stack frame and the walk
     follows nesting as deep as a plain recursive function would.
 
-    What every policy shares lives here: the rules for an ``Enum``, a JSON
-    scalar, a list or tuple and a dataclass's fields; the path, kept as steps
-    and written out only when something is reported; and the guard against a
+    What every policy shares lives here: the rules for an ``Enum``, a
+    non-finite float, a JSON scalar, a list or tuple and a dataclass's
+    fields; the path, kept as steps and written out only when something is
+    reported; and the guard against a
     value that holds itself. The guard records the values open on the
     current path, not every value seen, so a value reached by two routes is
     walked both times and only a true cycle is reported.
@@ -461,6 +462,9 @@ class _Walk:
     def _cycle(self, value: Any, path: _Path) -> Any:
         raise NotImplementedError
 
+    def _non_finite(self, value: float, path: _Path) -> Any:
+        raise NotImplementedError
+
     # -- shared rules ------------------------------------------------------
 
     def _enum(self, value: Any, path: _Path) -> Any:
@@ -468,6 +472,13 @@ class _Walk:
         # int / str) becomes a plain int / str rather than the member.
         if isinstance(value, Enum):
             return _Again(value.value)
+        return _NO_RULE
+
+    def _finite(self, value: Any, path: _Path) -> Any:
+        # Before the scalar rule: ``json.dumps`` writes these as ``NaN`` and
+        # ``Infinity``, which are not JSON, and a strict reader refuses them.
+        if isinstance(value, float) and not math.isfinite(value):
+            return self._non_finite(value, path)
         return _NO_RULE
 
     def _scalar(self, value: Any, path: _Path) -> Any:
@@ -497,22 +508,20 @@ class _Sanitize(_Walk):
     """The policy of :func:`sanitize_for_json`: what has no JSON form is dropped.
 
     A dropped value is the private ``_SENTINEL``, which its container leaves
-    out, and is reported according to *on_drop*. Paths are written
-    ``a.b[0]``, with ``<root>`` for the value itself. *quiet* leaves out the
+    out, and is reported according to *on_drop*; under ``"error"`` each drop
+    is added to *dropped*. Paths are written ``a.b[0]``, with ``<root>`` for
+    the value itself. *quiet* leaves out the
     DEBUG line for a ``to_dict()`` that raised, for a caller that only asks.
     """
 
-    def __init__(
-        self, on_drop: str, base: str, dropped: list[str] | None, *, quiet: bool = False
-    ) -> None:
+    def __init__(self, on_drop: str, dropped: list[str], *, quiet: bool = False) -> None:
         super().__init__()
         self._on_drop = on_drop
-        self._base = base
         self._dropped = dropped
         self._quiet = quiet
 
     def _label(self, path: _Path) -> str:
-        text = self._base
+        text = ""
         for kind, part in path:
             if kind == "index":
                 text = f"{text}[{part}]"
@@ -526,7 +535,7 @@ class _Sanitize(_Walk):
         label = self._label(path)
         if self._on_drop == "warn":
             logger.warning("Dropping non-serializable '%s' (%s)", label, what)
-        elif self._on_drop == "error" and self._dropped is not None:
+        elif self._on_drop == "error":
             self._dropped.append(f"{label} ({what})")
         else:
             logger.debug("Dropping non-serializable value at '%s' (%s)", label, what)
@@ -538,6 +547,9 @@ class _Sanitize(_Walk):
     def _cycle(self, value: Any, path: _Path) -> Any:
         return self._drop(path, "cycle")
 
+    def _non_finite(self, value: float, path: _Path) -> Any:
+        return self._drop(path, f"non-finite float {float(value)!r}")
+
     def _dict(self, value: Any, path: _Path) -> Any:
         if not isinstance(value, dict):
             return _NO_RULE
@@ -546,7 +558,7 @@ class _Sanitize(_Walk):
             for k, v in value.items():
                 key = _json_key(k)
                 if key is _SENTINEL:
-                    self._drop((*path, ("key", k)), f"key type={type(k).__name__}")
+                    self._drop((*path, ("key", k)), _unwritable_key(k))
                     continue
                 yield ("key", key), key, v
 
@@ -567,6 +579,7 @@ class _Sanitize(_Walk):
 
     _rules = (
         _Walk._enum,
+        _Walk._finite,
         _Walk._scalar,
         _dict,
         _Walk._sequence,
@@ -670,14 +683,12 @@ class _AsData(_Walk):
                 return base, convert
         return None
 
-    def _finite(self, value: Any, path: _Path) -> Any:
-        # Before the scalar rule: ``json.dumps`` writes these as ``NaN`` and
-        # ``Infinity``, which are not JSON, and a strict reader refuses them.
-        if isinstance(value, float) and not math.isfinite(value):
-            self._refuse(
-                path, f" is a non-finite float ({value!r}), which JSON cannot write", type="float"
-            )
-        return _NO_RULE
+    def _non_finite(self, value: float, path: _Path) -> Any:
+        self._refuse(
+            path,
+            f" is a non-finite float ({float(value)!r}), which JSON cannot write",
+            type="float",
+        )
 
     def _to_dict(self, value: Any, path: _Path) -> Any:
         # Before a dataclass's fields: a value that chose its own shape keeps it.
@@ -719,7 +730,7 @@ class _AsData(_Walk):
     _rules = (
         _from_using,
         _Walk._enum,
-        _finite,
+        _Walk._finite,
         _Walk._scalar,
         _to_dict,
         _Walk._fields,
@@ -729,12 +740,7 @@ class _AsData(_Walk):
     )
 
 
-def sanitize_for_json(
-    value: Any,
-    on_drop: OnDrop = "silent",
-    _path: str = "",
-    _dropped: list[str] | None = None,
-) -> Any:
+def sanitize_for_json(value: Any, on_drop: OnDrop = "silent") -> Any:
     """Recursively ensure a value is JSON-serializable.
 
     Converts known structured types (dataclasses, Serializable objects) to
@@ -748,11 +754,15 @@ def sanitize_for_json(
     - ``Enum`` member → its ``.value`` (recursively sanitized), so
       ``StrEnum`` / ``IntEnum`` collapse to a plain ``str`` / ``int``
       rather than leaking an enum instance into the output
+    - a NaN or infinite ``float`` → dropped, since JSON cannot write it
+      (``json.dumps`` would write ``NaN`` / ``Infinity``, which a strict
+      reader refuses)
     - ``None``, ``bool``, ``int``, ``float``, ``str`` → pass through
     - ``dict`` → recurse on values; drop entries whose values are not
-      convertible. A key is kept if it is a ``str``, ``int``, ``float``,
-      ``bool`` or ``None`` (the keys ``json.dumps`` accepts); an ``Enum``
-      key becomes its value; an entry with any other key is dropped
+      convertible. A key is kept if it is a ``str``, ``int``, finite
+      ``float``, ``bool`` or ``None`` (the keys ``json.dumps`` accepts); an
+      ``Enum`` key becomes its value; an entry with any other key, a NaN or
+      infinite float among them, is dropped
     - ``list`` / ``tuple`` → recurse on elements; filter out non-convertible items
     - dataclass instance → field-by-field recursive sanitization. This rule
       comes first, so a dataclass's own ``to_dict()`` is not called
@@ -773,8 +783,6 @@ def sanitize_for_json(
             ``"warn"`` — log at WARNING with the key path.
             ``"error"`` — collect all dropped paths and raise
             :class:`SerializationError` after traversal.
-        _path: Internal — dot-delimited key path for diagnostics.
-        _dropped: Internal — accumulator for ``on_drop="error"`` mode.
 
     Returns:
         A JSON-safe version of *value*; ``None`` when *value* itself is
@@ -788,17 +796,13 @@ def sanitize_for_json(
     if on_drop not in _ON_DROP_MODES:
         raise ValueError(f"on_drop must be one of 'silent', 'warn', 'error'; got {on_drop!r}")
 
-    # For "error" mode the top-level caller owns the accumulator.
-    is_top_level = _dropped is None and on_drop == "error"
-    if is_top_level:
-        _dropped = []
+    dropped: list[str] = []
+    result = _Sanitize(on_drop, dropped).walk(value, ())
 
-    result = _Sanitize(on_drop, _path, _dropped).walk(value, ())
-
-    if is_top_level and _dropped:
+    if dropped:
         raise SerializationError(
-            f"Non-serializable values at: {', '.join(_dropped)}",
-            context={"dropped_paths": _dropped},
+            f"Non-serializable values at: {', '.join(dropped)}",
+            context={"dropped_paths": dropped},
         )
 
     # The walk marks a dropped value with a private sentinel, which its
@@ -814,13 +818,28 @@ def _json_key(key: Any) -> Any:
 
     ``json.dumps`` writes ``str``, ``int``, ``float``, ``bool`` and ``None``
     keys and raises ``TypeError`` on any other. An ``Enum`` key is read as
-    its value, as an ``Enum`` value is.
+    its value, as an ``Enum`` value is. A NaN or infinite float key is
+    refused too: ``json.dumps`` writes it as ``"NaN"`` only when it may
+    write non-finite floats at all, and two NaN keys are two entries that
+    would be written as one.
     """
     while isinstance(key, Enum):
         key = key.value
+    if isinstance(key, float) and not math.isfinite(key):
+        return _SENTINEL
     if key is None or isinstance(key, (str, int, float, bool)):
         return key
     return _SENTINEL
+
+
+def _unwritable_key(key: Any) -> str:
+    """What is reported for a dict key :func:`_json_key` refused."""
+    value = key
+    while isinstance(value, Enum):
+        value = value.value
+    if isinstance(value, float):
+        return f"non-finite float key {float(value)!r}"
+    return f"key type={type(key).__name__}"
 
 
 def _text_key(key: Any) -> str:
@@ -840,7 +859,7 @@ def _text_key(key: Any) -> str:
     return str(key)
 
 
-def validate_json_safe(value: Any, _path: str = "") -> list[str]:
+def validate_json_safe(value: Any) -> list[str]:
     """Return paths of non-serializable values without modifying the input.
 
     The same walk as :func:`sanitize_for_json` with ``on_drop="error"``,
@@ -850,14 +869,13 @@ def validate_json_safe(value: Any, _path: str = "") -> list[str]:
 
     Args:
         value: Any Python value to check.
-        _path: Internal — dot-delimited key path for diagnostics.
 
     Returns:
         List of key paths to non-serializable values.  An empty list
         means *value* is fully JSON-safe.
     """
     paths: list[str] = []
-    _Sanitize("error", _path, paths, quiet=True).walk(value, ())
+    _Sanitize("error", paths, quiet=True).walk(value, ())
     return paths
 
 
