@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A value that holds itself no longer crashes `sanitize_for_json` or
+  `validate_json_safe`.** A dict, list or dataclass that contained itself
+  raised `RecursionError` in every `on_drop` mode. It is now dropped where it
+  repeats and reported as a `cycle` (`items[1] (cycle)`), like any other drop;
+  a value reached twice by different routes is not a cycle and is kept.
+
+- **`sanitize_for_json` refuses an unknown `on_drop`.** Any value other than
+  `"warn"` or `"error"` was treated as `"silent"`, so a misspelt `"error"`
+  dropped data without saying so. Anything but the three modes now raises
+  `ValueError`, and the parameter is typed `OnDrop`
+  (`Literal["silent", "warn", "error"]`). A caller that passes a variable
+  typed `str` now needs it typed `OnDrop` to pass mypy.
+
 - **`sanitize_for_json` returns `None` for a value it drops at the top
   level.** A dropped value is left out of the container holding it, but a
   top-level value has none, and the function returned its private marker
@@ -436,6 +449,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.sources` still binds the name, so no existing import breaks.
 
 ### Added
+
+- **`as_data` and `fields_data`: values as data, refused rather than dropped.**
+  `as_data(value, *, using=None)` walks a value into JSON-shaped data for a
+  value that must arrive whole, such as a reply made of nested frozen
+  dataclasses. Where `sanitize_for_json` drops what it cannot convert, it
+  raises `SerializationError` naming the path (`value.notes['tare']`, also in
+  `context["path"]`). It uses a dataclass's own `to_dict()` before its fields,
+  carries a set as a sorted list and any `Mapping` as a dict with text keys
+  written as `json.dumps` writes them, and refuses two keys that would be
+  written the same, a NaN or infinite float, and a value that holds itself.
+  `using` is a per-call table of serialisers by type (exported as `Using`),
+  applied at every depth but not again to a serialiser's own result.
+  `fields_data(value, **replaced)` is a dataclass's fields with some given in
+  place of their value, refusing a name that is not a field. Both run on one traversal with
+  `sanitize_for_json` and `validate_json_safe`, each a policy over it.
 
 - **A source says which state of its vocabulary is answering.**
   `EntitySource.revision()` and `AsyncEntitySource.revision()` (awaitable on

@@ -1050,7 +1050,13 @@ if is_deserializable(User):
 
 ### JSON Safety Functions
 
-#### `sanitize_for_json(value: Any, on_drop: str = "silent") -> Any`
+Two policies over one walk: `sanitize_for_json` drops what has no JSON form,
+for state that may hold live objects; `as_data` refuses it, for a value that
+must arrive whole. The
+[serialization guide](https://kbs-labs.github.io/dataknobs/packages/common/serialization/#json-safety-utilities)
+sets them side by side.
+
+#### `sanitize_for_json(value: Any, on_drop: OnDrop = "silent") -> Any`
 
 Recursively traverse a value and drop anything not JSON-serializable. Keeps
 `None`, booleans, numbers, strings, dicts and lists; converts tuples to lists,
@@ -1059,11 +1065,12 @@ returns a dict to that dict. A dataclass is converted field by field even when
 it defines its own `to_dict()`. Anything else is dropped, including sets, bytes
 and `datetime` values. A dict keeps the keys `json.dumps` can write (`str`,
 `int`, `float`, `bool`, `None`), an `Enum` key becomes its value, and an entry
-with any other key is dropped.
+with any other key is dropped. A container that holds itself is dropped where
+it repeats, reported as a `cycle`.
 
 **Parameters:**
 - `value` (Any): The value to sanitize
-- `on_drop` (str): Drop behavior — `"silent"` (DEBUG log, default), `"warn"` (WARNING log with key path), `"error"` (raises `SerializationError` listing all dropped paths)
+- `on_drop` (`OnDrop`, `Literal["silent", "warn", "error"]`): Drop behavior — `"silent"` (DEBUG log, default), `"warn"` (WARNING log with key path), `"error"` (raises `SerializationError` listing all dropped paths)
 
 **Returns:**
 - `Any`: JSON-safe copy with non-serializable values removed; `None` when
@@ -1071,6 +1078,7 @@ with any other key is dropped.
 
 **Raises:**
 - `SerializationError`: When `on_drop="error"` and non-serializable values are found
+- `ValueError`: When `on_drop` is not one of the three modes
 
 **Example:**
 ```python
@@ -1093,6 +1101,8 @@ safe = sanitize_for_json(data, on_drop="error")
 #### `validate_json_safe(value: Any) -> list[str]`
 
 Read-only traversal returning paths to non-serializable values. Does not modify the input.
+The same walk as `sanitize_for_json(value, on_drop="error")`, returning the
+paths that call would raise for.
 
 **Parameters:**
 - `value` (Any): The value to check
@@ -1109,6 +1119,67 @@ problems = validate_json_safe({"name": "ok", "fn": some_function})
 
 if not problems:
     print("Fully JSON-safe")
+```
+
+#### `as_data(value: Any, *, using: Using | None = None) -> Any`
+
+Walk a value into JSON-shaped data, refusing what has no rule rather than
+dropping it. In order: a type in `using` → its serialiser, not applied again to
+the value it returned (exact type first, then the first listed base); an `Enum`
+→ its value; `None`, `bool`, `int`, `str` and a finite `float` → itself (NaN and
+infinity are refused); an object with a callable `to_dict()` → its
+result, walked (before the dataclass rule); a dataclass → its fields in
+declaration order; any `Mapping` → its items with keys written as `json.dumps`
+writes them (`None` as `"null"`; an `Enum` key as its value; a non-scalar key
+with `str()`), two keys written the same refused; a list or tuple →
+a list; a set or frozenset → a list sorted by each item's JSON; anything else →
+refused.
+
+**Parameters:**
+- `value` (Any): The value to walk
+- `using` (`Using`, i.e. `Mapping[type, Callable[[Any], Any]]`): per-call serialisers by type
+
+**Returns:**
+- `Any`: dicts with `str` keys, lists and JSON scalars
+
+**Raises:**
+- `SerializationError`: for a value no rule takes, two keys written the same,
+  a non-finite float, a container that holds itself, a value nested past the
+  recursion limit, or a `to_dict()` or serialiser that raised (the original as
+  `__cause__`). The message and `context["path"]` name the path,
+  as in `value.notes['tare']`.
+
+**Example:**
+```python
+from enum import Enum
+
+from dataknobs_common.serialization import as_data
+
+
+class Status(Enum):
+    ACTIVE = "active"
+
+
+as_data({"tags": frozenset({"b", "a"}), "status": Status.ACTIVE})
+# {"tags": ["a", "b"], "status": "active"}
+```
+
+#### `fields_data(value: Any, /, *, using: Using | None = None, **replaced: Any) -> dict[str, Any]`
+
+A dataclass instance's fields as data, by the rules of `as_data`, with each
+field named in `replaced` given the value passed instead.
+
+**Raises:**
+- `SerializationError`: when `value` is not a dataclass instance, when a name in
+  `replaced` is not a field, or as for `as_data` (paths start at the class name,
+  as in `Order.lines[0]`)
+
+**Example:**
+```python
+from dataknobs_common.serialization import fields_data
+
+fields_data(order, lines={"count": len(order.lines)})
+# {"order_id": "ORD-88", "lines": {"count": 200}, "placed_by": "warehouse-2"}
 ```
 
 ## Metadata Module
