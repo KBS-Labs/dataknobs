@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.imports import resolve_class
-from dataknobs_common.serialization import sanitize_for_json
+from dataknobs_common.serialization import sanitize_for_json, validate_json_safe
 from dataknobs_common.structured_config import StructuredConfig
 
 from .base import TurnHandle
@@ -1206,31 +1206,24 @@ def validate_strategy_names(
 
 
 def is_json_safe(value: Any) -> bool:
-    """Check whether a value is JSON-serializable using isinstance checks.
+    """Whether the wizard's save would keep *value* whole.
 
-    This is a lightweight alternative to ``json.dumps`` — it recurses into
-    dicts, lists, and dataclasses but does not attempt actual serialization.
-    Dataclasses are accepted because ``sanitize_for_json`` converts them to
-    dicts via ``dataclasses.asdict``.
+    The save writes state through ``sanitize_for_json``, so this is that
+    function's own check, ``validate_json_safe``, with nothing reported.
+    A value is safe when nothing in it would be dropped: JSON scalars,
+    dicts with keys ``json.dumps`` can write, lists, tuples, and the values
+    the save converts (a dataclass field by field, an ``Enum`` to its value,
+    an object whose ``to_dict()`` returns a dict, a NaN or infinite float to
+    ``None``). A value that holds itself is not safe, and is answered rather
+    than recursed into without bound.
 
     Args:
         value: Value to check.
 
     Returns:
-        True if the value is composed entirely of JSON-safe types
-        (including dataclasses with JSON-safe fields).
+        True if ``sanitize_for_json`` would drop nothing from *value*.
     """
-    import dataclasses
-
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return True
-    if isinstance(value, dict):
-        return all(isinstance(k, str) and is_json_safe(v) for k, v in value.items())
-    if isinstance(value, (list, tuple)):
-        return all(is_json_safe(item) for item in value)
-    if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return all(is_json_safe(getattr(value, f.name)) for f in dataclasses.fields(value))
-    return False
+    return not validate_json_safe(value)
 
 
 def load_merge_filter(dotted_path: str) -> MergeFilter:

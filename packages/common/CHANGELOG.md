@@ -9,17 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`sanitize_for_json` drops a NaN or infinite float.** It passed them
-  through, and `json.dumps` wrote them as `NaN` / `Infinity`, which is not
-  JSON: `JSON.parse` and a Postgres `jsonb` column refuse the document.
-  `validate_json_safe` called them safe. They are now dropped and reported
-  like any other drop (`x (non-finite float nan)`), under every `on_drop`
-  mode, and `validate_json_safe` reports them. A dict entry whose key is a
-  NaN or infinite float is dropped the same way (`x.nan (non-finite float
-  key nan)`): `json.dumps` refuses that key under `allow_nan=False`, and two
-  NaN keys are two entries it would write as one. A caller that stored such a
-  value through Python's own `json`, which reads `NaN` back, now loses it;
-  under `on_drop="warn"` each one is logged.
+- **`sanitize_for_json` writes a NaN or infinite float as `None`.** It passed
+  them through, and `json.dumps` wrote them as `NaN` / `Infinity`, which is
+  not JSON: `JSON.parse` and a Postgres `jsonb` column refuse the document.
+  They are now written as `null`, as `JSON.stringify` writes them, so the
+  key that holds one, the rest of its record and every position in its list
+  are kept: `[1.0, nan, 3.0]` gives `[1.0, None, 3.0]`. It is a conversion,
+  like an `Enum`'s, so it is not reported in any `on_drop` mode and
+  `validate_json_safe` does not list it. It is lossy: a caller that stored
+  such a value through Python's own `json`, which reads `NaN` back, now reads
+  `None`, the same as for an infinity or a `None`. A dict entry whose key is a
+  NaN or infinite float is dropped and reported (`x.nan (non-finite float key
+  nan)`): `json.dumps` refuses that key under `allow_nan=False`, and two NaN
+  keys are two entries it would write as one.
 
 - **A value that holds itself no longer crashes `sanitize_for_json` or
   `validate_json_safe`.** A dict, list or dataclass that contained itself
@@ -461,6 +463,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.sources` still binds the name, so no existing import breaks.
 
 ### Added
+
+- **`sanitize_and_report`: what `sanitize_for_json` returns and what it would
+  report, in one walk.** It returns `(data, dropped)`, the two answers
+  `sanitize_for_json` and `validate_json_safe` give, for a caller that decides
+  by the report what to do with the data and would otherwise walk the value
+  twice, calling each `to_dict()` twice. Nothing is logged or raised.
 
 - **`as_data` and `fields_data`: values as data, refused rather than dropped.**
   `as_data(value, *, using=None)` walks a value into JSON-shaped data for a

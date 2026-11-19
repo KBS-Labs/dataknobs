@@ -193,6 +193,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A conversation's saved wizard data (`fsm_state.data`) is exactly what
+  its save keeps whole.** A key not declared ephemeral used to be routed by
+  `is_json_safe`, a separate copy of the JSON-safety rules that had drifted
+  from the `sanitize_for_json` call the save writes through. The split now
+  walks each value once with `dataknobs_common.serialization.sanitize_and_report`
+  and stores that walk's converted form, so the check and the save cannot
+  disagree, and a save converts each value once for storage instead of twice.
+  The visible effects:
+  - a plain `Enum` value (not a `str` or `int` subclass, which were already
+    stored as their value), an object whose `to_dict()` returns a dict, and a
+    dict with non-`str` keys are now persisted, in the form the save converts
+    them to, where they were kept live for the turn and absent after a
+    restore. A caller comparing the restored value with an `Enum` member now
+    sees its value (`"active"`), not a missing key. From storage that writes
+    JSON (SQLite, Postgres) an `int` key comes back as text (`"1"`); the
+    in-memory backend keeps it as it was;
+  - a NaN or infinite float is persisted as `None`, and reads back as `None`
+    on every backend. It used to be saved as it was: the in-memory backend,
+    and SQLite through Python's `json`, gave NaN back, and Postgres refused
+    the save. A transform or condition that tests `math.isnan(...)` on a
+    restored value now receives `None`. The response metadata's `data` reads
+    `None` for it too, where it carried the raw float;
+  - a value that holds itself is moved to transient, where the check raised
+    `RecursionError` and the save failed;
+  - the warning for a key moved to transient names what was found in it, the
+    first three things and a count of the rest (`... moved to transient: conn
+    (type=Connection)`).
+
+  This is the save a conversation's turns run, into the `ConversationManager`'s
+  metadata. `advance()` leaves persistence to its caller, and
+  `WizardState.to_dict()`, the serializer `WizardState` offers, applies
+  neither the split nor the conversion. The subflow stack's
+  saved parent data and the transition snapshots are written by their own
+  `sanitize_for_json` calls, not through this split.
+
+- **`is_json_safe` means "the save keeps it whole", not "`json.dumps`
+  accepts it".** It answers with `validate_json_safe`, so a value the save
+  converts (an `Enum`, an object with a `to_dict()`, a NaN) is safe, and a
+  value that holds itself is unsafe rather than a `RecursionError`.
+
 - **A config that does not fit its class answers 422 through the API
   handlers.** `DEFAULT_ERROR_POLICY` has a row for `ConfigFieldError`
   (`dataknobs-common`): 422, with message and `detail` disclosed, as its

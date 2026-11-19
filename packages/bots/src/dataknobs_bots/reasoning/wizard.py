@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from dataknobs_common.copying import copy_structure
 from dataknobs_common.lifecycle import aclose_if_owned
 from dataknobs_common.paths import safe_join_or_raise
-from dataknobs_common.serialization import sanitize_for_json
+from dataknobs_common.serialization import sanitize_and_report, sanitize_for_json
 from dataknobs_common.structured_config import StructuredConfigConsumer
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.conversations.storage import ConversationNode, get_node_by_id
@@ -122,6 +122,11 @@ if TYPE_CHECKING:
     from .wizard_fsm import WizardFSM
 
 logger = logging.getLogger(__name__)
+
+#: How many of a value's problems the transient-routing warning names. The
+#: list grows with the value (one entry per live handle in a list of them)
+#: and is logged on every save, so the rest are counted rather than listed.
+_PROBLEMS_LOGGED = 3
 
 
 #: Placeholder ``wizard_config`` value for the pre-built-FSM construction
@@ -1695,34 +1700,57 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             self._close_conversation_slot(conv_key, state)
         self._conv_state.clear()
 
-    def _partition_data(self, data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    def _partition_data(
+        self, data: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         """Partition a flat working dict into persistent and transient parts.
 
-        Keys in ``self._ephemeral_keys`` are routed to transient.  Keys not
-        in the ephemeral set but failing the ``_is_json_safe`` check are
-        also routed to transient as a safety net (and logged as warnings).
+        Keys in ``self._ephemeral_keys`` are routed to transient. Every other
+        key's value is walked once by ``sanitize_and_report``. A value the
+        walk would drop part of (a live object, a ``to_dict()`` that raises,
+        a dict key JSON cannot write, a value that holds itself) is routed
+        to transient whole, as a safety net, and logged as a warning naming
+        the first few things found and how many more there were. Any other value
+        is persistent, and its converted form is what the save writes: an
+        ``Enum`` as its value, an object as its ``to_dict()``, a NaN as
+        ``None``.
+
+        The check is per top-level key, so one live object anywhere in a
+        value keeps that whole key out of storage for the turn. A NaN does
+        not, being converted rather than dropped, so a sparse record is
+        saved with its other values.
 
         Args:
             data: Flat working dict containing all wizard state keys.
 
         Returns:
-            ``(persistent, transient)`` tuple of dicts.
+            ``(persistent, transient, saved)``: the persistent values as
+            they are, the transient ones, and the persistent ones as the
+            save writes them, with the same keys as *persistent*.
         """
         persistent: dict[str, Any] = {}
         transient: dict[str, Any] = {}
+        saved: dict[str, Any] = {}
         for key, value in data.items():
             if key in self._ephemeral_keys:
                 transient[key] = value
-            elif not _is_json_safe(value):
+                continue
+            converted, problems = sanitize_and_report(value)
+            if problems:
+                shown = ", ".join(problems[:_PROBLEMS_LOGGED])
+                more = len(problems) - _PROBLEMS_LOGGED
                 logger.warning(
-                    "Non-serializable key '%s' (type=%s) moved to transient",
+                    "Non-serializable key '%s' (type=%s) moved to transient: %s%s",
                     key,
                     type(value).__name__,
+                    shown,
+                    f" (+{more} more)" if more > 0 else "",
                 )
                 transient[key] = value
             else:
                 persistent[key] = value
-        return persistent, transient
+                saved[key] = converted
+        return persistent, transient, saved
 
     @property
     def artifact_registry(self) -> Any | None:
@@ -3914,8 +3942,10 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # Forward sync: state.data → artifact fields before serialization
         self._sync_artifact_fields(state)
 
-        # Partition: separate ephemeral/non-serializable keys from persistent
-        state.data, state.transient = self._partition_data(state.data)
+        # Partition: separate ephemeral/non-serializable keys from persistent.
+        # The partition has already walked every persistent value into the
+        # form the save writes, so the save does not walk them again.
+        state.data, state.transient, saved_data = self._partition_data(state.data)
 
         # Which fields get persisted comes from WizardState.to_dict(), not
         # from a second list maintained here. The two had drifted:
@@ -3927,12 +3957,13 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # defaults every key it reads, so a dropped field arrives as False
         # rather than as an error.
         #
-        # Two entries are then re-encoded for JSON safety. `data` and
-        # `transitions` can hold live objects; `sanitize_for_json` drops what
-        # cannot be represented, where to_dict()'s plain `asdict` would keep
-        # it and fail at serialization time.
+        # Two entries are then re-encoded for JSON safety, where to_dict()'s
+        # plain `asdict` would keep a live object and fail at serialization
+        # time. `data` is the partition's converted form. `transitions` can
+        # hold live objects; `sanitize_for_json` drops what cannot be
+        # represented.
         fsm_state = state.to_dict()
-        fsm_state["data"] = sanitize_for_json(state.data, on_drop="warn")
+        fsm_state["data"] = saved_data
         fsm_state["transitions"] = [sanitize_for_json(t, on_drop="warn") for t in state.transitions]
         wizard_meta["fsm_state"] = fsm_state
         # Persist MemoryBank data alongside FSM state

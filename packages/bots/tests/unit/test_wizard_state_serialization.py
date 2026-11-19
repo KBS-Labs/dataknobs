@@ -17,7 +17,10 @@ data (user-collected fields, artifact IDs).
 from __future__ import annotations
 
 import json
+import logging
+import math
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 import pytest
@@ -29,6 +32,8 @@ from dataknobs_bots.reasoning.wizard import (
     _is_json_safe,
 )
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_common.exceptions import SerializationError
+from dataknobs_common.serialization import sanitize_for_json
 from dataknobs_llm.conversations import ConversationManager
 
 
@@ -48,6 +53,32 @@ class FakeDedupResult:
     similar_items: list[str] = field(default_factory=list)
     recommendation: str = "unique"
     content_hash: str = ""
+
+
+class Status(Enum):
+    ACTIVE = "active"
+
+
+class Priced:
+    """An object that chose its own JSON shape, counting how often it is asked."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        self.calls += 1
+        return {"amount": "9.05"}
+
+
+class Unpriced:
+    def to_dict(self) -> dict[str, Any]:
+        raise ValueError("no price list loaded")
+
+
+def _holds_itself() -> dict[str, Any]:
+    loop: dict[str, Any] = {"name": "loop"}
+    loop["self"] = loop
+    return loop
 
 
 def _make_wizard(
@@ -514,6 +545,60 @@ class TestIsJsonSafe:
 
         assert not _is_json_safe(BadDataclass(obj=NonSerializableObject()))
 
+    def test_values_the_save_converts_are_safe(self) -> None:
+        """An Enum, a to_dict() object and a non-str key are saved converted."""
+        assert _is_json_safe(Status.ACTIVE)
+        assert _is_json_safe({"price": Priced()})
+        assert _is_json_safe({1: "aisle 4"})
+
+    @pytest.mark.parametrize(
+        "value",
+        [math.nan, [math.inf], {"score": -math.inf}],
+        ids=["nan", "inf-in-list", "-inf-in-dict"],
+    )
+    def test_non_finite_floats_are_safe(self, value: Any) -> None:
+        """The save writes them as None, so it keeps the value whole."""
+        assert _is_json_safe(value)
+
+    def test_a_non_finite_key_is_not_safe(self) -> None:
+        assert not _is_json_safe({math.nan: 1})
+
+    def test_unwritable_key_is_not_safe(self) -> None:
+        assert not _is_json_safe({(1, 2): "pair"})
+
+    def test_to_dict_that_raises_is_not_safe(self) -> None:
+        assert not _is_json_safe(Unpriced())
+
+    def test_a_value_that_holds_itself_is_not_safe(self) -> None:
+        """Answered, not a RecursionError."""
+        assert not _is_json_safe(_holds_itself())
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"a": 1},
+            Status.ACTIVE,
+            Priced(),
+            Unpriced(),
+            FakeDedupResult(is_exact_duplicate=True),
+            {1: "x"},
+            {(1, 2): "x"},
+            [1.5, math.nan],
+            {math.inf: 1},
+            NonSerializableObject(),
+            {1, 2},
+        ],
+    )
+    def test_agrees_with_what_the_save_keeps(self, value: Any) -> None:
+        """Safe exactly when the save would keep the whole value."""
+        try:
+            sanitize_for_json(value, on_drop="error")
+        except SerializationError:
+            kept = False
+        else:
+            kept = True
+        assert _is_json_safe(value) is kept
+
 
 class TestPartitionData:
     """Tests for WizardReasoning._partition_data()."""
@@ -529,7 +614,7 @@ class TestPartitionData:
             "_message": "user input",
         }
 
-        persistent, transient = reasoning._partition_data(data)
+        persistent, transient, _saved = reasoning._partition_data(data)
 
         assert "topic" in persistent
         assert "_corpus" in transient
@@ -550,7 +635,7 @@ class TestPartitionData:
             "_target_count": 50,
         }
 
-        persistent, transient = reasoning._partition_data(data)
+        persistent, transient, _saved = reasoning._partition_data(data)
 
         assert persistent == data  # All should be persistent
         assert transient == {}
@@ -565,12 +650,76 @@ class TestPartitionData:
             "_corpus_id": "corpus-abc",
         }
 
-        persistent, transient = reasoning._partition_data(data)
+        persistent, transient, _saved = reasoning._partition_data(data)
 
         assert "topic" in persistent
         assert "_corpus_id" in persistent
         assert "_unknown_live_object" in transient
         assert "_unknown_live_object" not in persistent
+
+    def test_routes_what_the_save_would_drop(self, caplog: Any) -> None:
+        """A live object or a value that holds itself stays live, with the reason logged."""
+        reasoning = _make_wizard()
+        data = {
+            "topic": "Math",
+            "handle": {"id": 1, "conn": NonSerializableObject()},
+            "loop": _holds_itself(),
+        }
+
+        with caplog.at_level(logging.WARNING):
+            persistent, transient, saved = reasoning._partition_data(data)
+
+        assert persistent == {"topic": "Math"}
+        assert saved == {"topic": "Math"}
+        assert set(transient) == {"handle", "loop"}
+        assert "handle" in caplog.text
+        assert "conn (type=NonSerializableObject)" in caplog.text
+        assert "self (cycle)" in caplog.text
+
+    def test_the_warning_names_a_few_problems_and_counts_the_rest(self, caplog: Any) -> None:
+        reasoning = _make_wizard()
+        handles = [NonSerializableObject() for _ in range(50)]
+
+        with caplog.at_level(logging.WARNING):
+            reasoning._partition_data({"handles": handles})
+
+        [record] = [r for r in caplog.records if r.name == "dataknobs_bots.reasoning.wizard"]
+        message = record.getMessage()
+        assert "[0] (type=NonSerializableObject)" in message
+        assert "[2] (type=NonSerializableObject)" in message
+        assert "[3]" not in message
+        assert message.endswith("(+47 more)")
+
+    def test_a_nested_nan_keeps_its_key_persistent(self, caplog: Any) -> None:
+        """A sparse record is saved with its other values, the NaN as None."""
+        reasoning = _make_wizard()
+        readings = {"t1": [20.5, math.nan, 21.0], "t2": {"min": math.nan, "max": 30.0}}
+
+        with caplog.at_level(logging.WARNING):
+            persistent, transient, saved = reasoning._partition_data({"readings": readings})
+
+        assert persistent == {"readings": readings}
+        assert transient == {}
+        assert saved == {"readings": {"t1": [20.5, None, 21.0], "t2": {"min": None, "max": 30.0}}}
+        assert [r for r in caplog.records if r.name == "dataknobs_bots.reasoning.wizard"] == []
+
+    def test_saved_is_the_persistent_part_converted(self) -> None:
+        reasoning = _make_wizard()
+        data = {"status": Status.ACTIVE, "price": Priced(), "_corpus": "x", "fn": len}
+
+        persistent, _transient, saved = reasoning._partition_data(data)
+
+        assert saved == sanitize_for_json(persistent)
+        assert saved == {"status": "active", "price": {"amount": "9.05"}}
+
+    def test_keeps_what_the_save_converts(self) -> None:
+        reasoning = _make_wizard()
+        data = {"status": Status.ACTIVE, "price": Priced()}
+
+        persistent, transient, _saved = reasoning._partition_data(data)
+
+        assert persistent == data
+        assert transient == {}
 
     def test_merges_config_ephemeral_keys(self) -> None:
         """Keys from settings.ephemeral_keys are treated as ephemeral."""
@@ -601,7 +750,7 @@ class TestPartitionData:
             "_corpus_id": "corpus-bio",
         }
 
-        persistent, transient = reasoning._partition_data(data)
+        persistent, transient, _saved = reasoning._partition_data(data)
 
         assert "topic" in persistent
         assert "_corpus_id" in persistent
@@ -666,6 +815,78 @@ class TestPartitionData:
 
         # Verify JSON serializable
         json.dumps(conversation_manager.metadata)
+
+    @pytest.mark.asyncio
+    async def test_the_partition_and_the_save_agree(
+        self, conversation_manager: ConversationManager, caplog: Any
+    ) -> None:
+        """What the partition keeps is saved whole, and nothing it keeps is dropped.
+
+        An Enum is saved as its value and a NaN as None; the live value stays
+        in memory, persistent, for the rest of the turn.
+        """
+        reasoning = _make_wizard()
+
+        state = reasoning._get_wizard_state(conversation_manager)
+        state.data["status"] = Status.ACTIVE
+        state.data["score"] = math.nan
+
+        with caplog.at_level(logging.WARNING, logger="dataknobs_common.serialization"):
+            await reasoning._save_wizard_state(conversation_manager, state)
+
+        saved_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
+        assert saved_data["status"] == "active"
+        assert saved_data["score"] is None
+        assert math.isnan(state.data["score"])
+        assert "score" not in state.transient
+        dropped = [r for r in caplog.records if r.name == "dataknobs_common.serialization"]
+        assert dropped == []
+
+    @pytest.mark.asyncio
+    async def test_a_save_calls_to_dict_once_for_storage(
+        self, conversation_manager: ConversationManager
+    ) -> None:
+        """One call for the response metadata, one for what is stored.
+
+        The partition and the save share one walk, so the stored value is
+        not converted twice. The response metadata is built from the state
+        before the artifact syncs and the partition, so it walks on its own.
+        """
+        reasoning = _make_wizard()
+        price = Priced()
+        state = reasoning._get_wizard_state(conversation_manager)
+        state.data["price"] = price
+
+        await reasoning._save_wizard_state(conversation_manager, state)
+
+        assert price.calls == 2
+        saved_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
+        assert saved_data["price"] == {"amount": "9.05"}
+
+    @pytest.mark.asyncio
+    async def test_restored_from_json_storage(
+        self, conversation_manager: ConversationManager
+    ) -> None:
+        """Saved, written as JSON and read back, as SQLite or Postgres storage does.
+
+        The converted forms come back, not the originals: an Enum as its
+        value, a NaN as None, and a non-str key as text, since JSON writes
+        every key as a string. The in-memory backend keeps the key as it was.
+        """
+        reasoning = _make_wizard()
+        state = reasoning._get_wizard_state(conversation_manager)
+        state.data["status"] = Status.ACTIVE
+        state.data["readings"] = [1.0, math.nan, 3.0]
+        state.data["aisles"] = {1: "produce"}
+
+        await reasoning._save_wizard_state(conversation_manager, state)
+        stored = json.loads(json.dumps(conversation_manager.metadata, allow_nan=False))
+        conversation_manager.metadata["wizard"] = stored["wizard"]
+        restored = reasoning._get_wizard_state(conversation_manager)
+
+        assert restored.data["status"] == "active"
+        assert restored.data["readings"] == [1.0, None, 3.0]
+        assert restored.data["aisles"] == {"1": "produce"}
 
     @pytest.mark.asyncio
     async def test_metadata_data_includes_transient_for_ui(
