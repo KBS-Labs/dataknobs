@@ -780,9 +780,9 @@ for JSON serialization. There are two policies over one walk, for two purposes:
 | | `sanitize_for_json` | `as_data` |
 |---|---|---|
 | for | state that may hold live objects (functions, asyncio tasks), saved as far as it can be | a value that must arrive whole, such as a reply made of nested frozen dataclasses |
-| order | `Enum`, primitives, `dict`, list/tuple, dataclass, `to_dict()` | `using`, `Enum`, primitives, `to_dict()`, dataclass, any `Mapping`, list/tuple, set |
+| order | `Enum`, non-finite float, primitives, `dict`, list/tuple, dataclass, `to_dict()` | `using`, `Enum`, primitives, `to_dict()`, dataclass, any `Mapping`, list/tuple, set |
 | a mapping | `dict` only; keys kept as they are | any `Mapping`; keys written as text the way `json.dumps` writes them, two keys written the same refused |
-| NaN, infinity | kept (`json.dumps` writes `NaN`, which strict readers refuse) | refused |
+| NaN, infinity | dropped, reported by `on_drop` | refused |
 | a set | dropped | a sorted list |
 | a `to_dict()` that raises | dropped | refused, the original as `__cause__` |
 | no rule | dropped, reported by `on_drop` | refused at once, naming the path |
@@ -799,6 +799,11 @@ to lists, dataclasses to dicts (field by field), an `Enum` to its value, and an
 object with a `to_dict()` returning a dict to that dict. A dataclass is
 converted field by field even when it defines its own `to_dict()`. Anything
 else is dropped, including sets, bytes and `datetime` values.
+
+A NaN or infinite float is dropped too, and reported as a `non-finite float`
+(`reading.value (non-finite float nan)`). `json.dumps` would write it as `NaN`
+or `Infinity`, which is not JSON: `JSON.parse` and a Postgres `jsonb` column
+refuse it, though Python's own `json.loads` reads it back.
 
 A dict keeps the keys `json.dumps` can write (`str`, `int`, `float`, `bool`,
 `None`), and an `Enum` key becomes its value. An entry whose key is anything

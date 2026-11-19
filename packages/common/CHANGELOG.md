@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`sanitize_for_json` drops a NaN or infinite float.** It passed them
+  through, and `json.dumps` wrote them as `NaN` / `Infinity`, which is not
+  JSON: `JSON.parse` and a Postgres `jsonb` column refuse the document.
+  `validate_json_safe` called them safe. They are now dropped and reported
+  like any other drop (`x (non-finite float nan)`), under every `on_drop`
+  mode, and `validate_json_safe` reports them. A caller that stored such a
+  value through Python's own `json`, which reads `NaN` back, now loses it;
+  under `on_drop="warn"` each one is logged.
+
+- **`sanitize_for_json` and `validate_json_safe` take only their documented
+  parameters.** `sanitize_for_json` also accepted `_path` and `_dropped`,
+  and `validate_json_safe` accepted `_path`, all marked internal. Passing
+  `_dropped` turned `on_drop="error"` off: the call returned without
+  raising. Both are removed; passing either is now a `TypeError`.
+
 - **A value that holds itself no longer crashes `sanitize_for_json` or
   `validate_json_safe`.** A dict, list or dataclass that contained itself
   raised `RecursionError` in every `on_drop` mode. It is now dropped where it

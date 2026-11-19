@@ -4,14 +4,17 @@ Validates:
 - on_drop="silent" (backward-compatible default)
 - on_drop="warn" logs at WARNING with key path
 - on_drop="error" raises SerializationError listing dropped paths
-- _path tracking for nested dicts, lists, and dataclasses
+- diagnostic paths for nested dicts, lists, and dataclasses
+- a NaN or infinite float is dropped, as JSON cannot write it
 - validate_json_safe returns paths without modifying input
 """
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
+import math
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum, IntEnum
@@ -106,7 +109,7 @@ class TestSanitizeForJsonError:
 
 
 class TestPathTracking:
-    """_path builds correct diagnostic paths for nested structures."""
+    """Drops are reported at their paths through nested structures."""
 
     def test_deeply_nested_path(self) -> None:
         data = {"level1": {"level2": {"level3": lambda: None}}}
@@ -414,3 +417,78 @@ class TestOnDropModes:
     def test_an_unknown_mode_is_refused(self) -> None:
         with pytest.raises(ValueError, match="on_drop must be one of"):
             sanitize_for_json({"a": 1}, on_drop="eror")
+
+
+class TestSignatures:
+    """Only the documented parameters are public: no accumulator to pass in."""
+
+    def test_sanitize_takes_a_value_and_a_mode(self) -> None:
+        assert list(inspect.signature(sanitize_for_json).parameters) == ["value", "on_drop"]
+
+    def test_validate_takes_a_value(self) -> None:
+        assert list(inspect.signature(validate_json_safe).parameters) == ["value"]
+
+    def test_strict_mode_cannot_be_turned_off_by_an_extra_argument(self) -> None:
+        with pytest.raises(TypeError):
+            sanitize_for_json(object(), on_drop="error", _dropped=[])  # type: ignore[call-arg]
+
+
+class _Ratio(Enum):
+    UNDEFINED = math.nan
+
+
+@dataclass
+class _Reading:
+    sensor: str
+    value: float
+
+
+_NON_FINITE = [math.nan, math.inf, -math.inf]
+
+
+class TestNonFiniteFloats:
+    """NaN and infinity have no JSON form, so they are dropped and reported.
+
+    ``json.dumps`` would write them as ``NaN`` / ``Infinity``, which a strict
+    reader (``JSON.parse``, a Postgres ``jsonb`` column) refuses.
+    """
+
+    @pytest.mark.parametrize("number", _NON_FINITE)
+    def test_dropped_from_a_dict(self, number: float) -> None:
+        result = sanitize_for_json({"x": number, "y": 1.5})
+        assert result == {"y": 1.5}
+        assert json.loads(json.dumps(result, allow_nan=False)) == result
+
+    @pytest.mark.parametrize("number", _NON_FINITE)
+    def test_dropped_from_a_list(self, number: float) -> None:
+        assert sanitize_for_json([1.0, number, 2.0]) == [1.0, 2.0]
+
+    @pytest.mark.parametrize("number", _NON_FINITE)
+    def test_dropped_at_the_top_level(self, number: float) -> None:
+        assert sanitize_for_json(number) is None
+
+    def test_dropped_from_a_dataclass_field(self) -> None:
+        assert sanitize_for_json(_Reading("t1", math.nan)) == {"sensor": "t1"}
+
+    def test_an_enum_whose_value_is_nan_is_dropped(self) -> None:
+        assert sanitize_for_json({"r": _Ratio.UNDEFINED}) == {}
+
+    def test_warn_names_the_path(self, caplog: Any) -> None:
+        with caplog.at_level(logging.WARNING):
+            sanitize_for_json({"a": [0.5, math.inf]}, on_drop="warn")
+        assert "a[1]" in caplog.text
+        assert "non-finite float inf" in caplog.text
+
+    def test_error_raises_naming_each(self) -> None:
+        with pytest.raises(SerializationError) as caught:
+            sanitize_for_json({"a": math.nan, "b": -math.inf}, on_drop="error")
+        assert caught.value.context["dropped_paths"] == [
+            "a (non-finite float nan)",
+            "b (non-finite float -inf)",
+        ]
+
+    def test_validate_reports_them(self) -> None:
+        assert validate_json_safe({"x": math.inf, "ok": 0.0}) == ["x (non-finite float inf)"]
+
+    def test_a_finite_float_is_kept(self) -> None:
+        assert sanitize_for_json({"x": -0.0, "y": 1e308}) == {"x": -0.0, "y": 1e308}

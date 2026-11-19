@@ -1063,7 +1063,7 @@ Recursively traverse a value and drop anything not JSON-serializable. Keeps
 dataclasses to dicts, an `Enum` to its value, and an object whose `to_dict()`
 returns a dict to that dict. A dataclass is converted field by field even when
 it defines its own `to_dict()`. Anything else is dropped, including sets, bytes
-and `datetime` values. A dict keeps the keys `json.dumps` can write (`str`,
+and `datetime` values, and a NaN or infinite float, which JSON cannot write. A dict keeps the keys `json.dumps` can write (`str`,
 `int`, `float`, `bool`, `None`), an `Enum` key becomes its value, and an entry
 with any other key is dropped. A container that holds itself is dropped where
 it repeats, reported as a `cycle`.
