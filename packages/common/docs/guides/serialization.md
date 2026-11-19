@@ -781,7 +781,8 @@ for JSON serialization. There are two policies over one walk, for two purposes:
 |---|---|---|
 | for | state that may hold live objects (functions, asyncio tasks), saved as far as it can be | a value that must arrive whole, such as a reply made of nested frozen dataclasses |
 | order | `Enum`, primitives, `dict`, list/tuple, dataclass, `to_dict()` | `using`, `Enum`, primitives, `to_dict()`, dataclass, any `Mapping`, list/tuple, set |
-| a mapping | `dict` only; keys kept as they are | any `Mapping`; keys written as `str()`, two keys written the same refused |
+| a mapping | `dict` only; keys kept as they are | any `Mapping`; keys written as text the way `json.dumps` writes them, two keys written the same refused |
+| NaN, infinity | kept (`json.dumps` writes `NaN`, which strict readers refuse) | refused |
 | a set | dropped | a sorted list |
 | a `to_dict()` that raises | dropped | refused, the original as `__cause__` |
 | no rule | dropped, reported by `on_drop` | refused at once, naming the path |
@@ -835,8 +836,9 @@ except SerializationError as e:
 
 **Parameters:**
 - `value` (Any): The value to sanitize
-- `on_drop` (str): `"silent"` (default), `"warn"`, or `"error"`. Any other
-  value raises `ValueError`, so a misspelt `"error"` is not taken as silent.
+- `on_drop` (`OnDrop`, i.e. `Literal["silent", "warn", "error"]`): `"silent"`
+  (default), `"warn"`, or `"error"`. Any other value raises `ValueError`, so a
+  misspelt `"error"` is not taken as silent.
 
 **Returns:** A JSON-safe copy of the input with non-serializable values removed;
 `None` when the input itself is dropped.
@@ -913,17 +915,21 @@ except SerializationError as e:
 
 Its rules, in order:
 
-1. a type in `using` → that type's serialiser, applied once (the type leaves
-   the table for its result, so a serialiser returning its own type cannot
-   loop). The exact type is looked up first, then the first listed base;
+1. a type in `using` → that type's serialiser, its result walked. The
+   serialiser is not applied to the value it returned, so one returning its own
+   type cannot loop, but a value of that type anywhere inside the result is
+   shown by it too. The exact type is looked up first, then the first listed base;
 2. an `Enum` → its value, walked;
-3. `None`, `bool`, `int`, `float`, `str` → itself;
+3. `None`, `bool`, `int`, `float`, `str` → itself, except a NaN or infinite
+   float: JSON cannot write it, so it is refused;
 4. an object with a callable `to_dict()` (not a class) → its result, walked.
    This comes before the dataclass rule, so a dataclass's own `to_dict()` is used;
 5. a dataclass instance → its fields, in declaration order;
-6. any `Mapping` (a `MappingProxyType`, say) → its items, each key written as
-   `str()`, an `Enum` key as its value first. Two keys written the same, `1`
-   and `"1"`, are refused: one would replace the other;
+6. any `Mapping` (a `MappingProxyType`, say) → its items. An `Enum` key is
+   read as its value first; a `None`, `bool`, `int` or `float` key is written
+   as `json.dumps` writes it (`"null"`, `"true"`, `"1.5"`), so the two agree on
+   the same dict; any other key is written with `str()`. Two keys written the
+   same, `1` and `"1"`, are refused: one would replace the other;
 7. a `list` or `tuple` → a list;
 8. a `set` or `frozenset` → a list sorted by each item's JSON, so the same set
    always gives the same data;
@@ -931,8 +937,11 @@ Its rules, in order:
 
 Every refusal is a `SerializationError` whose message and `context["path"]`
 name where the value was. A `to_dict()` or `using` serialiser that raises is
-refused too, with the original exception as `__cause__`. A container that holds
-itself is refused.
+refused too, with the original exception as `__cause__`; when that exception
+is itself a refusal from a nested `as_data`, the outer path is the one named.
+A container that holds itself is refused, and so is a value nested past the
+interpreter's recursion limit. A set's member has no position, so its path is
+written `value.tags{}`.
 
 `using` shows a type differently in one place without giving it a `to_dict()`
 that every other caller would get:

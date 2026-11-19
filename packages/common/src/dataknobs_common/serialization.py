@@ -45,13 +45,15 @@ Example:
 import dataclasses
 import json
 import logging
-from collections.abc import Callable, Mapping
+import math
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from enum import Enum
 from typing import (
     Any,
     ClassVar,
     Dict,
     Literal,
+    NamedTuple,
     NoReturn,
     Protocol,
     Type,
@@ -345,36 +347,111 @@ _Step = tuple[str, Any]
 _Path = tuple[_Step, ...]
 
 
+class _Again(NamedTuple):
+    """A rule's answer: walk *value* in place of the value it was given.
+
+    An ``Enum``'s value, a ``to_dict()`` result, a serialiser's result. The
+    value it came from stays open while *value* is walked, so a result that
+    holds its own source is a cycle. *exempt* skips the ``using`` table for
+    *value* alone, so a serialiser is not applied to its own result.
+    """
+
+    value: Any
+    exempt: bool = False
+
+
+class _Open(NamedTuple):
+    """A rule's answer: a container, as its children and how to assemble them.
+
+    *children* yields ``(step, key, child)``; each child is walked and, unless
+    dropped, kept as ``(key, data)``. *finish* turns those pairs into the
+    container's data. The children are yielded lazily, so a rule that reports
+    something about an entry (a key it cannot write) does so in entry order.
+    """
+
+    children: Iterable[tuple[_Step, Any, Any]]
+    finish: Callable[[list[tuple[Any, Any]]], Any]
+
+
+def _as_dict(items: list[tuple[Any, Any]]) -> dict[Any, Any]:
+    return dict(items)
+
+
+def _as_list(items: list[tuple[Any, Any]]) -> list[Any]:
+    return [item for _, item in items]
+
+
+def _as_sorted_list(items: list[tuple[Any, Any]]) -> list[Any]:
+    # Sorted by each item's JSON, so the same set always gives the same list.
+    return sorted(_as_list(items), key=lambda item: json.dumps(item, sort_keys=True))
+
+
 class _Walk:
     """One traversal of a value into JSON-shaped data, under one policy.
 
-    The walk tries its policy's rules in order and takes the first that
-    applies; a value no rule takes goes to :meth:`_no_rule`. What every
-    policy shares lives here: the rules for an ``Enum``, a JSON primitive, a
-    list or tuple and a dataclass's fields; the path, kept as steps and
-    written out only when something is reported; and the guard against a
-    value that holds itself. A policy decides only what differs: which rules
-    it has and in what order, how it reads a mapping and a ``to_dict()``,
-    and what happens to a value it has no rule for.
+    A policy is an ordered tuple of rules. A rule only *matches*: it returns
+    the value's data when that needs no walking (a JSON scalar), an
+    :class:`_Again` naming a value to walk in its place, an :class:`_Open`
+    describing a container, or ``_NO_RULE``. Every recursion happens in
+    :meth:`walk`, so one level of nesting costs one stack frame and the walk
+    follows nesting as deep as a plain recursive function would.
 
-    The guard records the containers on the current path, not every
-    container seen, so a value reached by two routes is walked both times
-    and only a true cycle is reported.
+    What every policy shares lives here: the rules for an ``Enum``, a JSON
+    scalar, a list or tuple and a dataclass's fields; the path, kept as steps
+    and written out only when something is reported; and the guard against a
+    value that holds itself. The guard records the values open on the
+    current path, not every value seen, so a value reached by two routes is
+    walked both times and only a true cycle is reported.
     """
 
-    #: The policy's rules, in order. Each takes ``(walk, value, path)`` and
-    #: returns the value as data, or ``_NO_RULE`` when it does not apply.
+    #: The policy's rules, in order. Each takes ``(walk, value, path)``.
     _rules: ClassVar[tuple[Callable[..., Any], ...]] = ()
 
     def __init__(self) -> None:
         self._open: set[int] = set()
+        self._exempt = False
 
     def walk(self, value: Any, path: _Path) -> Any:
+        opened: list[int] = []
+        exempt = False
+        try:
+            while True:
+                self._exempt = exempt
+                found = self._match(value, path)
+                if isinstance(found, _Again):
+                    if found.value is not value and not self._enter(value, opened):
+                        return self._cycle(value, path)
+                    value, exempt = found.value, found.exempt
+                    continue
+                if isinstance(found, _Open):
+                    if not self._enter(value, opened):
+                        return self._cycle(value, path)
+                    items: list[tuple[Any, Any]] = []
+                    for step, key, child in found.children:
+                        item = self.walk(child, (*path, step))
+                        if item is not _SENTINEL:
+                            items.append((key, item))
+                    return found.finish(items)
+                return found
+        finally:
+            for marker in opened:
+                self._open.discard(marker)
+
+    def _match(self, value: Any, path: _Path) -> Any:
         for rule in self._rules:
-            result = rule(self, value, path)
-            if result is not _NO_RULE:
-                return result
+            found = rule(self, value, path)
+            if found is not _NO_RULE:
+                return found
         return self._no_rule(value, path)
+
+    def _enter(self, value: Any, opened: list[int]) -> bool:
+        """Record *value* as open on the current path; ``False`` if it already is."""
+        marker = id(value)
+        if marker in self._open:
+            return False
+        self._open.add(marker)
+        opened.append(marker)
+        return True
 
     # -- policy hooks ------------------------------------------------------
 
@@ -384,29 +461,16 @@ class _Walk:
     def _cycle(self, value: Any, path: _Path) -> Any:
         raise NotImplementedError
 
-    # -- shared machinery --------------------------------------------------
-
-    def _inside(self, value: Any, path: _Path, build: Callable[[], Any]) -> Any:
-        """``build()``, with *value* recorded as open on the current path."""
-        marker = id(value)
-        if marker in self._open:
-            return self._cycle(value, path)
-        self._open.add(marker)
-        try:
-            return build()
-        finally:
-            self._open.discard(marker)
-
     # -- shared rules ------------------------------------------------------
 
     def _enum(self, value: Any, path: _Path) -> Any:
-        # Before the primitive rule, so an IntEnum / StrEnum (which subclass
+        # Before the scalar rule, so an IntEnum / StrEnum (which subclass
         # int / str) becomes a plain int / str rather than the member.
         if isinstance(value, Enum):
-            return self.walk(value.value, path)
+            return _Again(value.value)
         return _NO_RULE
 
-    def _primitive(self, value: Any, path: _Path) -> Any:
+    def _scalar(self, value: Any, path: _Path) -> Any:
         if value is None or isinstance(value, (bool, int, float, str)):
             return value
         return _NO_RULE
@@ -414,12 +478,7 @@ class _Walk:
     def _sequence(self, value: Any, path: _Path) -> Any:
         if not isinstance(value, (list, tuple)):
             return _NO_RULE
-
-        def build() -> list[Any]:
-            items = (self.walk(item, (*path, ("index", i))) for i, item in enumerate(value))
-            return [item for item in items if item is not _SENTINEL]
-
-        return self._inside(value, path, build)
+        return _Open(((("index", i), None, item) for i, item in enumerate(value)), _as_list)
 
     def _fields(self, value: Any, path: _Path) -> Any:
         # Field by field rather than ``dataclasses.asdict()``, which deep-copies
@@ -428,16 +487,10 @@ class _Walk:
         # through the whole walk instead.
         if not dataclasses.is_dataclass(value) or isinstance(value, type):
             return _NO_RULE
-
-        def build() -> dict[str, Any]:
-            result: dict[str, Any] = {}
-            for f in dataclasses.fields(value):
-                item = self.walk(getattr(value, f.name), (*path, ("name", f.name)))
-                if item is not _SENTINEL:
-                    result[f.name] = item
-            return result
-
-        return self._inside(value, path, build)
+        children = (
+            (("name", f.name), f.name, getattr(value, f.name)) for f in dataclasses.fields(value)
+        )
+        return _Open(children, _as_dict)
 
 
 class _Sanitize(_Walk):
@@ -445,14 +498,18 @@ class _Sanitize(_Walk):
 
     A dropped value is the private ``_SENTINEL``, which its container leaves
     out, and is reported according to *on_drop*. Paths are written
-    ``a.b[0]``, with ``<root>`` for the value itself.
+    ``a.b[0]``, with ``<root>`` for the value itself. *quiet* leaves out the
+    DEBUG line for a ``to_dict()`` that raised, for a caller that only asks.
     """
 
-    def __init__(self, on_drop: str, base: str, dropped: list[str] | None) -> None:
+    def __init__(
+        self, on_drop: str, base: str, dropped: list[str] | None, *, quiet: bool = False
+    ) -> None:
         super().__init__()
         self._on_drop = on_drop
         self._base = base
         self._dropped = dropped
+        self._quiet = quiet
 
     def _label(self, path: _Path) -> str:
         text = self._base
@@ -461,7 +518,9 @@ class _Sanitize(_Walk):
                 text = f"{text}[{part}]"
             else:
                 text = f"{text}.{part}" if text else str(part)
-        return text or "<root>"
+        # Only the value itself is labelled <root>. A key whose text is empty,
+        # at the top, keeps its empty label, as it always has.
+        return text if path else text or "<root>"
 
     def _drop(self, path: _Path, what: str) -> Any:
         label = self._label(path)
@@ -483,19 +542,15 @@ class _Sanitize(_Walk):
         if not isinstance(value, dict):
             return _NO_RULE
 
-        def build() -> dict[Any, Any]:
-            result: dict[Any, Any] = {}
+        def children() -> Iterator[tuple[_Step, Any, Any]]:
             for k, v in value.items():
                 key = _json_key(k)
                 if key is _SENTINEL:
                     self._drop((*path, ("key", k)), f"key type={type(k).__name__}")
                     continue
-                item = self.walk(v, (*path, ("key", key)))
-                if item is not _SENTINEL:
-                    result[key] = item
-            return result
+                yield ("key", key), key, v
 
-        return self._inside(value, path, build)
+        return _Open(children(), _as_dict)
 
     def _to_dict(self, value: Any, path: _Path) -> Any:
         if not (hasattr(value, "to_dict") and callable(value.to_dict)):
@@ -503,15 +558,16 @@ class _Sanitize(_Walk):
         try:
             result = value.to_dict()
         except Exception:
-            logger.debug("to_dict() failed for %s, dropping", type(value).__name__)
+            if not self._quiet:
+                logger.debug("to_dict() failed for %s, dropping", type(value).__name__)
             return _NO_RULE
         if not isinstance(result, dict):
             return _NO_RULE
-        return self._inside(value, path, lambda: self.walk(result, path))
+        return _Again(result)
 
     _rules = (
         _Walk._enum,
-        _Walk._primitive,
+        _Walk._scalar,
         _dict,
         _Walk._sequence,
         _Walk._fields,
@@ -523,13 +579,35 @@ class _AsData(_Walk):
     """The policy of :func:`as_data`: what has no rule is refused, at once.
 
     Paths are written ``value.a['b'][0]``: an attribute after a dot, a key
-    as written in brackets, so the two cannot be confused.
+    as written in brackets, so the two cannot be confused. A set's member is
+    written ``{}``, since a set has no order to give it a position by.
     """
 
     def __init__(self, using: Using | None, root: str) -> None:
         super().__init__()
         self._using: Using = using or {}
         self._root = root
+        for kind in self._using:
+            if not isinstance(kind, type):
+                raise SerializationError(
+                    f"using takes types as keys, not {kind!r}",
+                    context={"key_type": type(kind).__name__},
+                )
+
+    def walk_fields(self, value: Any, names: list[str], replaced: Mapping[str, Any]) -> Any:
+        """*value*'s fields, each named in *replaced* given its replacement."""
+        opened: list[int] = []
+        self._enter(value, opened)
+        try:
+            return {
+                name: self.walk(
+                    replaced[name] if name in replaced else getattr(value, name),
+                    (("name", name),),
+                )
+                for name in names
+            }
+        finally:
+            self._open.discard(opened[0])
 
     def _label(self, path: _Path) -> str:
         text = self._root
@@ -548,6 +626,17 @@ class _AsData(_Walk):
         where = self._label(path)
         raise SerializationError(f"{where}{message}", context={"path": where, **context})
 
+    def _refuse_raised(self, path: _Path, what: str, error: Exception) -> NoReturn:
+        # Bounded: the message names the exception's class, not its text,
+        # which is whatever the caller's own code put there. The original,
+        # with its own path when it is a refusal from a nested walk, travels
+        # on __cause__.
+        where = self._label(path)
+        raise SerializationError(
+            f"{where}: {what} raised {type(error).__name__}",
+            context={"path": where, "error_type": type(error).__name__},
+        ) from error
+
     def _no_rule(self, value: Any, path: _Path) -> Any:
         kind = type(value).__name__
         self._refuse(path, f" is of type {kind}, which has no rule as data", type=kind)
@@ -556,24 +645,20 @@ class _AsData(_Walk):
         self._refuse(path, " refers back to a value that contains it")
 
     def _from_using(self, value: Any, path: _Path) -> Any:
+        if self._exempt:
+            return _NO_RULE
         found = self._lookup(type(value))
         if found is None:
             return _NO_RULE
         kind, convert = found
         try:
             result = convert(value)
-        except SerializationError:
-            raise
         except Exception as e:
             self._refuse_raised(path, f"the serialiser for {kind.__name__}", e)
-        # Applied once: the type leaves the table for its own result, so a
-        # serialiser returning a value of its own type cannot loop.
-        table = self._using
-        self._using = {k: c for k, c in table.items() if k is not kind}
-        try:
-            return self.walk(result, path)
-        finally:
-            self._using = table
+        # The serialiser is not applied to the value it returned, so one that
+        # returns its own type cannot loop. A value of that type anywhere
+        # inside the result is still shown by it.
+        return _Again(result, exempt=True)
 
     def _lookup(self, kind: type) -> tuple[type, Callable[[Any], Any]] | None:
         # The exact type first, so a subclass listed after its base is reached;
@@ -585,15 +670,14 @@ class _AsData(_Walk):
                 return base, convert
         return None
 
-    def _refuse_raised(self, path: _Path, what: str, error: Exception) -> NoReturn:
-        # Bounded: the message names the exception's class, not its text,
-        # which is whatever the caller's own code put there. The original
-        # travels on __cause__.
-        where = self._label(path)
-        raise SerializationError(
-            f"{where}: {what} raised {type(error).__name__}",
-            context={"path": where, "error_type": type(error).__name__},
-        ) from error
+    def _finite(self, value: Any, path: _Path) -> Any:
+        # Before the scalar rule: ``json.dumps`` writes these as ``NaN`` and
+        # ``Infinity``, which are not JSON, and a strict reader refuses them.
+        if isinstance(value, float) and not math.isfinite(value):
+            self._refuse(
+                path, f" is a non-finite float ({value!r}), which JSON cannot write", type="float"
+            )
+        return _NO_RULE
 
     def _to_dict(self, value: Any, path: _Path) -> Any:
         # Before a dataclass's fields: a value that chose its own shape keeps it.
@@ -602,19 +686,18 @@ class _AsData(_Walk):
             return _NO_RULE
         try:
             result = to_dict()
-        except SerializationError:
-            raise
         except Exception as e:
             self._refuse_raised(path, f"to_dict() of {type(value).__name__}", e)
-        return self._inside(value, path, lambda: self.walk(result, path))
+        if result is value:
+            self._refuse(path, f": to_dict() of {type(value).__name__} returned the value itself")
+        return _Again(result)
 
     def _mapping(self, value: Any, path: _Path) -> Any:
         if not isinstance(value, Mapping):
             return _NO_RULE
 
-        def build() -> dict[str, Any]:
+        def children() -> Iterator[tuple[_Step, Any, Any]]:
             written: dict[str, Any] = {}
-            result: dict[str, Any] = {}
             for key, item in value.items():
                 name = _text_key(key)
                 if name in written:
@@ -624,22 +707,20 @@ class _AsData(_Walk):
                         key=name,
                     )
                 written[name] = key
-                result[name] = self.walk(item, (*path, ("key", key)))
-            return result
+                yield ("key", key), name, item
 
-        return self._inside(value, path, build)
+        return _Open(children(), _as_dict)
 
     def _set(self, value: Any, path: _Path) -> Any:
         if not isinstance(value, (set, frozenset)):
             return _NO_RULE
-        items = [self.walk(item, (*path, ("member", None))) for item in value]
-        # Sorted by each item's JSON, so the same set always gives the same list.
-        return sorted(items, key=lambda item: json.dumps(item, sort_keys=True))
+        return _Open(((("member", None), None, item) for item in value), _as_sorted_list)
 
     _rules = (
         _from_using,
         _Walk._enum,
-        _Walk._primitive,
+        _finite,
+        _Walk._scalar,
         _to_dict,
         _Walk._fields,
         _mapping,
@@ -743,9 +824,19 @@ def _json_key(key: Any) -> Any:
 
 
 def _text_key(key: Any) -> str:
-    """*key* as :func:`as_data` writes it: an ``Enum`` as its value, then ``str()``."""
+    """*key* as :func:`as_data` writes it.
+
+    An ``Enum`` is read as its value first. A JSON scalar is written as
+    ``json.dumps`` writes it as a key (``None`` as ``"null"``, ``True`` as
+    ``"true"``, a float by its ``repr``), so the two agree on the same dict;
+    any other key is written with ``str()``.
+    """
     while isinstance(key, Enum):
         key = key.value
+    if isinstance(key, str):
+        return key
+    if key is None or isinstance(key, (bool, int, float)):
+        return str(next(iter(json.loads(json.dumps({key: None})))))
     return str(key)
 
 
@@ -766,7 +857,7 @@ def validate_json_safe(value: Any, _path: str = "") -> list[str]:
         means *value* is fully JSON-safe.
     """
     paths: list[str] = []
-    _Sanitize("error", _path, paths).walk(value, ())
+    _Sanitize("error", _path, paths, quiet=True).walk(value, ())
     return paths
 
 
@@ -781,19 +872,23 @@ def as_data(value: Any, *, using: Using | None = None) -> Any:
 
     Rules (in order):
 
-    1. a type in *using* → that type's serialiser, applied once: the type
-       leaves the table for its result, so a serialiser that returns its own
-       type cannot loop. The exact type is looked up first, then the first
-       listed base;
+    1. a type in *using* → that type's serialiser, its result walked. The
+       serialiser is not applied to the value it returned, so one returning
+       its own type cannot loop, but a value of that type anywhere inside
+       the result is shown by it too. The exact type is looked up first,
+       then the first listed base;
     2. an ``Enum`` → its value, walked;
-    3. ``None``, ``bool``, ``int``, ``float``, ``str`` → itself;
+    3. ``None``, ``bool``, ``int``, ``float``, ``str`` → itself, except a
+       NaN or infinite float, which JSON cannot write and is refused;
     4. an object with a callable ``to_dict()`` (not a class) → its result,
        whatever it is, walked. This comes before rule 5, so a dataclass that
        chose its own shape keeps it;
     5. a dataclass instance → its fields, in declaration order;
-    6. any :class:`~collections.abc.Mapping` → its items, each key written
-       as ``str()`` (an ``Enum`` key as its value first). Two keys written
-       the same, such as ``1`` and ``"1"``, are refused, because one would
+    6. any :class:`~collections.abc.Mapping` → its items. An ``Enum`` key
+       is read as its value first; a JSON scalar key is written as
+       ``json.dumps`` writes it (``None`` as ``"null"``, ``True`` as
+       ``"true"``), and any other key with ``str()``. Two keys written the
+       same, such as ``1`` and ``"1"``, are refused, because one would
        replace the other;
     7. a ``list`` or ``tuple`` → a list;
     8. a ``set`` or ``frozenset`` → a list, sorted by each item's JSON, so
@@ -811,12 +906,18 @@ def as_data(value: Any, *, using: Using | None = None) -> Any:
 
     Raises:
         SerializationError: For a value no rule takes, two keys written the
-            same, a container that holds itself, or a ``to_dict()`` or
-            serialiser that raised (the original is the ``__cause__``). The
-            message names the path, as in ``value.notes['tare']``, and so
-            does ``context["path"]``.
+            same, a non-finite float, a container that holds itself, a
+            value nested past the interpreter's recursion limit, or a
+            ``to_dict()`` or serialiser that raised (the original, a nested
+            refusal included, is the ``__cause__``). The message names the
+            path, as in ``value.notes['tare']``, and so does
+            ``context["path"]``.
     """
-    return _AsData(using, "value").walk(value, ())
+    walk = _AsData(using, "value")
+    try:
+        return walk.walk(value, ())
+    except RecursionError as e:
+        raise _too_deep("value") from e
 
 
 def fields_data(value: Any, /, *, using: Using | None = None, **replaced: Any) -> dict[str, Any]:
@@ -855,18 +956,19 @@ def fields_data(value: Any, /, *, using: Using | None = None, **replaced: Any) -
             context={"type": kind, "unknown_fields": unknown},
         )
     walk = _AsData(using, kind)
-
-    def build() -> dict[str, Any]:
-        return {
-            name: walk.walk(
-                replaced[name] if name in replaced else getattr(value, name),
-                (("name", name),),
-            )
-            for name in names
-        }
-
-    result: dict[str, Any] = walk._inside(value, (), build)
+    try:
+        result: dict[str, Any] = walk.walk_fields(value, names, replaced)
+    except RecursionError as e:
+        raise _too_deep(kind) from e
     return result
+
+
+def _too_deep(root: str) -> SerializationError:
+    """The refusal for a value nested past what the walk can follow."""
+    return SerializationError(
+        f"{root} is nested too deeply to walk (past the interpreter's recursion limit)",
+        context={"path": root},
+    )
 
 
 def jsonify(value: Any) -> Any:

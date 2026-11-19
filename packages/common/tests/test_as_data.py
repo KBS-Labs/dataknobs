@@ -205,7 +205,17 @@ def test_what_has_no_rule_is_refused_where_it_is() -> None:
 
 
 def test_keys_are_written_as_text() -> None:
-    assert as_data({2024: "catalogue", None: "unfiled"}) == {"2024": "catalogue", "None": "unfiled"}
+    """A scalar key is written as ``json.dumps`` writes it, so both agree."""
+    keys = {2024: "catalogue", None: "unfiled", True: "yes", False: "no", 1.5: "half"}
+    data = as_data(keys)
+    assert data == {
+        "2024": "catalogue",
+        "null": "unfiled",
+        "true": "yes",
+        "false": "no",
+        "1.5": "half",
+    }
+    assert data == json.loads(json.dumps(keys))
 
 
 def test_an_enum_key_is_written_as_its_value() -> None:
@@ -235,3 +245,87 @@ def test_a_value_shared_by_two_fields_is_not_a_cycle() -> None:
         "a": {"supplier_id": "S-07", "name": "Harbor Metalworks"},
         "b": {"supplier_id": "S-07", "name": "Harbor Metalworks"},
     }
+
+
+def test_a_type_is_shown_its_way_at_every_depth() -> None:
+    """Only the value a serialiser returned skips it, not what that value holds."""
+
+    @dataclass(frozen=True)
+    class Category:
+        name: str
+        children: tuple[Category, ...]
+        internal_code: str = "hidden"
+
+    def public(category: Category) -> dict[str, Any]:
+        return {"name": category.name, "children": category.children}
+
+    tree = Category("kitchen", (Category("kettles", ()),))
+    assert as_data(tree, using={Category: public}) == {
+        "name": "kitchen",
+        "children": [{"name": "kettles", "children": []}],
+    }
+
+
+def test_a_serialiser_that_returns_what_it_was_given_is_walked_once() -> None:
+    assert as_data(HARBOR, using={Supplier: lambda supplier: supplier}) == {
+        "supplier_id": "S-07",
+        "name": "Harbor Metalworks",
+    }
+
+
+def test_a_serialiser_that_wraps_its_value_is_a_cycle() -> None:
+    with pytest.raises(SerializationError, match=r"value\['s'\] refers back"):
+        as_data(HARBOR, using={Supplier: lambda supplier: {"s": supplier}})
+
+
+def test_a_using_key_must_be_a_type() -> None:
+    with pytest.raises(SerializationError, match="using takes types as keys"):
+        as_data(HARBOR, using={list[int]: str})  # type: ignore[dict-item]
+
+
+def test_a_refusal_inside_a_serialiser_names_the_outer_path() -> None:
+    def strict(supplier: Supplier) -> Any:
+        return as_data(Decimal("1"))
+
+    with pytest.raises(
+        SerializationError,
+        match=r"value\['k'\]: the serialiser for Supplier raised SerializationError",
+    ) as caught:
+        as_data({"k": HARBOR}, using={Supplier: strict})
+    assert caught.value.context["path"] == "value['k']"
+    assert isinstance(caught.value.__cause__, SerializationError)
+
+
+def test_a_to_dict_that_returns_its_own_value_is_refused() -> None:
+    class Loop:
+        def to_dict(self) -> Any:
+            return self
+
+    with pytest.raises(
+        SerializationError, match=r"value: to_dict\(\) of Loop returned the value itself"
+    ):
+        as_data(Loop())
+
+
+@pytest.mark.parametrize("number", [float("nan"), float("inf"), float("-inf")])
+def test_a_float_json_cannot_write_is_refused(number: float) -> None:
+    with pytest.raises(
+        SerializationError, match=r"value\.weight_kg is a non-finite float"
+    ) as caught:
+        as_data(Product(**{**KETTLE.__dict__, "weight_kg": number}))
+    assert caught.value.context["path"] == "value.weight_kg"
+
+
+def test_a_value_nested_deeply_is_walked() -> None:
+    nested: list[Any] = []
+    for _ in range(900):
+        nested = [nested]
+    assert json.dumps(as_data(nested)) == "[" * 901 + "]" * 901
+
+
+def test_a_value_nested_past_what_the_walk_can_follow_is_refused() -> None:
+    nested: list[Any] = []
+    for _ in range(20_000):
+        nested = [nested]
+    with pytest.raises(SerializationError, match="nested too deeply"):
+        as_data(nested)

@@ -364,6 +364,50 @@ class TestCycles:
         assert validate_json_safe({"a": shared, "b": shared}) == []
 
 
+class _ToDictHoldingItself:
+    def to_dict(self) -> dict[str, Any]:
+        return {"name": "draft", "me": self}
+
+
+class TestCyclesThroughToDict:
+    def test_a_to_dict_that_holds_its_object_is_dropped_there(self) -> None:
+        assert sanitize_for_json(_ToDictHoldingItself()) == {"name": "draft"}
+        assert validate_json_safe(_ToDictHoldingItself()) == ["me (cycle)"]
+
+
+@dataclass
+class _Nest:
+    inner: Any
+
+
+class TestDepth:
+    """The walk follows nesting as deep as it did before it was shared."""
+
+    @pytest.mark.parametrize("kind", ["list", "dict", "dataclass"])
+    def test_deep_nesting_is_walked(self, kind: str) -> None:
+        value: Any = 1
+        for _ in range(900):
+            value = [value] if kind == "list" else {"a": value} if kind == "dict" else _Nest(value)
+        expected: Any = 1
+        for _ in range(900):
+            expected = (
+                [expected]
+                if kind == "list"
+                else {"a": expected}
+                if kind == "dict"
+                else {"inner": expected}
+            )
+        assert sanitize_for_json(value) == expected
+        assert validate_json_safe(value) == []
+
+
+class TestValidateIsQuiet:
+    def test_validate_logs_nothing(self, caplog: Any) -> None:
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_common.serialization"):
+            validate_json_safe({"a": _RaisingToDict(), "b": object()})
+        assert caplog.records == []
+
+
 class TestOnDropModes:
     """``on_drop`` names one of three modes; anything else is refused."""
 

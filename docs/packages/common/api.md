@@ -1124,12 +1124,14 @@ if not problems:
 #### `as_data(value: Any, *, using: Using | None = None) -> Any`
 
 Walk a value into JSON-shaped data, refusing what has no rule rather than
-dropping it. In order: a type in `using` → its serialiser, applied once (exact
-type first, then the first listed base); an `Enum` → its value; `None`, `bool`,
-`int`, `float`, `str` → itself; an object with a callable `to_dict()` → its
+dropping it. In order: a type in `using` → its serialiser, not applied again to
+the value it returned (exact type first, then the first listed base); an `Enum`
+→ its value; `None`, `bool`, `int`, `str` and a finite `float` → itself (NaN and
+infinity are refused); an object with a callable `to_dict()` → its
 result, walked (before the dataclass rule); a dataclass → its fields in
-declaration order; any `Mapping` → its items with keys written as `str()` (an
-`Enum` key as its value), two keys written the same refused; a list or tuple →
+declaration order; any `Mapping` → its items with keys written as `json.dumps`
+writes them (`None` as `"null"`; an `Enum` key as its value; a non-scalar key
+with `str()`), two keys written the same refused; a list or tuple →
 a list; a set or frozenset → a list sorted by each item's JSON; anything else →
 refused.
 
@@ -1142,13 +1144,21 @@ refused.
 
 **Raises:**
 - `SerializationError`: for a value no rule takes, two keys written the same,
-  a container that holds itself, or a `to_dict()` or serialiser that raised (the
-  original as `__cause__`). The message and `context["path"]` name the path,
+  a non-finite float, a container that holds itself, a value nested past the
+  recursion limit, or a `to_dict()` or serialiser that raised (the original as
+  `__cause__`). The message and `context["path"]` name the path,
   as in `value.notes['tare']`.
 
 **Example:**
 ```python
+from enum import Enum
+
 from dataknobs_common.serialization import as_data
+
+
+class Status(Enum):
+    ACTIVE = "active"
+
 
 as_data({"tags": frozenset({"b", "a"}), "status": Status.ACTIVE})
 # {"tags": ["a", "b"], "status": "active"}

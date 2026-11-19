@@ -15,9 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dataclasses. Where `sanitize_for_json` drops what it cannot convert, it
   raises `SerializationError` naming the path (`value.notes['tare']`, also in
   `context["path"]`). It uses a dataclass's own `to_dict()` before its fields,
-  carries a set as a sorted list and any `Mapping` as a dict with `str()` keys,
-  and refuses two keys that would be written the same. `using` is a per-call
-  table of serialisers by type (exported as `Using`). `fields_data(value,
+  carries a set as a sorted list and any `Mapping` as a dict with text keys
+  written as `json.dumps` writes them, and refuses two keys that would be
+  written the same, a NaN or infinite float, and a value that holds itself.
+  `using` is a per-call table of serialisers by type (exported as `Using`),
+  applied at every depth but not again to a serialiser's own result. `fields_data(value,
   **replaced)` is a dataclass's fields with some given in place of their value,
   refusing a name that is not a field. Both run on one traversal with
   `sanitize_for_json` and `validate_json_safe`, each a policy over it.
@@ -34,7 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"warn"` or `"error"` was treated as `"silent"`, so a misspelt `"error"`
   dropped data without saying so. Anything but the three modes now raises
   `ValueError`, and the parameter is typed `OnDrop`
-  (`Literal["silent", "warn", "error"]`).
+  (`Literal["silent", "warn", "error"]`). A caller that passes a variable
+  typed `str` now needs it typed `OnDrop` to pass mypy.
 
 - **`sanitize_for_json` returns `None` for a value it drops at the top
   level.** A dropped value is left out of the container holding it, but a
