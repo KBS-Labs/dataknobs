@@ -26,6 +26,10 @@
           "site": "copying.md"
         },
         {
+          "package": "guides/reply-schema.md",
+          "site": "reply-schema.md"
+        },
+        {
           "package": "guides/dotted-paths.md",
           "site": "dotted-paths.md"
         },

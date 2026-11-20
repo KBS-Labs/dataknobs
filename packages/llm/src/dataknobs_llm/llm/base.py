@@ -880,8 +880,9 @@ class LLMConfig(StructuredConfig):
     # object sets ``additionalProperties: false`` and lists every property in
     # ``required``. Set ``False`` to send a schema strict mode rejects, and
     # check what comes back. Ollama and Anthropic have no such choice: Ollama
-    # always constrains, and Anthropic always enforces (and requires that
-    # closed shape).
+    # always constrains, and Anthropic always enforces (and requires every
+    # object to set ``additionalProperties: false``, though not every property
+    # to be ``required``).
     response_schema_strict: bool = True
 
     # Function calling
