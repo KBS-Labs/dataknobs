@@ -8,9 +8,9 @@ from __future__ import annotations
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.clock import now_iso, utc_now
 from dataknobs_common.aws import AwsSessionConfig
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
@@ -223,7 +223,7 @@ class SyncS3Database(
         # Set metadata
         record_copy.metadata = record_copy.metadata or {}
         record_copy.metadata["id"] = storage_id
-        now = datetime.now(UTC)
+        now = utc_now()
         record_copy.metadata["created_at"] = now.isoformat()
         record_copy.metadata["updated_at"] = now.isoformat()
 
@@ -317,10 +317,11 @@ class SyncS3Database(
         # Preserve and update metadata
         record.metadata = record.metadata or {}
         record.metadata["id"] = id
-        record.metadata["created_at"] = existing_metadata.get(
-            "created_at", datetime.now(UTC).isoformat()
-        )
-        record.metadata["updated_at"] = datetime.now(UTC).isoformat()
+        # One read stamps both, so a record stored without a ``created_at``
+        # gets the same instant as its ``updated_at``.
+        now = now_iso()
+        record.metadata["created_at"] = existing_metadata.get("created_at", now)
+        record.metadata["updated_at"] = now
 
         # Update the object
         obj_data = self._record_to_s3_object(record)

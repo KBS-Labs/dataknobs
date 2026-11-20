@@ -3,11 +3,12 @@
 The records' behaviour is tested where they live,
 ``packages/common/tests/test_provenance.py``. What is pinned here is that bots'
 import path names the same objects, so an artifact's provenance is the common
-record and not a copy of it.
+record and not a copy of it, and its ``now_iso`` is the common clock's.
 """
 
 from __future__ import annotations
 
+from dataknobs_common import clock
 import dataknobs_common.provenance as common
 
 from dataknobs_bots import artifacts
@@ -20,21 +21,23 @@ NAMES = (
     "SourceReference",
     "ToolInvocation",
     "create_provenance",
-    "now_iso",
 )
 
 
 def test_bots_provenance_re_exports_the_common_records() -> None:
-    assert set(provenance.__all__) == set(NAMES)
+    assert set(provenance.__all__) == {*NAMES, "now_iso"}
     for name in NAMES:
         assert getattr(provenance, name) is getattr(common, name), name
 
 
+def test_bots_now_iso_is_the_common_clock() -> None:
+    assert provenance.now_iso is clock.now_iso
+
+
 def test_the_artifacts_package_exports_the_same_objects() -> None:
-    # Every name but ``now_iso``, which the package has never exported.
+    # ``now_iso`` is not among them: the package has never exported it.
     for name in NAMES:
-        if name != "now_iso":
-            assert getattr(artifacts, name) is getattr(common, name), name
+        assert getattr(artifacts, name) is getattr(common, name), name
 
 
 def test_an_artifact_carries_the_common_record() -> None:

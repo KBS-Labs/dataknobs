@@ -15,7 +15,6 @@ from dataknobs_common.provenance import (
     SourceReference,
     ToolInvocation,
     create_provenance,
-    now_iso,
 )
 ```
 
@@ -243,7 +242,9 @@ create_provenance(
 Every argument after `creation_method` is keyword-only. `created_at` defaults
 to now, in UTC; an unknown keyword raises `TypeError`.
 
-### now_iso()
+### Timestamps
 
-The current UTC time as an ISO 8601 string: the default for every
-timestamp above.
+Every timestamp above defaults to `now_iso()` from
+[`dataknobs_common.clock`](clock.md), so a test fixes it with `use_clock`.
+`dataknobs_bots.artifacts.provenance` still exports `now_iso`, as the same
+function.

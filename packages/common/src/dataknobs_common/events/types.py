@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import Enum
 from typing import Any
+from dataknobs_common.clock import utc_now
 
 
 class EventType(Enum):
@@ -74,7 +75,7 @@ class Event:
     type: EventType
     topic: str
     payload: dict[str, Any] = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = field(default_factory=utc_now)
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     source: str | None = None
     correlation_id: str | None = None
@@ -114,7 +115,7 @@ class Event:
             timestamp=(
                 datetime.fromisoformat(data["timestamp"])
                 if isinstance(data.get("timestamp"), str)
-                else data.get("timestamp", datetime.now(UTC))
+                else (data["timestamp"] if "timestamp" in data else utc_now())
             ),
             event_id=data.get("event_id", str(uuid.uuid4())),
             source=data.get("source"),
@@ -175,7 +176,7 @@ class Subscription:
     topic: str
     handler: Any  # Callable[[Event], Any] - Any to avoid complex typing
     pattern: str | None = None
-    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = field(default_factory=utc_now)
 
     # This will be set by the event bus that creates the subscription
     _cancel_callback: Any = field(default=None, repr=False)

@@ -115,6 +115,7 @@ from dataknobs_common.testing.elasticsearch_fixtures import (
 from dataknobs_common.testing.import_roots import (
     declare_import_root,
 )
+from dataknobs_common.testing.fixed_clock import FixedClock
 from dataknobs_common.testing.factory_parity import (
     assert_config_attribute_access_matches_dataclass,
     assert_ctor_reads_documented_keys,
@@ -156,6 +157,7 @@ __all__ = [
     "AdHocImportFinding",
     "BroadExceptFinding",
     "DataclassSweep",
+    "FixedClock",
     "Supplied",
     "UnbuildableError",
     "assert_config_attribute_access_matches_dataclass",

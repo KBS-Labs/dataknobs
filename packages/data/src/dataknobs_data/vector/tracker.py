@@ -9,9 +9,10 @@ import asyncio
 import logging
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.clock import utc_now
 from dataknobs_common.callbacks import run_callback_off_loop
 
 from .content import CONTENT_HASH_KEY, recompute_content_hash
@@ -33,7 +34,7 @@ class ChangeEvent:
     field_name: str
     old_value: Any
     new_value: Any
-    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = field(default_factory=utc_now)
     event_type: str = "update"  # create, update, delete
 
     def __repr__(self) -> str:
@@ -52,7 +53,7 @@ class UpdateTask:
     vector_fields: set[str]
     source_fields: dict[str, Any]  # source field -> new value
     priority: int = 0
-    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = field(default_factory=utc_now)
     attempts: int = 0
     last_error: str | None = None
 

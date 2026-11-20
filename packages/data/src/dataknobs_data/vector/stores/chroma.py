@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import uuid4
 
+from dataknobs_common.clock import utc_now
 from dataknobs_common.capabilities import Capability
 
 from ..types import DistanceMetric
@@ -612,7 +613,7 @@ class ChromaVectorStore(VectorStore[ChromaVectorStoreConfig]):
         decoded_by_id = {rid: self._decode_metadata(raw) for rid, raw in stored_by_id.items()}
         self._reject_out_of_scope_ids(decoded_by_id)
 
-        now = datetime.now(UTC)
+        now = utc_now()
         # The configured ``domain_id`` is defaulted in here rather than
         # in each caller, for the same reason the guard above is: both
         # write paths reach this method, and the decoded stored rows the
@@ -1031,7 +1032,7 @@ class ChromaVectorStore(VectorStore[ChromaVectorStoreConfig]):
             for i, rid in enumerate(existing_ids)
         }
 
-        now = datetime.now(UTC)
+        now = utc_now()
         matched = 0
         # The configured ``domain_id`` is defaulted back in, exactly as
         # ``add_vectors`` does it: this path replaces the metadata dict
@@ -1125,7 +1126,7 @@ class ChromaVectorStore(VectorStore[ChromaVectorStoreConfig]):
         ids = self._as_list(result.get("ids"))
         metadatas = self._as_list(result.get("metadatas"))
 
-        now = datetime.now(UTC)
+        now = utc_now()
         matched = 0
         update_ids: list[str] = []
         update_metadatas: list[dict[str, Any]] = []

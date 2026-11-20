@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every aware timestamp the data package writes reads
+  `dataknobs_common.clock`**, so `use_clock` fixes it in a test: the S3
+  backends' `created_at` / `updated_at`, the in-process vector stores'
+  (`memory`, `faiss`, `chroma`) `_created_at` / `_updated_at`, the vector
+  tracker, sync and migration status, and the per-user state store's
+  `_written_at` and retention clock when no `now` component is injected. An
+  injected `now` still wins. No value changes. Server-side timestamps
+  (pgvector, Postgres) are the server's own and are not reached, nor are
+  migration progress's epoch-float `timestamp`s from `time.time()`.
+
 - **BREAKING: the backend, vector-store and user-state configs are no longer
   hashable**, as no `StructuredConfig` now is (see `dataknobs-common`).
   `isinstance(cfg, Hashable)` answered True for them while `hash()` raised for
@@ -1693,6 +1703,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **A sync S3 `update` stamps `created_at` and `updated_at` from one read of
+  the clock.** For a stored object with no `created_at`, the two stamps came
+  from two reads and differed by microseconds; they are now the same instant,
+  as `AsyncS3Database` already wrote them.
 
 - **`OntologyRegistry` refuses a malformed document top level as the loader
   does, on every door.** A document with no `id:` raises a `ConfigFieldError`

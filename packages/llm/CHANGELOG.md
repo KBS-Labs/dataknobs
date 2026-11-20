@@ -259,6 +259,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every aware timestamp the llm package writes reads
+  `dataknobs_common.clock`**, so `use_clock` fixes it in a test: prompt
+  versions, A/B experiments and usage metrics, the model-limits resource's
+  verified date, and the wait until a provider's retry-after instant. No
+  value changes. The naive local stamps (a conversation's `created_at` /
+  `updated_at` and its nodes' `timestamp`, the prompt builders' rendered
+  `timestamp`) are not reached.
+
 - **BREAKING: `LLMConfig`, `ModelProfile`, `ModelPricing` and
   `HistoryRedaction` are no longer hashable**, as no `StructuredConfig` now is
   (see `dataknobs-common`). `ModelProfile`, `ModelPricing` and

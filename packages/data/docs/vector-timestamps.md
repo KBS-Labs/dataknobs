@@ -111,10 +111,15 @@ Timestamps are **backend-local** — compare within a store, not across:
 
 | Backend | Clock source |
 |---------|--------------|
-| `MemoryVectorStore` | Python `datetime.now(UTC)` (aware UTC) |
-| `FaissVectorStore` | Python `datetime.now(UTC)` (aware UTC) |
-| `ChromaVectorStore` | Python `datetime.now(UTC)` (aware UTC) |
+| `MemoryVectorStore` | `dataknobs_common.clock.utc_now()` (aware UTC) |
+| `FaissVectorStore` | `dataknobs_common.clock.utc_now()` (aware UTC) |
+| `ChromaVectorStore` | `dataknobs_common.clock.utc_now()` (aware UTC) |
 | `PgVectorStore` | Postgres server `NOW()` (naive `TIMESTAMP`) |
+
+The three in-process stores read the library's clock, so `use_clock` fixes
+their stamps in a test (see the
+[clock guide](https://kbs-labs.github.io/dataknobs/packages/common/clock/)).
+`PgVectorStore`'s stamps are the server's own and are not reached.
 
 In the `epoch` format, naive datetimes (pgvector) are converted using
 the system's local-time interpretation, while aware datetimes

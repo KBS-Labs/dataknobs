@@ -30,9 +30,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from dataknobs_common.clock import utc_now
 
 if TYPE_CHECKING:
     from dataknobs_bots.knowledge.rag import RAGKnowledgeBase
@@ -95,8 +96,8 @@ class EnsureIngestionResult:
     total_chunks: int = 0
     errors: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
-    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    completed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    started_at: datetime = field(default_factory=utc_now)
+    completed_at: datetime = field(default_factory=utc_now)
 
     @property
     def success(self) -> bool:
@@ -142,7 +143,7 @@ class EnsureIngestionResult:
         ``IngestionResult.completed_at`` is ``datetime | None`` because
         the type models in-flight operations. ``EnsureIngestionResult``
         is terminal-state only, so when the source has not yet
-        completed we stamp ``datetime.now(UTC)`` at the
+        completed we stamp ``utc_now()`` at the
         boundary rather than weakening the invariant.
 
         Args:
@@ -151,7 +152,7 @@ class EnsureIngestionResult:
         Returns:
             Equivalent EnsureIngestionResult
         """
-        completed_at = result.completed_at or datetime.now(UTC)
+        completed_at = result.completed_at or utc_now()
         return cls(
             total_files=result.files_processed,
             total_chunks=result.chunks_created,
@@ -236,7 +237,7 @@ class KnowledgeIngestionService:
         documents_path = kb_config.get("documents_path")
         if not documents_path:
             result.error = "No documents_path specified in knowledge_base config"
-            result.completed_at = datetime.now(UTC)
+            result.completed_at = utc_now()
             return result
 
         # Resolve path
@@ -250,7 +251,7 @@ class KnowledgeIngestionService:
 
         if not docs_path.exists():
             result.error = f"Documents path does not exist: {documents_path}"
-            result.completed_at = datetime.now(UTC)
+            result.completed_at = utc_now()
             return result
 
         document_pattern = kb_config.get("document_pattern", "**/*.md")
@@ -291,7 +292,7 @@ class KnowledgeIngestionService:
             self._logger.error("Ingestion failed: %s", e)
             result.error = str(e)
 
-        result.completed_at = datetime.now(UTC)
+        result.completed_at = utc_now()
         return result
 
     async def ensure_ingested(

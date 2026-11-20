@@ -8,9 +8,9 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
+from dataknobs_common.clock import now_iso
 from dataknobs_common.aws import create_aioboto3_session
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
@@ -167,7 +167,7 @@ class AsyncS3Database(
         record_dict = record.to_dict(include_metadata=True, flatten=False)
 
         # Add timestamps
-        now = datetime.now(UTC).isoformat()
+        now = now_iso()
         if "metadata" not in record_dict:
             record_dict["metadata"] = {}
         record_dict["metadata"]["created_at"] = record_dict["metadata"].get("created_at", now)

@@ -41,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A stream from `S3KnowledgeBackend.stream_file` read after `close()`
+  raises `RuntimeError("Backend not initialized")`,** as every other call on a
+  closed backend does. It raised `AttributeError` on `None`, because the check
+  ran when `stream_file` was called and not when the stream was read.
+
 - **A persona review reaches the provider.** `ReviewExecutor` sent its
   prompt as a plain dict, which no shipped provider reads as a message
   (`'dict' object has no attribute 'role'`), so every persona review failed
@@ -202,6 +207,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package that lives in.
 
 ### Changed
+
+- **Every aware timestamp bots writes reads `dataknobs_common.clock`**, so
+  `use_clock` fixes it in a test: artifacts, their provenance and revisions,
+  rubric evaluations, assessment sessions, the logging middleware's records,
+  config drafts, API error bodies, knowledge-base ingestion and storage
+  stamps, and bot registrations. No value changes. A config draft's expiry
+  is measured on the same clock, so a test ages a draft by advancing it.
+  Epoch-float stamps from `time.time()` (wizard stage-entry and snapshot
+  times, memory-bank `created_at` / `updated_at`, reasoning observability)
+  are not reached.
+  `dataknobs_bots.artifacts.provenance.now_iso` is still exported, and is now
+  the same function as `dataknobs_common.clock.now_iso`.
 
 - **BREAKING: provenance records are frozen, and live in `dataknobs-common`.**
   `dataknobs_bots.artifacts.provenance` now re-exports the records from

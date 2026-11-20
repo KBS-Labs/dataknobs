@@ -54,9 +54,10 @@ import hashlib
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
+from dataknobs_common.clock import utc_now
 from dataknobs_common.callbacks import CallbackRegistry
 from dataknobs_common.capabilities import (
     Capability,
@@ -503,10 +504,11 @@ class _UserStateStoreCommon(Generic[_DatabaseT]):
         self._register_reserved_sections()
         # The clock is an injected collaborator (a ``Callable`` is not config
         # data — it round-trips a frozen config by identity only), defaulting
-        # to wall-clock UTC. It stamps ``_written_at`` and drives retention
-        # expiry, so a test can advance a fake clock instead of sleeping.
+        # to the common clock, so ``use_clock`` reaches it when none was
+        # injected. It stamps ``_written_at`` and drives retention expiry, so
+        # a test can advance a fixed clock instead of sleeping.
         injected_now = self.components.get("now")
-        self._now = injected_now if injected_now is not None else (lambda: datetime.now(UTC))
+        self._now = injected_now if injected_now is not None else utc_now
         self._callbacks = CallbackRegistry()
         event_bus = self.components.get("event_bus")
         if event_bus is not None:

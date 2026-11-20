@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from dataknobs_common.testing import FixedClock
 
 from dataknobs_common.exceptions import ConfigurationError, ConsentRequiredError
 from dataknobs_common.tenancy import BoundTenantContext
@@ -48,19 +49,6 @@ _SECTIONS = [
 ]
 
 _START = datetime(2026, 1, 1, tzinfo=UTC)
-
-
-class _Clock:
-    """A deterministic, advanceable UTC clock injected as the ``now`` component."""
-
-    def __init__(self, start: datetime) -> None:
-        self.value = start
-
-    def __call__(self) -> datetime:
-        return self.value
-
-    def advance(self, **kwargs: Any) -> None:
-        self.value = self.value + timedelta(**kwargs)
 
 
 def _config(**overrides: Any) -> dict[str, Any]:
@@ -228,11 +216,11 @@ def test_no_op_delete_appends_no_event_sync() -> None:
 
 
 async def test_single_section_prune_appends_event_async() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = await AsyncUserStateStore.from_config(_config(), now=clock)
     try:
         await store.add_record("u1", "activity", {"event": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
 
         assert await store.prune("u1", "activity") == 1
 
@@ -247,11 +235,11 @@ async def test_single_section_prune_appends_event_async() -> None:
 
 
 def test_single_section_prune_appends_event_sync() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = UserStateStore.from_config(_config(), now=clock)
     try:
         store.add_record("u1", "activity", {"event": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
 
         assert store.prune("u1", "activity") == 1
         prune_events = [e for e in store.query_events("u1") if e.data["op"] == "prune"]
@@ -265,11 +253,11 @@ def test_single_section_prune_appends_event_sync() -> None:
 
 
 async def test_section_less_prune_appends_split_event_async() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = await AsyncUserStateStore.from_config(_config(), now=clock)
     try:
         await store.add_record("u1", "activity", {"event": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
 
         assert await store.prune("u1") == 1
 
@@ -284,11 +272,11 @@ async def test_section_less_prune_appends_split_event_async() -> None:
 
 
 def test_section_less_prune_appends_split_event_sync() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = UserStateStore.from_config(_config(), now=clock)
     try:
         store.add_record("u1", "activity", {"event": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
 
         assert store.prune("u1") == 1
         prune_events = [e for e in store.query_events("u1") if e.data["op"] == "prune"]
@@ -302,7 +290,7 @@ def test_section_less_prune_appends_split_event_sync() -> None:
 
 
 async def test_empty_prune_appends_no_event_async() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = await AsyncUserStateStore.from_config(_config(), now=clock)
     try:
         await store.add_record("u1", "activity", {"event": "fresh"})
@@ -441,11 +429,11 @@ def test_query_events_raises_when_disabled_sync() -> None:
 
 
 async def test_event_log_honours_retention_window_async() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = await AsyncUserStateStore.from_config(_config(event_log_retention_days=30), now=clock)
     try:
         await store.add_record("u1", "alerts", {"text": "old"})  # logs 1 event
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
 
         # Section-less prune sweeps the windowed ``events`` section too; the
         # single old add_record event is past the 30-day window.
@@ -458,11 +446,11 @@ async def test_event_log_honours_retention_window_async() -> None:
 
 
 def test_event_log_honours_retention_window_sync() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = UserStateStore.from_config(_config(event_log_retention_days=30), now=clock)
     try:
         store.add_record("u1", "alerts", {"text": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
 
         store.prune("u1")
         remaining_ops = sorted(e.data["op"] for e in store.query_events("u1"))

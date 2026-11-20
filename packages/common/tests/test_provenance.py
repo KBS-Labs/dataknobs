@@ -13,6 +13,7 @@ import re
 
 import pytest
 
+from dataknobs_common.clock import now_iso
 from dataknobs_common.provenance import (
     LLMInvocation,
     ProvenanceRecord,
@@ -20,7 +21,6 @@ from dataknobs_common.provenance import (
     SourceReference,
     ToolInvocation,
     create_provenance,
-    now_iso,
 )
 
 AT = "2026-11-19T12:00:00+00:00"
@@ -334,7 +334,6 @@ def test_the_names_are_reached_from_the_module_not_the_package_door() -> None:
         "SourceReference",
         "ToolInvocation",
         "create_provenance",
-        "now_iso",
     }
     assert not set(provenance.__all__) & set(dataknobs_common.__all__)
 

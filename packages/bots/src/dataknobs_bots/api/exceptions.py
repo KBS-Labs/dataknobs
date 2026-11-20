@@ -82,7 +82,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Mapping
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
 from functools import partial
@@ -91,6 +91,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 from uuid import UUID
 
+from dataknobs_common.clock import now_iso
 from dataknobs_common.exceptions import (
     ConcurrencyError as CommonConcurrencyError,
 )
@@ -324,7 +325,7 @@ def _error_body(
         "error": error_code,
         "message": message,
         "detail": detail,
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": now_iso(),
     }
 
 
@@ -773,7 +774,7 @@ def _error_response(
     status_code: int,
     content: dict[str, Any],
     headers: dict[str, str] | None = None,
-) -> JSONResponse:  # type: ignore[name-defined]
+) -> JSONResponse:
     """Build the JSON response every handler in this module returns.
 
     Split from :func:`_error_body` so ``api_error_handler`` can keep routing
@@ -822,9 +823,9 @@ def _error_response(
 
 
 async def api_error_handler(
-    request: Request,  # type: ignore[name-defined]
+    request: Request,
     exc: APIError,
-) -> JSONResponse:  # type: ignore[name-defined]
+) -> JSONResponse:
     """Handle API errors with standardized response format.
 
     Args:
@@ -888,11 +889,11 @@ async def api_error_handler(
 
 
 async def dataknobs_error_handler(
-    request: Request,  # type: ignore[name-defined]
+    request: Request,
     exc: DataknobsError,
     *,
     table: Mapping[type[DataknobsError], ErrorPolicy] | None = None,
-) -> JSONResponse:  # type: ignore[name-defined]
+) -> JSONResponse:
     """Handle a DataKnobs error according to its resolved policy.
 
     Without this handler every ``DataknobsError`` that is not an ``APIError``
@@ -957,9 +958,9 @@ async def dataknobs_error_handler(
 
 
 async def http_exception_handler(
-    request: Request,  # type: ignore[name-defined]
-    exc: HTTPException,  # type: ignore[name-defined]
-) -> JSONResponse:  # type: ignore[name-defined]
+    request: Request,
+    exc: HTTPException,
+) -> JSONResponse:
     """Handle FastAPI HTTP exceptions.
 
     Args:
@@ -980,9 +981,9 @@ async def http_exception_handler(
 
 
 async def general_exception_handler(
-    request: Request,  # type: ignore[name-defined]
+    request: Request,
     exc: Exception,
-) -> JSONResponse:  # type: ignore[name-defined]
+) -> JSONResponse:
     """Handle unexpected exceptions.
 
     Args:
@@ -1055,7 +1056,7 @@ def _reject_unreachable_policy_keys(
 
 
 def register_exception_handlers(
-    app: FastAPI,  # type: ignore[name-defined]
+    app: FastAPI,
     *,
     error_policy: Mapping[type[DataknobsError], ErrorPolicy] | None = None,
 ) -> Mapping[type[DataknobsError], ErrorPolicy]:

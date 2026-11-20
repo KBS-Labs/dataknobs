@@ -40,6 +40,9 @@ dev = [
     # its config, exceptions and session modules. Stubs rather than an
     # ignore_missing_imports override, which would type all three as Any.
     "botocore-stubs>=1.34.0",
+    # boto3 is imported directly by the S3 connection pool and the model-limits
+    # tool, and ships no stubs either; the same reasoning applies.
+    "boto3-stubs>=1.34.0",
     "numpy>=1.24.0",
     "jupyter>=1.1.1",
     "ipywidgets>=8.1.5",

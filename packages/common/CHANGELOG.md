@@ -475,9 +475,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`dataknobs_common.clock`: one read of the current time, and a seam a
+  test fixes it with.** `utc_now()` returns the current time as an aware UTC
+  `datetime` and `now_iso()` as an ISO 8601 string; with no clock set they are
+  `datetime.now(UTC)` and its `isoformat()`. `use_clock(clock)` sets the clock
+  for the current context, so it reaches every aware stamp made under it,
+  dataclass defaults included, and restores the previous clock when the block
+  ends. `asyncio` tasks, `asyncio.to_thread` and
+  `asyncio.run_coroutine_threadsafe` carry it; `loop.run_in_executor`, a
+  `ThreadPoolExecutor` worker, a bare thread and the `aiter_sync_in_thread`
+  producer read `system_clock`. A clock returning a value in
+  another zone is read as UTC, and one returning a naive value is refused
+  with `ValueError`. Every aware timestamp in `dataknobs_common` (provenance
+  records, `Event.timestamp`, `Subscription.created_at`) reads it; the
+  registries' `registered_at`, an epoch float from `time.time()`, does not. Import the
+  names from the module; they are not exported from `dataknobs_common`.
+
+- **`dataknobs_common.testing.FixedClock`.** A clock that returns the instant
+  it holds, with `advance(delta)` and `set(at)`; `set` accepts an earlier
+  instant, so a test can reproduce a wall clock corrected backwards. A naive
+  instant is refused with `ValueError`, and anything other than a `datetime`
+  with `TypeError`. It works under `use_clock` and wherever a constructor
+  takes a clock.
+
 - **`dataknobs_common.provenance`: provenance records outside bots, frozen.**
   `SourceReference`, `ToolInvocation`, `LLMInvocation`, `RevisionRecord` and
-  `ProvenanceRecord`, with `create_provenance` and `now_iso`, move here from
+  `ProvenanceRecord`, with `create_provenance`, move here from
   `dataknobs_bots.artifacts.provenance`, which re-exports the same objects, so
   content written with a model can record its sources, tools, model calls and
   revisions without dataknobs-bots. The records are frozen dataclasses: a
@@ -496,8 +519,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   set, so a record that uses none of them serialises exactly as before and a
   stored record reads back unchanged. `create_provenance` takes its optional
   fields as typed keywords (any iterable, any mapping) rather than
-  `**kwargs`. `from_dict` reads any mapping. Import the names from the
-  module; they are not exported from `dataknobs_common`.
+  `**kwargs`. `from_dict` reads any mapping. A timestamp left unset reads
+  `dataknobs_common.clock.now_iso`. Import the names from the module; they
+  are not exported from `dataknobs_common`.
 
 - **`dataknobs_common.reply_schema`: JSON Schemas for a model's reply, closed
   by construction.** `strict(properties)` builds an object from a mapping of

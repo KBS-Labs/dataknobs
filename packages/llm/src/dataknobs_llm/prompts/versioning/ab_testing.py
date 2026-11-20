@@ -14,8 +14,9 @@ import uuid
 import hashlib
 import random
 from typing import Any, Dict, List
-from datetime import UTC, datetime
+from datetime import datetime
 
+from dataknobs_common.clock import utc_now
 from dataknobs_llm.exceptions import VersioningError
 
 from .store import ExperimentStore, InMemoryVersionStore, require_store
@@ -125,7 +126,7 @@ class ABTestManager:
             prompt_type=prompt_type,
             variants=variants,
             traffic_split=traffic_split,
-            start_date=datetime.now(UTC),
+            start_date=utc_now(),
             status="running",
             metadata=metadata or {},
         )
@@ -251,7 +252,7 @@ class ABTestManager:
         experiment.status = status
 
         if status == "completed" and end_date is None:
-            experiment.end_date = datetime.now(UTC)
+            experiment.end_date = utc_now()
         elif end_date:
             experiment.end_date = end_date
 

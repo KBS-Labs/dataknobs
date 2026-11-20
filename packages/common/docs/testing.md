@@ -12,6 +12,7 @@ Test utilities for dataknobs packages including service availability checks, pyt
 - [Sync/Async Twin Parity](#syncasync-twin-parity)
 - [Error Text Disclosure Guard](#error-text-disclosure-guard)
 - [Async Blocking Detection](#async-blocking-detection)
+- [A Fixed Clock](#a-fixed-clock)
 - [Declaring a Test Import Root](#declaring-a-test-import-root)
 - [Shared Integration Fixtures: Postgres and Elasticsearch](#shared-integration-fixtures-postgres-and-elasticsearch)
 - [Usage Examples](#usage-examples)
@@ -900,6 +901,34 @@ async def test_put_does_not_block(backend):
     with assert_no_blocking():
         await backend.put_file("kb", "doc.md", b"...")
 ```
+
+---
+
+## A Fixed Clock
+
+`FixedClock` returns the instant it holds, so a test can assert a timestamp's
+value rather than only that one exists. Set it for a block with `use_clock`
+from `dataknobs_common.clock`, which every aware `datetime` timestamp the
+library writes reads, or pass it where a constructor takes a clock:
+
+```python
+from datetime import UTC, datetime, timedelta
+
+from dataknobs_common.clock import now_iso, use_clock
+from dataknobs_common.testing import FixedClock
+
+clock = FixedClock(datetime(2026, 1, 1, tzinfo=UTC))
+with use_clock(clock):
+    assert now_iso() == "2026-01-01T00:00:00+00:00"
+    clock.advance(timedelta(days=40))
+    clock.set(datetime(2025, 12, 31, tzinfo=UTC))   # a step backwards, on purpose
+```
+
+A naive start or `set` is refused with `ValueError`. The
+[clock guide](https://kbs-labs.github.io/dataknobs/packages/common/clock/) covers
+where `use_clock` reaches and where it does not: epoch-float (`time.time()`)
+and naive (`datetime.now()`) stamps are outside it, and so is a thread that
+does not copy the context.
 
 ---
 

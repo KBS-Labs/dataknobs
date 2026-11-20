@@ -90,6 +90,7 @@ from typing import (
 if TYPE_CHECKING:
     from .model_profile import ModelPricing
 
+from dataknobs_common.clock import utc_now
 from dataknobs_common.exceptions import (
     OperationError,
     RateLimitError,
@@ -1533,7 +1534,7 @@ class LLMProvider(ABC):
             return None
         if when.tzinfo is None:
             when = when.replace(tzinfo=UTC)
-        return max(0.0, (when - datetime.now(UTC)).total_seconds())
+        return max(0.0, (when - utc_now()).total_seconds())
 
     @abstractmethod
     def initialize(self) -> None:

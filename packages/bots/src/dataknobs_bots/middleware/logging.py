@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.clock import now_iso
 from .base import Middleware
 
 if TYPE_CHECKING:
@@ -78,7 +78,7 @@ class LoggingMiddleware(Middleware):
             None (no message transform).
         """
         log_data: dict[str, Any] = {
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": now_iso(),
             "event": "user_message",
             "mode": turn.mode.value,
             "client_id": turn.context.client_id,
@@ -107,7 +107,7 @@ class LoggingMiddleware(Middleware):
             turn: Completed turn state.
         """
         log_data: dict[str, Any] = {
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": now_iso(),
             "event": "turn_complete",
             "mode": turn.mode.value,
             "client_id": turn.context.client_id,
@@ -151,7 +151,7 @@ class LoggingMiddleware(Middleware):
             context: Bot context
         """
         log_data = {
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": now_iso(),
             "event": "error",
             "client_id": context.client_id,
             "user_id": context.user_id,
@@ -174,7 +174,7 @@ class LoggingMiddleware(Middleware):
             context: Bot context
         """
         log_data = {
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": now_iso(),
             "event": "hook_error",
             "hook_name": hook_name,
             "client_id": context.client_id,
