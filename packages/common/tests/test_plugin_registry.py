@@ -1652,14 +1652,21 @@ class TestAFactorysTextStaysOutOfTheMessage:
             "subclass-of-NotFoundError",
         ],
     )
+    @pytest.mark.parametrize("flavour", ["sync", "async"])
     async def test_the_family_is_kept_and_the_text_is_not(
-        self, lane: str, raised: Exception, family: type[Exception]
+        self, lane: str, raised: Exception, family: type[Exception], flavour: str
     ) -> None:
+        if lane in ("get", "create") and flavour == "async":
+            pytest.skip("a synchronous lane refuses an async factory before it runs")
+
         def factory(*args: Any, **kwargs: Any) -> BaseHandler:
             raise raised
 
+        async def async_factory(*args: Any, **kwargs: Any) -> BaseHandler:
+            raise raised
+
         registry = PluginRegistry[BaseHandler]("outer")
-        registry.register("leaky", factory)
+        registry.register("leaky", factory if flavour == "sync" else async_factory)
 
         with pytest.raises(family) as caught:
             await _call_lane(registry, lane, "leaky")
@@ -1727,6 +1734,30 @@ class TestARegistrysOwnErrorCrossesAFactoryUnchanged:
 
         assert str(caught.value).startswith("Failed to create plugin 'sub' (RuntimeError)")
         assert _DSN not in str(caught.value)
+
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_a_registry_miss_outside_the_two_families_is_still_wrapped(
+        self, lane: str
+    ) -> None:
+        """A registry raising ``ValueError`` for a miss does not widen the outer types.
+
+        Its text is the registry's, but passing it through would make the outer
+        call raise ``ValueError``, which it never did. Only the two families
+        cross unchanged.
+        """
+        inner = PluginRegistry[BaseHandler]("inner", not_found_exception=ValueError)
+        registry = PluginRegistry[BaseHandler]("outer")
+
+        def composite(*args: Any, **kwargs: Any) -> BaseHandler:
+            return inner.create("sub")
+
+        registry.register("composite", composite)
+
+        with pytest.raises(OperationError) as caught:
+            await _call_lane(registry, lane, "composite")
+
+        assert str(caught.value).startswith("Failed to create plugin 'composite' (ValueError)")
+        assert isinstance(caught.value.__cause__, ValueError)
 
     @pytest.mark.parametrize("lane", _LANES)
     async def test_a_foreign_error_is_wrapped_in_every_lane(self, lane: str) -> None:

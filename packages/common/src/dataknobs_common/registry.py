@@ -114,15 +114,21 @@ def _ours(exc: _Raised) -> _Raised:
     """Mark ``exc`` as raised by a registry in this module, and return it.
 
     A registry bounds the text of what a factory raises, because a factory's
-    text can carry the connection URL it was handed. An error a registry
-    raised itself -- a nested lookup that missed, a nested factory already
-    bounded, a ``validate_type`` refusal -- is text this module wrote, and
-    passes through an outer factory unchanged. The type cannot tell the two
-    apart, since ``NotFoundError`` and ``OperationError`` are public bases any
+    text can carry the connection URL it was handed. A ``NotFoundError`` or
+    ``OperationError`` a registry raised itself -- a nested lookup that
+    missed, a nested factory already bounded, a ``validate_type`` refusal --
+    is text this module wrote, and passes through an outer factory unchanged.
+    The type cannot tell the two apart, since both are public bases any
     factory may raise with its own words; the mark can.
 
-    Every ``raise`` in this module goes through here. One that does not is
-    bounded like a factory's error, which loses detail and leaks nothing.
+    Every ``NotFoundError``, ``OperationError`` and ``not_found_exception``
+    this module raises goes through here. The mark is on the instance, so a
+    factory re-raising a registry's error passes it on as the registry's,
+    while one raising a new error ``from`` it does not. A marked error outside
+    the two families (a ``not_found_exception`` of ``ValueError``) is still
+    wrapped, which keeps the types an outer caller catches to those two.
+    A raise that forgets the mark is bounded like a factory's error, which
+    loses detail and leaks nothing.
     """
     setattr(exc, _RAISED_BY_A_REGISTRY, True)
     return exc
@@ -1044,7 +1050,8 @@ class PluginRegistry(Generic[T]):
         the type says nothing about who wrote the text: ``OperationError`` is
         a public base a factory raises with its own words.
 
-        An error a registry raised itself passes through unchanged. A
+        A ``NotFoundError`` or ``OperationError`` a registry raised itself
+        passes through unchanged. A
         composite factory that resolves a sub-component through another
         registry and misses raises that registry's ``NotFoundError``, and the
         caller sees it with the inner key named.
@@ -2174,14 +2181,17 @@ class PluginRegistry(Generic[T]):
         each one's ``except``. An error a registry raised passes through as
         itself; anything else becomes a bounded error naming the key, the
         registry and the original type, with the original on ``__cause__``.
-        The factory's text and ``context`` stay out, because a factory builds
+        Only the two families pass through, so the outer call raises no type
+        it did not raise before. The factory's text and ``context`` stay out, because a factory builds
         a backend from deployment config and either can carry the connection
         URL it was handed.
 
         A ``NotFoundError`` keeps its family, so a caller catching it still
         does; everything else becomes an ``OperationError``.
         """
-        if getattr(exc, _RAISED_BY_A_REGISTRY, False):
+        if isinstance(exc, (NotFoundError, OperationError)) and getattr(
+            exc, _RAISED_BY_A_REGISTRY, False
+        ):
             raise exc
         family = NotFoundError if isinstance(exc, NotFoundError) else OperationError
         raise _ours(

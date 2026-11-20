@@ -806,8 +806,8 @@ and the original type, the original is on `__cause__`, and the factory's text
 and `context` stay out, since either can carry the connection URL the factory
 was handed. A `NotFoundError` (or subclass) from the factory comes back as a
 `NotFoundError`, and anything else as an `OperationError`, so `except
-NotFoundError` and `except OperationError` keep catching what they did. An
-error a registry raised passes through unchanged, so a composite factory whose
+NotFoundError` and `except OperationError` keep catching what they did. A
+`NotFoundError` or `OperationError` a registry raised passes through unchanged, so a composite factory whose
 own lookup through another registry misses raises that registry's
 `NotFoundError`, naming the inner key.
 

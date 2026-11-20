@@ -21,8 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - anything else, `OperationError` and its subclasses included, becomes a
     bounded `OperationError`;
   - the original is on `__cause__`;
-  - an error a registry raised, such as a nested registry's miss inside a
-    composite factory, still passes through as itself.
+  - a `NotFoundError` or `OperationError` a registry raised, such as a
+    nested registry's miss inside a composite factory, still passes through
+    as itself.
 
   `except NotFoundError` and `except OperationError` catch what they caught
   before. **A caller catching a narrower class raised inside a factory**, for

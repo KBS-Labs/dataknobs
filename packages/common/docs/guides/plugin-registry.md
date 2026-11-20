@@ -275,7 +275,7 @@ the connection URL it was handed.
 |---|---|
 | a `NotFoundError`, or a subclass | `NotFoundError("Failed to create plugin '<key>' (<type>)")` |
 | anything else, `OperationError` and its subclasses included | `OperationError("Failed to create plugin '<key>' (<type>)")` |
-| an error a registry raised | that error, unchanged |
+| a `NotFoundError` or `OperationError` a registry raised | that error, unchanged |
 
 So a caller catching either base catches what it caught before. One catching
 a *subclass* raised inside the factory finds it on `__cause__`. The type is
@@ -283,8 +283,11 @@ not enough to exempt an error from the bound, because it says nothing about
 who wrote the text: `OperationError` is a public base a factory raises with
 its own words.
 
-An error a *registry* raised is text this module wrote, so it passes through
-an outer factory as itself. A composite factory that resolves a sub-component
+A `NotFoundError` or `OperationError` a *registry* raised is text this module
+wrote, so it passes through an outer factory as itself. A registry whose
+`not_found_exception` is outside those families, such as `ValueError`, still
+has its miss wrapped in `OperationError`, so an outer call raises only the
+types it always has. A composite factory that resolves a sub-component
 through another registry and misses raises that registry's `NotFoundError`,
 with the inner key named:
 
