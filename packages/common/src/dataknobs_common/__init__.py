@@ -392,6 +392,7 @@ from dataknobs_common.registry import (
     PluginRegistry,
     Registry,
 )
+from dataknobs_common.reply_schema import STRING, array, strict
 from dataknobs_common.resolver import (
     AsyncCachedResolver,
     AsyncCallableResolver,
@@ -622,6 +623,10 @@ __all__ = [
     "freeze_structure",
     "thaw_structure",
     "FrozenMapping",
+    # Closed JSON Schemas for a model's reply
+    "STRING",
+    "array",
+    "strict",
     # Metadata helpers
     "enforce_immutable_keys",
     # Pack composition

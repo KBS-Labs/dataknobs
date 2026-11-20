@@ -1385,6 +1385,9 @@ A stated schema is honoured or refused by name, never ignored:
   without that is refused by the vendor with a 400, raised as
   `ValidationError`. Ollama takes either. For a schema strict mode rejects,
   set `response_schema_strict=False` on OpenAI and check what comes back.
+  `dataknobs_common.reply_schema` builds schemas that are closed at every
+  depth (`strict`, `array`, `STRING`); see
+  [Reply Schemas](https://kbs-labs.github.io/dataknobs/packages/common/reply-schema/).
 - **The model must support it too.** `supports_response_schema()` answers
   for the provider, not the model. A model behind a supporting provider that
   cannot take a schema (an older OpenAI or Claude model) is the vendor's to

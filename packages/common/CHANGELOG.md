@@ -475,6 +475,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`dataknobs_common.reply_schema`: JSON Schemas for a model's reply, closed
+  by construction.** `strict(**properties)` builds an object that lists every
+  property in `required`, in the order given, and sets `additionalProperties`
+  to false; `array(items)` and `STRING` add no object of their own. A schema
+  composed only from them is closed at every depth, which is the form OpenAI's
+  strict mode (`LLMConfig.response_schema_strict`) and Anthropic require, so
+  the same `LLMConfig.response_schema` is accepted by OpenAI, Anthropic and
+  Ollama. Each builder copies its parts at every depth, so a part reused in
+  several schemas or edited afterwards changes none of them, and the result is
+  plain dicts and lists. `STRING` is frozen. The three names are also exported
+  from `dataknobs_common`. `jsonschema` joins the package's dev group, for the
+  tests that validate what the builders produce.
+
 - **`sanitize_and_report`: what `sanitize_for_json` returns and what it would
   report, in one walk.** It returns `(data, dropped)`, the two answers
   `sanitize_for_json` and `validate_json_safe` give, for a caller that decides
