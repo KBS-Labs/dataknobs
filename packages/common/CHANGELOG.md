@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`PluginRegistry` keeps a factory's text out of every error it raises.**
+  `get`, `get_async`, `create` and `create_async` bounded what a factory
+  raised to `"Failed to create plugin '<key>' (<type>)"`, except a
+  `NotFoundError` or `OperationError`, or any subclass of either, which passed
+  through with the factory's message and `context`. A factory raising
+  `OperationError(f"connection refused: {dsn}")` put the connection URL in
+  the message a caller sees. Now:
+  - a factory's `NotFoundError`, or a subclass, becomes a bounded
+    `NotFoundError`;
+  - anything else, `OperationError` and its subclasses included, becomes a
+    bounded `OperationError`;
+  - the original is on `__cause__`;
+  - a `NotFoundError` or `OperationError` a registry raised, such as a
+    nested registry's miss inside a composite factory, still passes through
+    as itself.
+
+  `except NotFoundError` and `except OperationError` catch what they caught
+  before. **A caller catching a narrower class raised inside a factory**, for
+  example a data backend's `DatabaseOperationError` from `registry.create`,
+  finds it on `__cause__` instead.
+
 - **`sanitize_for_json` writes a NaN or infinite float as `None`.** It passed
   them through, and `json.dumps` wrote them as `NaN` / `Infinity`, which is
   not JSON: `JSON.parse` and a Postgres `jsonb` column refuse the document.

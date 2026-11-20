@@ -781,7 +781,7 @@ Get or create a cached plugin instance. Factories are called with `(key, config)
 **Returns:** Plugin instance
 
 **Raises:**
-- `NotFoundError`: If key not registered and no default — or raised by the factory itself, in which case it reaches the caller unchanged
+- `NotFoundError`: If key not registered and no default — or wrapping a `NotFoundError` the factory raised
 - `OperationError`: If the factory returns an awaitable — `get()` cannot await one. The message names `get_async()`. Nothing is cached in that case. Also if the instance fails `validate_type`, or wrapping any other exception the factory raised
 
 ##### `create(key=None, config=None, **kwargs) -> T`
@@ -798,16 +798,18 @@ Create a fresh instance without caching. Uses `(config, **kwargs)` factory signa
 **Raises:**
 - `ValueError`: If `key` is None and cannot be resolved
 - `TypeError`: If `key` is None and `config` is not a mapping, such as a `StructuredConfig`. The message names the registry and its `config_key`, and says to pass `key=`. Raised before `config_key_default` is consulted, and not wrapped in `OperationError`
-- `NotFoundError`: If resolved key is not registered — or whatever class `not_found_exception` names — or raised by the factory itself, in which case it reaches the caller unchanged
+- `NotFoundError`: If resolved key is not registered — or whatever class `not_found_exception` names — or wrapping a `NotFoundError` the factory raised
 - `OperationError`: If the factory returns an awaitable (the message names `create_async()`), if the factory raises, or if it returns something that is not a `validate_type`. The factory's own message is not copied into the wrapper; it travels on `__cause__`
 
-A `NotFoundError` or an `OperationError` raised *by the factory* is passed
-through by all four entry points rather than wrapped. The wrapper exists to
-keep a driver's or an SDK's failure text — which can carry the connection URL
-the factory was handed — out of the message; that reason does not reach our
-own error types, whose text is already bounded. So a composite factory that
-resolves a sub-component through another registry and misses raises
-`NotFoundError`, and the caller's `except NotFoundError` catches it.
+All four entry points bound what a factory raises: the message names the key
+and the original type, the original is on `__cause__`, and the factory's text
+and `context` stay out, since either can carry the connection URL the factory
+was handed. A `NotFoundError` (or subclass) from the factory comes back as a
+`NotFoundError`, and anything else as an `OperationError`, so `except
+NotFoundError` and `except OperationError` keep catching what they did. A
+`NotFoundError` or `OperationError` a registry raised passes through unchanged, so a composite factory whose
+own lookup through another registry misses raises that registry's
+`NotFoundError`, naming the inner key.
 
 ##### `get_factory(key) -> PluginFactory[T] | None`
 
