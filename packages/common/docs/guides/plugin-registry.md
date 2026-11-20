@@ -265,15 +265,28 @@ A synchronous factory needs no change and works through all four methods.
 
 ## Errors from a factory
 
-All four entry points wrap an exception the factory raised in
-`OperationError`, naming the key and the exception type and carrying the
-original on `__cause__`. The factory's own words stay out of the message: a
-factory builds a backend from deployment config, so its failure text is a
-driver's or an SDK's and can carry the connection URL it was handed.
+All four entry points wrap an exception the factory raised, naming the key
+and the exception type and carrying the original on `__cause__`. The factory's
+own words, and its `context`, stay out: a factory builds a backend from
+deployment config, so its failure text is a driver's or an SDK's and can carry
+the connection URL it was handed.
 
-`NotFoundError` and `OperationError` are the exceptions. Their text is ours
-and already bounded, so they pass through unchanged — which keeps the type a
-caller catches on:
+| The factory raised | The caller gets |
+|---|---|
+| a `NotFoundError`, or a subclass | `NotFoundError("Failed to create plugin '<key>' (<type>)")` |
+| anything else, `OperationError` and its subclasses included | `OperationError("Failed to create plugin '<key>' (<type>)")` |
+| an error a registry raised | that error, unchanged |
+
+So a caller catching either base catches what it caught before. One catching
+a *subclass* raised inside the factory finds it on `__cause__`. The type is
+not enough to exempt an error from the bound, because it says nothing about
+who wrote the text: `OperationError` is a public base a factory raises with
+its own words.
+
+An error a *registry* raised is text this module wrote, so it passes through
+an outer factory as itself. A composite factory that resolves a sub-component
+through another registry and misses raises that registry's `NotFoundError`,
+with the inner key named:
 
 ```python
 def composite(config, **kwargs):

@@ -61,6 +61,7 @@ from typing import (
     Generic,
     List,
     NamedTuple,
+    NoReturn,
     TYPE_CHECKING,
     Protocol,
     Sequence,
@@ -102,6 +103,30 @@ DEFAULT_KEY_WARNING = (
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
+_Raised = TypeVar("_Raised", bound=BaseException)
+
+#: Set on every exception this module raises, so a registry can tell its own
+#: error from one a factory raised with the same type. See :func:`_ours`.
+_RAISED_BY_A_REGISTRY = "_dataknobs_raised_by_a_registry"
+
+
+def _ours(exc: _Raised) -> _Raised:
+    """Mark ``exc`` as raised by a registry in this module, and return it.
+
+    A registry bounds the text of what a factory raises, because a factory's
+    text can carry the connection URL it was handed. An error a registry
+    raised itself -- a nested lookup that missed, a nested factory already
+    bounded, a ``validate_type`` refusal -- is text this module wrote, and
+    passes through an outer factory unchanged. The type cannot tell the two
+    apart, since ``NotFoundError`` and ``OperationError`` are public bases any
+    factory may raise with its own words; the mark can.
+
+    Every ``raise`` in this module goes through here. One that does not is
+    bounded like a factory's error, which loses detail and leaks nothing.
+    """
+    setattr(exc, _RAISED_BY_A_REGISTRY, True)
+    return exc
+
 
 PluginFactory: TypeAlias = type[T] | Callable[..., T] | Callable[..., Awaitable[T]]
 """What a :class:`PluginRegistry` stores under a key.
@@ -302,9 +327,11 @@ class Registry(Generic[T]):
         """
         with self._lock:
             if not allow_overwrite and key in self._items:
-                raise OperationError(
-                    f"Item '{key}' already registered in {self._name}",
-                    context={"key": key, "registry": self._name},
+                raise _ours(
+                    OperationError(
+                        f"Item '{key}' already registered in {self._name}",
+                        context={"key": key, "registry": self._name},
+                    )
                 )
 
             self._items[key] = item
@@ -334,9 +361,11 @@ class Registry(Generic[T]):
         """
         with self._lock:
             if key not in self._items:
-                raise NotFoundError(
-                    f"Item not found: {key}",
-                    context={"key": key, "registry": self._name},
+                raise _ours(
+                    NotFoundError(
+                        f"Item not found: {key}",
+                        context={"key": key, "registry": self._name},
+                    )
                 )
 
             item = self._items.pop(key)
@@ -365,13 +394,15 @@ class Registry(Generic[T]):
         """
         with self._lock:
             if key not in self._items:
-                raise NotFoundError(
-                    f"Item not found: {key}",
-                    context={
-                        "key": key,
-                        "registry": self._name,
-                        "available_keys": list(self._items.keys()),
-                    },
+                raise _ours(
+                    NotFoundError(
+                        f"Item not found: {key}",
+                        context={
+                            "key": key,
+                            "registry": self._name,
+                            "available_keys": list(self._items.keys()),
+                        },
+                    )
                 )
             return self._items[key]
 
@@ -724,9 +755,11 @@ class AsyncRegistry(Generic[T]):
         """
         async with self._lock:
             if not allow_overwrite and key in self._items:
-                raise OperationError(
-                    f"Item '{key}' already registered in {self._name}",
-                    context={"key": key, "registry": self._name},
+                raise _ours(
+                    OperationError(
+                        f"Item '{key}' already registered in {self._name}",
+                        context={"key": key, "registry": self._name},
+                    )
                 )
 
             self._items[key] = item
@@ -751,9 +784,11 @@ class AsyncRegistry(Generic[T]):
         """
         async with self._lock:
             if key not in self._items:
-                raise NotFoundError(
-                    f"Item not found: {key}",
-                    context={"key": key, "registry": self._name},
+                raise _ours(
+                    NotFoundError(
+                        f"Item not found: {key}",
+                        context={"key": key, "registry": self._name},
+                    )
                 )
 
             item = self._items.pop(key)
@@ -777,13 +812,15 @@ class AsyncRegistry(Generic[T]):
         """
         async with self._lock:
             if key not in self._items:
-                raise NotFoundError(
-                    f"Item not found: {key}",
-                    context={
-                        "key": key,
-                        "registry": self._name,
-                        "available_keys": list(self._items.keys()),
-                    },
+                raise _ours(
+                    NotFoundError(
+                        f"Item not found: {key}",
+                        context={
+                            "key": key,
+                            "registry": self._name,
+                            "available_keys": list(self._items.keys()),
+                        },
+                    )
                 )
             return self._items[key]
 
@@ -993,17 +1030,24 @@ class PluginRegistry(Generic[T]):
 
     Errors from a factory:
         ``get``, ``get_async``, ``create`` and ``create_async`` all wrap an
-        exception the factory raised in ``OperationError``, naming the key
-        and the exception type and carrying the original on ``__cause__``.
+        exception the factory raised, naming the key and the exception type
+        and carrying the original on ``__cause__``.
         The factory's own words stay out of the message: a factory builds a
         backend from deployment config, so its failure text is a driver's or
         an SDK's and can carry the connection URL it was handed.
 
-        ``NotFoundError`` and ``OperationError`` are the exceptions to that.
-        Their text is ours and already bounded, so they reach the caller
-        unchanged -- which keeps the type a caller catches on. A composite
-        factory that resolves a sub-component through another registry and
-        misses raises ``NotFoundError``, and the caller sees it as one.
+        A factory's ``NotFoundError`` keeps its family: it is wrapped in a
+        ``NotFoundError`` rather than an ``OperationError``, so a caller
+        catching either base still catches what it caught before. A subclass
+        of either is wrapped in the base, and is on ``__cause__``. The text
+        and ``context`` are bounded for these as for anything else, because
+        the type says nothing about who wrote the text: ``OperationError`` is
+        a public base a factory raises with its own words.
+
+        An error a registry raised itself passes through unchanged. A
+        composite factory that resolves a sub-component through another
+        registry and misses raises that registry's ``NotFoundError``, and the
+        caller sees it with the inner key named.
     """
 
     def __init__(
@@ -1235,19 +1279,23 @@ class PluginRegistry(Generic[T]):
         if base is None:
             return
         if not isinstance(instance, base):
-            raise OperationError(
-                f"Factory for plugin '{key}' must return a "
-                f"{base.__name__} instance, "
-                f"got {type(instance).__name__}",
-                context={"key": key, "registry": self._name},
+            raise _ours(
+                OperationError(
+                    f"Factory for plugin '{key}' must return a "
+                    f"{base.__name__} instance, "
+                    f"got {type(instance).__name__}",
+                    context={"key": key, "registry": self._name},
+                )
             )
         mismatch = self._async_member_mismatch(instance)
         if mismatch is not None:
-            raise OperationError(
-                f"Factory for plugin '{key}' in registry '{self._name}' "
-                f"returned a {type(instance).__name__} that does not "
-                f"satisfy {base.__name__}: {mismatch}",
-                context={"key": key, "registry": self._name},
+            raise _ours(
+                OperationError(
+                    f"Factory for plugin '{key}' in registry '{self._name}' "
+                    f"returned a {type(instance).__name__} that does not "
+                    f"satisfy {base.__name__}: {mismatch}",
+                    context={"key": key, "registry": self._name},
+                )
             )
 
     def _check_factory_class(self, factory: type, *, what: str, key: str | None = None) -> None:
@@ -1477,10 +1525,12 @@ class PluginRegistry(Generic[T]):
         with self._lock:
             # Check for existing registration
             if not override and key in self._factories:
-                raise OperationError(
-                    f"Plugin '{key}' already registered in {self._name}. "
-                    f"Use override=True to replace.",
-                    context={"key": key, "registry": self._name},
+                raise _ours(
+                    OperationError(
+                        f"Plugin '{key}' already registered in {self._name}. "
+                        f"Use override=True to replace.",
+                        context={"key": key, "registry": self._name},
+                    )
                 )
 
             # Validate type if specified
@@ -1602,9 +1652,11 @@ class PluginRegistry(Generic[T]):
 
         with self._lock:
             if key not in self._factories and key not in self._unavailable:
-                raise NotFoundError(
-                    f"Plugin not found: {key}",
-                    context={"key": key, "registry": self._name},
+                raise _ours(
+                    NotFoundError(
+                        f"Plugin not found: {key}",
+                        context={"key": key, "registry": self._name},
+                    )
                 )
 
             self._factories.pop(key, None)
@@ -1674,7 +1726,8 @@ class PluginRegistry(Generic[T]):
 
         Raises:
             NotFoundError: If key not registered and use_default=False, or
-                raised by the factory itself (see "Errors from a factory").
+                wrapping a ``NotFoundError`` the factory raised (see "Errors
+                from a factory").
             OperationError: If the factory returns an awaitable -- this
                 method cannot await one, so call ``get_async()`` -- if the
                 instance fails the ``validate_type`` guard, or wrapping any
@@ -1699,13 +1752,15 @@ class PluginRegistry(Generic[T]):
             elif use_default and self._default_factory:
                 factory = self._default_factory
             else:
-                raise NotFoundError(
-                    f"Plugin '{key}' not registered and no default available",
-                    context={
-                        "key": key,
-                        "registry": self._name,
-                        "available": list(self._factories.keys()),
-                    },
+                raise _ours(
+                    NotFoundError(
+                        f"Plugin '{key}' not registered and no default available",
+                        context={
+                            "key": key,
+                            "registry": self._name,
+                            "available": list(self._factories.keys()),
+                        },
+                    )
                 )
 
             # Create instance
@@ -1730,18 +1785,8 @@ class PluginRegistry(Generic[T]):
 
                 self._check_validate_type(key, instance)
 
-            except (NotFoundError, OperationError):
-                raise
             except Exception as e:
-                # Bounded message: a plugin factory builds a backend — a
-                # database, an event bus, an LLM client — from deployment
-                # config, so `e` here is a driver's or an SDK's text and can
-                # carry the connection URL it was handed. The key and the
-                # registry name are ours; __cause__ carries the rest.
-                raise OperationError(
-                    f"Failed to create plugin '{key}' ({type(e).__name__})",
-                    context={"key": key, "registry": self._name},
-                ) from e
+                self._raise_factory_failure(key, e)
 
             # Cache instance
             if use_cache:
@@ -1771,7 +1816,8 @@ class PluginRegistry(Generic[T]):
 
         Raises:
             NotFoundError: If key not registered and use_default=False, or
-                raised by the factory itself (see "Errors from a factory").
+                wrapping a ``NotFoundError`` the factory raised (see "Errors
+                from a factory").
             OperationError: If the instance fails the ``validate_type``
                 guard, or wrapping any other exception the factory raised.
 
@@ -1794,13 +1840,15 @@ class PluginRegistry(Generic[T]):
             elif use_default and self._default_factory:
                 factory = self._default_factory
             else:
-                raise NotFoundError(
-                    f"Plugin '{key}' not registered and no default available",
-                    context={
-                        "key": key,
-                        "registry": self._name,
-                        "available": list(self._factories.keys()),
-                    },
+                raise _ours(
+                    NotFoundError(
+                        f"Plugin '{key}' not registered and no default available",
+                        context={
+                            "key": key,
+                            "registry": self._name,
+                            "available": list(self._factories.keys()),
+                        },
+                    )
                 )
 
         # Create instance (outside lock for async)
@@ -1822,13 +1870,8 @@ class PluginRegistry(Generic[T]):
 
             self._check_validate_type(key, instance)
 
-        except (NotFoundError, OperationError):
-            raise
         except Exception as e:
-            raise OperationError(
-                f"Failed to create plugin '{key}' ({type(e).__name__})",
-                context={"key": key, "registry": self._name},
-            ) from e
+            self._raise_factory_failure(key, e)
 
         # Cache instance
         with self._lock:
@@ -1887,12 +1930,13 @@ class PluginRegistry(Generic[T]):
             ValueError: If ``key`` is ``None`` and cannot be resolved.
             TypeError: If ``key`` is ``None``, ``config_key`` is set, and
                 ``config`` is not a mapping, so the key cannot be read from it.
-            NotFoundError: If resolved key is not registered, or raised by
-                the factory itself (see "Errors from a factory").
+            NotFoundError: If resolved key is not registered, or wrapping a
+                ``NotFoundError`` the factory raised (see "Errors from a
+                factory").
             OperationError: If the factory returns an awaitable -- this
-                method cannot await one, so call ``create_async()`` -- or
-                wrapping an exception the factory raised (including type
-                validation failures from ``validate_type``).
+                method cannot await one, so call ``create_async()`` -- if the
+                instance fails the ``validate_type`` guard, or wrapping any
+                other exception the factory raised.
 
         Note:
             Type validation errors from ``register()`` raise ``TypeError``
@@ -1925,13 +1969,8 @@ class PluginRegistry(Generic[T]):
 
             self._check_validate_type(key, instance)
 
-        except (NotFoundError, OperationError):
-            raise
         except Exception as e:
-            raise OperationError(
-                f"Failed to create plugin '{key}' ({type(e).__name__})",
-                context={"key": key, "registry": self._name},
-            ) from e
+            self._raise_factory_failure(key, e)
 
         return instance
 
@@ -1984,10 +2023,11 @@ class PluginRegistry(Generic[T]):
             ValueError: If ``key`` is ``None`` and cannot be resolved.
             TypeError: If ``key`` is ``None``, ``config_key`` is set, and
                 ``config`` is not a mapping, so the key cannot be read from it.
-            NotFoundError: If the resolved key is not registered, or raised
-                by the factory itself (see "Errors from a factory").
-            OperationError: Wrapping an exception the factory raised
-                (including ``validate_type`` failures).
+            NotFoundError: If the resolved key is not registered, or
+                wrapping a ``NotFoundError`` the factory raised (see "Errors
+                from a factory").
+            OperationError: If the instance fails the ``validate_type``
+                guard, or wrapping any other exception the factory raised.
         """
         factory, key, config = self._resolve_factory(key, config)
 
@@ -2009,13 +2049,8 @@ class PluginRegistry(Generic[T]):
 
             self._check_validate_type(key, instance)
 
-        except (NotFoundError, OperationError):
-            raise
         except Exception as e:
-            raise OperationError(
-                f"Failed to create plugin '{key}' ({type(e).__name__})",
-                context={"key": key, "registry": self._name},
-            ) from e
+            self._raise_factory_failure(key, e)
 
         return instance
 
@@ -2115,8 +2150,8 @@ class PluginRegistry(Generic[T]):
                 }
                 exc_cls = self._not_found_exception
                 if issubclass(exc_cls, DataknobsError):
-                    raise exc_cls(message, context=context)
-                raise exc_cls(message)
+                    raise _ours(exc_cls(message, context=context))
+                raise _ours(exc_cls(message))
             return self._factories[key], key, config
 
     # ------------------------------------------------------------------
@@ -2131,6 +2166,30 @@ class PluginRegistry(Generic[T]):
     # differs between the four entry points is two booleans, and they are
     # parameters here rather than four copies of a body.
     # ------------------------------------------------------------------
+
+    def _raise_factory_failure(self, key: str, exc: Exception) -> NoReturn:
+        """Raise what a caller of ``get`` / ``create`` sees when a factory fails.
+
+        The one statement of the rule the four entry points share, called from
+        each one's ``except``. An error a registry raised passes through as
+        itself; anything else becomes a bounded error naming the key, the
+        registry and the original type, with the original on ``__cause__``.
+        The factory's text and ``context`` stay out, because a factory builds
+        a backend from deployment config and either can carry the connection
+        URL it was handed.
+
+        A ``NotFoundError`` keeps its family, so a caller catching it still
+        does; everything else becomes an ``OperationError``.
+        """
+        if getattr(exc, _RAISED_BY_A_REGISTRY, False):
+            raise exc
+        family = NotFoundError if isinstance(exc, NotFoundError) else OperationError
+        raise _ours(
+            family(
+                f"Failed to create plugin '{key}' ({type(exc).__name__})",
+                context={"key": key, "registry": self._name},
+            )
+        ) from exc
 
     def _invoke_factory(
         self,
@@ -2198,15 +2257,17 @@ class PluginRegistry(Generic[T]):
             close()
 
         name = getattr(result, "__qualname__", None) or type(result).__name__
-        raise OperationError(
-            f"Plugin '{key}' in registry '{self._name}' has an asynchronous "
-            f"factory ({name}); this method cannot await it. "
-            f"Call {async_method}() instead.",
-            context={
-                "key": key,
-                "registry": self._name,
-                "async_method": async_method,
-            },
+        raise _ours(
+            OperationError(
+                f"Plugin '{key}' in registry '{self._name}' has an asynchronous "
+                f"factory ({name}); this method cannot await it. "
+                f"Call {async_method}() instead.",
+                context={
+                    "key": key,
+                    "registry": self._name,
+                    "async_method": async_method,
+                },
+            )
         )
 
     def _report_key_defaulted(self, key: str) -> None:

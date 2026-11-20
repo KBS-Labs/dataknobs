@@ -1602,105 +1602,147 @@ class TestThePluginFactoryAlias:
         assert registry.copy()["two"] is _async_create_factory
 
 
-class TestABoundedErrorFromTheFactoryIsNotRewrapped:
-    """A ``DataknobsError`` raised *by the factory* reaches the caller as-is.
+_DSN = "postgres://user:pw@db.internal/prod"
 
-    The wrapper exists for one reason, stated where it is raised: a factory
-    builds a backend from deployment config, so its failure text is a
-    driver's or an SDK's and can carry the connection URL it was handed.
-    That reason does not reach our own error types, whose text we wrote and
-    already bounded — so ``NotFoundError`` and ``OperationError`` pass
-    through, and everything else is wrapped.
+_LANES = ("get", "get_async", "create", "create_async")
 
-    ``create``/``create_async`` have done this since the class was
-    generalized. ``get`` re-wrapped ``NotFoundError`` and ``get_async``
-    re-wrapped both, which is the fourth of the four ways the lanes had
-    drifted. These pin the agreement so it cannot drift back silently.
+
+async def _call_lane(registry: PluginRegistry[Any], lane: str, key: str) -> Any:
+    """Reach ``key`` through one of the four entry points that run a factory."""
+    result = getattr(registry, lane)(key)
+    return await result if inspect.isawaitable(result) else result
+
+
+class _DriverFailedError(OperationError):
+    """A library's own ``OperationError`` subclass, raised with a driver's text."""
+
+
+class _RowMissingError(NotFoundError):
+    """A library's own ``NotFoundError`` subclass."""
+
+
+class TestAFactorysTextStaysOutOfTheMessage:
+    """The registry bounds the text of every error a factory raises.
+
+    A factory builds a backend from deployment config, so what it raises can
+    carry the connection URL it was handed, and the registry keeps that text
+    out of the message. ``NotFoundError`` and ``OperationError`` used to be
+    exempt, on the premise that their text was dataknobs' own. That depends on
+    who raised the error, not on its type: ``OperationError`` is a public base
+    a consumer's factory raises with its own words, and the library raises
+    subclasses of both that interpolate a caught exception.
+
+    So the *family* survives, which is what a caller catches on, and the text
+    does not. The original is on ``__cause__``.
+    """
+
+    @pytest.mark.parametrize("lane", _LANES)
+    @pytest.mark.parametrize(
+        ("raised", "family"),
+        [
+            (OperationError(f"connection refused: {_DSN}"), OperationError),
+            (_DriverFailedError(f"connection refused: {_DSN}"), OperationError),
+            (NotFoundError(f"no database at {_DSN}"), NotFoundError),
+            (_RowMissingError(f"no database at {_DSN}"), NotFoundError),
+        ],
+        ids=[
+            "OperationError",
+            "subclass-of-OperationError",
+            "NotFoundError",
+            "subclass-of-NotFoundError",
+        ],
+    )
+    async def test_the_family_is_kept_and_the_text_is_not(
+        self, lane: str, raised: Exception, family: type[Exception]
+    ) -> None:
+        def factory(*args: Any, **kwargs: Any) -> BaseHandler:
+            raise raised
+
+        registry = PluginRegistry[BaseHandler]("outer")
+        registry.register("leaky", factory)
+
+        with pytest.raises(family) as caught:
+            await _call_lane(registry, lane, "leaky")
+
+        assert _DSN not in str(caught.value)
+        assert caught.value is not raised
+        assert caught.value.__cause__ is raised
+        assert f"Failed to create plugin 'leaky' ({type(raised).__name__})" in str(caught.value)
+        assert caught.value.context == {"key": "leaky", "registry": "outer"}
+
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_a_factorys_context_does_not_cross_either(self, lane: str) -> None:
+        def factory(*args: Any, **kwargs: Any) -> BaseHandler:
+            raise OperationError("refused", context={"dsn": _DSN})
+
+        registry = PluginRegistry[BaseHandler]("outer")
+        registry.register("leaky", factory)
+
+        with pytest.raises(OperationError) as caught:
+            await _call_lane(registry, lane, "leaky")
+
+        assert _DSN not in repr(caught.value.context)
+
+
+class TestARegistrysOwnErrorCrossesAFactoryUnchanged:
+    """An error a registry raised keeps its words through an outer factory.
 
     The realistic shape is a composite factory: one that resolves a
-    sub-component through another registry and does not find it.
+    sub-component through another registry and does not find it. That text is
+    the registry's, so it is already bounded, and rewrapping it would hide
+    which inner key was missing.
     """
 
     @staticmethod
-    def _inner_miss(*args: Any, **kwargs: Any) -> BaseHandler:
-        """Stand in for a factory whose own sub-lookup misses."""
-        raise NotFoundError(
-            "Plugin 'sub' not registered",
-            context={"key": "sub", "registry": "inner"},
-        )
+    def _composite(inner: PluginRegistry[BaseHandler]) -> Any:
+        def factory(*args: Any, **kwargs: Any) -> BaseHandler:
+            return inner.get("sub")
 
-    def test_get_passes_a_not_found_error_through(self) -> None:
+        return factory
+
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_an_inner_registrys_miss_reaches_the_caller_as_itself(self, lane: str) -> None:
+        inner = PluginRegistry[BaseHandler]("inner")
         registry = PluginRegistry[BaseHandler]("outer")
-        registry.register("composite", self._inner_miss)
+        registry.register("composite", self._composite(inner))
 
         with pytest.raises(NotFoundError) as caught:
-            registry.get("composite")
-
-        # The inner registry's own words, not "Failed to create plugin".
-        assert "Plugin 'sub' not registered" in str(caught.value)
-        assert caught.value.context["registry"] == "inner"
-
-    async def test_get_async_passes_a_not_found_error_through(self) -> None:
-        registry = PluginRegistry[BaseHandler]("outer")
-        registry.register("composite", self._inner_miss)
-
-        with pytest.raises(NotFoundError) as caught:
-            await registry.get_async("composite")
+            await _call_lane(registry, lane, "composite")
 
         assert "Plugin 'sub' not registered" in str(caught.value)
         assert caught.value.context["registry"] == "inner"
 
-    def test_create_passes_a_not_found_error_through(self) -> None:
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_an_inner_registrys_wrap_is_not_wrapped_again(self, lane: str) -> None:
+        def leaky(*args: Any, **kwargs: Any) -> BaseHandler:
+            raise RuntimeError(f"refused {_DSN}")
+
+        inner = PluginRegistry[BaseHandler]("inner")
+        inner.register("sub", leaky)
         registry = PluginRegistry[BaseHandler]("outer")
-        registry.register("composite", self._inner_miss)
+        registry.register("composite", self._composite(inner))
 
-        with pytest.raises(NotFoundError) as caught:
-            registry.create("composite")
+        with pytest.raises(OperationError) as caught:
+            await _call_lane(registry, lane, "composite")
 
-        assert "Plugin 'sub' not registered" in str(caught.value)
+        assert str(caught.value).startswith("Failed to create plugin 'sub' (RuntimeError)")
+        assert _DSN not in str(caught.value)
 
-    async def test_create_async_passes_a_not_found_error_through(self) -> None:
-        registry = PluginRegistry[BaseHandler]("outer")
-        registry.register("composite", self._inner_miss)
-
-        with pytest.raises(NotFoundError) as caught:
-            await registry.create_async("composite")
-
-        assert "Plugin 'sub' not registered" in str(caught.value)
-
-    def test_a_foreign_error_is_still_wrapped_in_every_lane(self) -> None:
-        """The control: the passthrough is for our types, not for all types.
-
-        Without this, widening the tuple to ``Exception`` would pass the
-        four tests above and lose the bound the wrapper exists to keep.
-        """
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_a_foreign_error_is_wrapped_in_every_lane(self, lane: str) -> None:
+        """The control: a type outside both families is wrapped as before."""
 
         def leaky(*args: Any, **kwargs: Any) -> BaseHandler:
-            raise RuntimeError("postgres://user:pw@host/db refused")
-
-        registry = PluginRegistry[BaseHandler]("outer")
-        registry.register("leaky", leaky)
-
-        for call in (registry.get, registry.create):
-            with pytest.raises(OperationError) as caught:
-                call("leaky")
-            assert "postgres://" not in str(caught.value)
-            assert "(RuntimeError)" in str(caught.value)
-
-    async def test_a_foreign_error_is_still_wrapped_in_the_async_lanes(self) -> None:
-        async def leaky(*args: Any, **kwargs: Any) -> BaseHandler:
-            raise RuntimeError("postgres://user:pw@host/db refused")
+            raise RuntimeError(f"{_DSN} refused")
 
         registry = PluginRegistry[BaseHandler]("outer")
         registry.register("leaky", leaky)
 
         with pytest.raises(OperationError) as caught:
-            await registry.get_async("leaky")
-        assert "postgres://" not in str(caught.value)
+            await _call_lane(registry, lane, "leaky")
 
-        with pytest.raises(OperationError) as caught:
-            await registry.create_async("leaky")
-        assert "postgres://" not in str(caught.value)
+        assert _DSN not in str(caught.value)
+        assert "(RuntimeError)" in str(caught.value)
 
 
 # ---------------------------------------------------------------------------
