@@ -20,12 +20,22 @@ task cannot change under it:
 * each field that holds several values keeps a **tuple** of whatever iterable
   it was given, a list included;
 * a mapping field (:attr:`ProvenanceRecord.creation_context`,
-  :attr:`ToolInvocation.parameters`) keeps **its own copy**, so the caller's
-  dict can go on changing without reaching the record. Nested dicts and lists
-  are copied too; other values are shared, as
-  :func:`~dataknobs_common.copying.copy_structure` shares them;
-* ``to_dict`` returns new containers, so editing what it returns does not
-  reach the record either.
+  :attr:`ToolInvocation.parameters`) keeps **a frozen copy** of the mapping it
+  was given, a :class:`~dataknobs_common.copying.FrozenMapping`: the caller's
+  dict can go on changing without reaching the record, and the record's own
+  mapping cannot be changed by whoever reads it. Nested dicts become
+  ``FrozenMapping`` too and nested lists tuples; other values are shared, as
+  :func:`~dataknobs_common.copying.freeze_structure` shares them, and a
+  mapping that holds itself is refused with ``ValueError``;
+* ``to_dict`` returns new, plain containers (dicts and lists), so editing what
+  it returns does not reach the record either.
+
+The three records holding no mapping (:class:`SourceReference`,
+:class:`LLMInvocation`, :class:`RevisionRecord`) are hashable, so a set of
+sources works. The two that hold one (:class:`ToolInvocation`,
+:class:`ProvenanceRecord`) are not, as a ``FrozenMapping`` is not:
+``hash()`` raises ``TypeError`` and :class:`collections.abc.Hashable`
+answers no.
 
 So a revision is a new record, made with :func:`dataclasses.replace`:
 
@@ -74,7 +84,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from dataknobs_common.copying import copy_structure
+from dataknobs_common.copying import FrozenMapping, freeze_structure, thaw_structure
 
 __all__ = [
     "LLMInvocation",
@@ -118,14 +128,14 @@ def _hold_tuples(record: object, *names: str) -> None:
         object.__setattr__(record, name, held)
 
 
-def _hold_copy(record: object, name: str) -> None:
-    """Keep the named mapping field of a frozen ``record`` as a copy of its own."""
+def _hold_frozen(record: object, name: str) -> None:
+    """Keep the named mapping field of a frozen ``record`` as a frozen copy."""
     given = getattr(record, name)
     if not isinstance(given, Mapping):
         raise TypeError(
             f"{type(record).__name__}.{name} takes a mapping, not {type(given).__name__}: {given!r}"
         )
-    object.__setattr__(record, name, copy_structure(dict(given)))
+    object.__setattr__(record, name, freeze_structure(given))
 
 
 @dataclass(frozen=True)
@@ -186,23 +196,24 @@ class ToolInvocation:
         tool_name: Function or tool identifier.
         tool_version: Version of the tool, if applicable.
         parameters: Input parameters passed to the tool. Any mapping is
-            accepted, and the record keeps its own copy.
+            accepted, and the record keeps a frozen copy of it
+            (a :class:`~dataknobs_common.copying.FrozenMapping`).
         timestamp: ISO 8601 timestamp of the invocation.
     """
 
     tool_name: str
     tool_version: str | None = None
-    parameters: dict[str, Any] = field(default_factory=dict)
+    parameters: Mapping[str, Any] = field(default_factory=FrozenMapping)
     timestamp: str = field(default_factory=now_iso)
 
     def __post_init__(self) -> None:
-        _hold_copy(self, "parameters")
+        _hold_frozen(self, "parameters")
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dictionary, leaving out an unset ``tool_version``."""
         result: dict[str, Any] = {
             "tool_name": self.tool_name,
-            "parameters": copy_structure(self.parameters),
+            "parameters": thaw_structure(self.parameters),
             "timestamp": self.timestamp,
         }
         if self.tool_version is not None:
@@ -218,6 +229,12 @@ class ToolInvocation:
             parameters=data.get("parameters", {}),
             timestamp=data.get("timestamp", ""),
         )
+
+
+# Declared after the class body, as ``FrozenMapping.__hash__`` is: the record
+# holds a mapping, which cannot be hashed, so it says so rather than offering
+# a hash that raises.
+ToolInvocation.__hash__ = None  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -348,7 +365,8 @@ class ProvenanceRecord:
         creation_method: How it was created (``generator``, ``wizard``,
             ``manual``, ``derived``, ``llm_assisted``, ...).
         creation_context: Parameters, configuration and other context. Any
-            mapping is accepted, and the record keeps its own copy.
+            mapping is accepted, and the record keeps a frozen copy of it
+            (a :class:`~dataknobs_common.copying.FrozenMapping`).
         sources: References to the sources used.
         tool_chain: Tools used during creation.
         llm_invocations: Model calls made during creation.
@@ -362,7 +380,7 @@ class ProvenanceRecord:
     created_by: str = ""
     created_at: str = field(default_factory=now_iso)
     creation_method: str = ""
-    creation_context: dict[str, Any] = field(default_factory=dict)
+    creation_context: Mapping[str, Any] = field(default_factory=FrozenMapping)
     sources: tuple[SourceReference, ...] = ()
     tool_chain: tuple[ToolInvocation, ...] = ()
     llm_invocations: tuple[LLMInvocation, ...] = ()
@@ -370,7 +388,7 @@ class ProvenanceRecord:
     revision_history: tuple[RevisionRecord, ...] = ()
 
     def __post_init__(self) -> None:
-        _hold_copy(self, "creation_context")
+        _hold_frozen(self, "creation_context")
         _hold_tuples(
             self,
             "sources",
@@ -386,7 +404,7 @@ class ProvenanceRecord:
             "created_by": self.created_by,
             "created_at": self.created_at,
             "creation_method": self.creation_method,
-            "creation_context": copy_structure(self.creation_context),
+            "creation_context": thaw_structure(self.creation_context),
             "sources": [source.to_dict() for source in self.sources],
             "tool_chain": [tool.to_dict() for tool in self.tool_chain],
             "llm_invocations": [call.to_dict() for call in self.llm_invocations],
@@ -414,6 +432,12 @@ class ProvenanceRecord:
         )
 
 
+# Declared after the class body, as ``FrozenMapping.__hash__`` is: the record
+# holds a mapping, which cannot be hashed, so it says so rather than offering
+# a hash that raises.
+ProvenanceRecord.__hash__ = None  # type: ignore[assignment]
+
+
 def create_provenance(
     created_by: str,
     creation_method: str,
@@ -431,7 +455,7 @@ def create_provenance(
     Every other field is optional. Those holding several values take any
     iterable (a list built up beforehand, a generator) and the record keeps a
     tuple of it; ``creation_context`` takes any mapping and the record keeps a
-    copy.
+    frozen copy.
 
     Args:
         created_by: Who or what created the content.
@@ -452,7 +476,7 @@ def create_provenance(
         created_by=created_by,
         created_at=now_iso() if created_at is None else created_at,
         creation_method=creation_method,
-        creation_context=dict(creation_context or {}),
+        creation_context=FrozenMapping() if creation_context is None else creation_context,
         sources=tuple(sources),
         tool_chain=tuple(tool_chain),
         llm_invocations=tuple(llm_invocations),

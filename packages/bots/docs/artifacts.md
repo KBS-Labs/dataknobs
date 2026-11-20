@@ -149,7 +149,7 @@ provenance = create_provenance(
 )
 ```
 
-**The records are frozen.** `sources`, `tool_chain`, `llm_invocations`, `review_history` and `revision_history` are tuples, and `creation_context` and a tool's `parameters` hold a copy of the mapping given. Pass the values when the record is made: `create_provenance` and the constructors take any iterable, so a list built up first works. To add to a record, make a new one:
+**The records are frozen.** `sources`, `tool_chain`, `llm_invocations`, `review_history` and `revision_history` are tuples, and `creation_context` and a tool's `parameters` hold a read-only copy of the mapping given (a `FrozenMapping`, whose nested lists read back as tuples; `to_dict()` gives plain dicts and lists). Pass the values when the record is made: `create_provenance` and the constructors take any iterable, so a list built up first works. To add to a record, make a new one:
 
 ```python
 import dataclasses
@@ -167,7 +167,7 @@ provenance = dataclasses.replace(
 | `created_by` | `str` | Who/what created it (e.g., `"system:generator:quiz_gen_v1"`, `"user:jane"`, `"bot:configbot"`) |
 | `created_at` | `str` | ISO 8601 creation timestamp |
 | `creation_method` | `str` | How it was created (`"generator"`, `"wizard"`, `"manual"`, `"derived"`, `"llm_assisted"`) |
-| `creation_context` | `dict[str, Any]` | Parameters, configuration, and other context |
+| `creation_context` | `Mapping[str, Any]` | Parameters, configuration, and other context (read-only) |
 | `sources` | `tuple[SourceReference, ...]` | References to source materials |
 | `tool_chain` | `tuple[ToolInvocation, ...]` | Tools used during creation |
 | `llm_invocations` | `tuple[LLMInvocation, ...]` | LLM calls made during creation |

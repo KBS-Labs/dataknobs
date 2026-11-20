@@ -27,11 +27,10 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-from .provenance import ProvenanceRecord
+from .provenance import ProvenanceRecord, now_iso
 
 
 class ArtifactStatus(str, Enum):
@@ -50,11 +49,6 @@ class ArtifactStatus(str, Enum):
 def _generate_artifact_id() -> str:
     """Generate a unique artifact ID."""
     return f"art_{uuid.uuid4().hex[:12]}"
-
-
-def _now_iso() -> str:
-    """Return current UTC time as ISO 8601 string."""
-    return datetime.now(UTC).isoformat()
 
 
 @dataclass
@@ -98,8 +92,8 @@ class Artifact:
     rubric_ids: list[str] = field(default_factory=list)
     evaluation_ids: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
-    created_at: str = field(default_factory=_now_iso)
-    updated_at: str = field(default_factory=_now_iso)
+    created_at: str = field(default_factory=now_iso)
+    updated_at: str = field(default_factory=now_iso)
 
     @property
     def is_approved(self) -> bool:
@@ -150,8 +144,8 @@ class Artifact:
             rubric_ids=data.get("rubric_ids", []),
             evaluation_ids=data.get("evaluation_ids", []),
             metadata=dict(data.get("metadata") or {}),
-            created_at=data.get("created_at", _now_iso()),
-            updated_at=data.get("updated_at", _now_iso()),
+            created_at=data.get("created_at", now_iso()),
+            updated_at=data.get("updated_at", now_iso()),
         )
 
 

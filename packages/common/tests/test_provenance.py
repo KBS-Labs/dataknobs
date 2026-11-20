@@ -273,23 +273,6 @@ def test_every_record_is_frozen() -> None:
             setattr(record, name, None)
 
 
-def test_the_callers_mapping_is_copied_on_construction() -> None:
-    context = {"task": "Compare the mug quotes.", "filters": {"item": ["mug"]}}
-    parameters = {"item": "stoneware mug", "filters": {"max": 5}}
-    record = ProvenanceRecord(created_at=AT, creation_context=context)
-    search = ToolInvocation(tool_name="search_quotes", parameters=parameters, timestamp=AT)
-
-    context["task"] = "changed"
-    context["filters"]["item"].append("jug")
-    parameters["filters"]["max"] = 50
-
-    assert record.creation_context == {
-        "task": "Compare the mug quotes.",
-        "filters": {"item": ["mug"]},
-    }
-    assert search.parameters == {"item": "stoneware mug", "filters": {"max": 5}}
-
-
 def test_editing_what_to_dict_returns_does_not_reach_the_record() -> None:
     shown = RECORD.to_dict()
     shown["creation_context"]["task"] = "changed"
@@ -310,25 +293,6 @@ def test_from_dict_does_not_share_the_stored_mappings() -> None:
     stored["creation_context"]["task"] = "changed"
     stored["tool_chain"][0]["parameters"]["max"] = 50
     assert read == RECORD
-
-
-def test_a_replaced_record_does_not_share_its_mapping_with_the_original() -> None:
-    revised = dataclasses.replace(RECORD, created_by="user:buyer")
-    assert revised.creation_context == RECORD.creation_context
-    assert revised.creation_context is not RECORD.creation_context
-
-
-def test_a_mapping_field_takes_any_mapping_and_refuses_anything_else() -> None:
-    from types import MappingProxyType
-
-    read_only = MappingProxyType({"task": "Compare the mug quotes."})
-    record = ProvenanceRecord(created_at=AT, creation_context=read_only)  # type: ignore[arg-type]
-    assert type(record.creation_context) is dict
-    assert record.creation_context == {"task": "Compare the mug quotes."}
-    with pytest.raises(TypeError, match=r"ProvenanceRecord\.creation_context takes a mapping"):
-        ProvenanceRecord(creation_context=[("task", "x")])  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match=r"ToolInvocation\.parameters takes a mapping"):
-        ToolInvocation(tool_name="search_quotes", parameters=None)  # type: ignore[arg-type]
 
 
 def test_a_single_string_is_refused_where_several_values_are_held() -> None:
@@ -373,3 +337,92 @@ def test_the_names_are_reached_from_the_module_not_the_package_door() -> None:
         "now_iso",
     }
     assert not set(provenance.__all__) & set(dataknobs_common.__all__)
+
+
+def test_the_callers_mapping_is_frozen_on_construction() -> None:
+    context = {"task": "Compare the mug quotes.", "filters": {"item": ["mug"]}}
+    parameters = {"item": "stoneware mug", "filters": {"max": 5}}
+    record = ProvenanceRecord(created_at=AT, creation_context=context)
+    search = ToolInvocation(tool_name="search_quotes", parameters=parameters, timestamp=AT)
+
+    context["task"] = "changed"
+    context["filters"]["item"].append("jug")
+    parameters["filters"]["max"] = 50
+
+    assert record.creation_context == {
+        "task": "Compare the mug quotes.",
+        "filters": {"item": ("mug",)},
+    }
+    assert search.parameters == {"item": "stoneware mug", "filters": {"max": 5}}
+
+
+def test_a_reader_cannot_change_a_records_mapping() -> None:
+    record = create_provenance(
+        "user:buyer", "manual", creation_context={"filters": {"item": ["mug"]}}
+    )
+    with pytest.raises(TypeError):
+        record.creation_context["task"] = "changed"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        record.creation_context["filters"]["item"] = "jug"
+    with pytest.raises(AttributeError):
+        record.creation_context["filters"]["item"].append("jug")
+    with pytest.raises(TypeError):
+        SEARCH.parameters["max"] = 50  # type: ignore[index]
+    assert record.to_dict()["creation_context"] == {"filters": {"item": ["mug"]}}
+    assert SEARCH.to_dict()["parameters"] == {"item": "stoneware mug", "max": 5}
+
+
+def test_to_dict_thaws_the_mapping_back_to_plain_json_containers() -> None:
+    import json
+
+    record = create_provenance(
+        "user:buyer", "manual", creation_context={"filters": {"item": ["mug"], "max": 5}}
+    )
+    shown = record.to_dict()
+    assert type(shown["creation_context"]) is dict
+    assert type(shown["creation_context"]["filters"]) is dict
+    assert type(shown["creation_context"]["filters"]["item"]) is list
+    assert json.loads(json.dumps(shown)) == shown
+
+
+def test_a_mapping_field_takes_any_mapping_and_refuses_anything_else() -> None:
+    from types import MappingProxyType
+
+    from dataknobs_common.copying import FrozenMapping
+
+    read_only = MappingProxyType({"task": "Compare the mug quotes."})
+    record = ProvenanceRecord(created_at=AT, creation_context=read_only)
+    assert isinstance(record.creation_context, FrozenMapping)
+    assert record.creation_context == {"task": "Compare the mug quotes."}
+    assert isinstance(ProvenanceRecord().creation_context, FrozenMapping)
+    assert isinstance(ToolInvocation(tool_name="search_quotes").parameters, FrozenMapping)
+    with pytest.raises(TypeError, match=r"ProvenanceRecord\.creation_context takes a mapping"):
+        ProvenanceRecord(creation_context=[("task", "x")])  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match=r"ToolInvocation\.parameters takes a mapping"):
+        ToolInvocation(tool_name="search_quotes", parameters=None)  # type: ignore[arg-type]
+
+
+def test_a_mapping_that_holds_itself_is_refused() -> None:
+    context: dict[str, object] = {"task": "Compare the mug quotes."}
+    context["self"] = context
+    with pytest.raises(ValueError):
+        ProvenanceRecord(creation_context=context)
+
+
+def test_a_replaced_record_keeps_its_frozen_mapping() -> None:
+    revised = dataclasses.replace(RECORD, created_by="user:buyer")
+    assert revised.creation_context == RECORD.creation_context
+    with pytest.raises(TypeError):
+        revised.creation_context["task"] = "changed"  # type: ignore[index]
+
+
+def test_only_the_records_without_a_mapping_are_hashable() -> None:
+    from collections.abc import Hashable
+
+    for record in (QUOTE, CALL, EDIT):
+        assert isinstance(record, Hashable)
+        assert hash(record) == hash(dataclasses.replace(record))
+    for record in (SEARCH, RECORD):
+        assert not isinstance(record, Hashable)
+        with pytest.raises(TypeError):
+            hash(record)

@@ -72,12 +72,17 @@ A record handed to a store, a renderer or another task cannot change under it:
   `dataclasses.FrozenInstanceError`;
 - the fields holding several values are tuples;
 - a mapping field (`ProvenanceRecord.creation_context`,
-  `ToolInvocation.parameters`) keeps **its own copy** of the mapping it was
-  given, with nested dicts and lists copied too, so the caller's dict can go on
-  changing without reaching the record. Other values inside it are shared, as
-  `copy_structure` shares them (see [Copying](copying.md));
-- `to_dict` returns new containers, so editing what it returns does not reach
-  the record either.
+  `ToolInvocation.parameters`) keeps **a frozen copy** of the mapping it was
+  given, a `FrozenMapping` built by `freeze_structure` (see
+  [Copying](copying.md)). The caller's dict can go on changing without
+  reaching the record, and whoever reads the record cannot change it: item
+  assignment raises `TypeError`. Nested dicts become `FrozenMapping` too and
+  nested lists tuples, so `record.creation_context["tags"]` reads back
+  `("a", "b")` where `["a", "b"]` was given. Other values are shared, not
+  copied, and a mapping that holds itself is refused with `ValueError`;
+- `to_dict` returns new, plain containers, dicts and lists again, so what it
+  returns can be written with `json.dumps` and edited without reaching the
+  record.
 
 So adding to a record makes a new one, with `dataclasses.replace`:
 
@@ -101,8 +106,10 @@ assert record.revision_history == ()   # the record handed on is unchanged
 the same way, so a superseded version keeps the provenance it had.
 
 The records compare by value. `SourceReference`, `LLMInvocation` and
-`RevisionRecord` are also hashable; `ToolInvocation` and `ProvenanceRecord`
-hold a dict and are not.
+`RevisionRecord` are also hashable, so a set of sources works.
+`ToolInvocation` and `ProvenanceRecord` hold a mapping, which cannot be
+hashed, so they declare themselves unhashable: `hash()` raises `TypeError`
+and `isinstance(record, collections.abc.Hashable)` is false.
 
 ## A revision of one part
 
@@ -164,7 +171,7 @@ unchanged.
 | `created_by` | `str` | `""` | Who or what created it (`"system:generator:quiz_gen_v1"`, `"user:jane"`, `"llm:<model>"`) |
 | `created_at` | `str` | now | ISO 8601 creation timestamp |
 | `creation_method` | `str` | `""` | How it was created (`"generator"`, `"wizard"`, `"manual"`, `"derived"`, `"llm_assisted"`) |
-| `creation_context` | `dict[str, Any]` | `{}` | Parameters, configuration and other context; a copy of the mapping given |
+| `creation_context` | `Mapping[str, Any]` | empty | Parameters, configuration and other context; held as a frozen copy (`FrozenMapping`) of the mapping given |
 | `sources` | `tuple[SourceReference, ...]` | `()` | References to the sources used |
 | `tool_chain` | `tuple[ToolInvocation, ...]` | `()` | Tools used during creation |
 | `llm_invocations` | `tuple[LLMInvocation, ...]` | `()` | Model calls made during creation |
@@ -188,7 +195,7 @@ unchanged.
 |---|---|---|---|
 | `tool_name` | `str` | required | Function or tool identifier |
 | `tool_version` | `str \| None` | `None` | Version, if applicable |
-| `parameters` | `dict[str, Any]` | `{}` | Input parameters; a copy of the mapping given |
+| `parameters` | `Mapping[str, Any]` | empty | Input parameters; held as a frozen copy (`FrozenMapping`) of the mapping given |
 | `timestamp` | `str` | now | ISO 8601 invocation time |
 
 ### LLMInvocation

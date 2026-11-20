@@ -25,8 +25,8 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
+from .provenance import now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +34,6 @@ logger = logging.getLogger(__name__)
 def _generate_session_id() -> str:
     """Generate a unique session ID."""
     return f"sess_{uuid.uuid4().hex[:12]}"
-
-
-def _now_iso() -> str:
-    """Return current UTC time as ISO 8601 string."""
-    return datetime.now(UTC).isoformat()
 
 
 @dataclass
@@ -115,7 +110,7 @@ class AssessmentSession:
     student_id: str = ""
     assessment_artifact_id: str = ""
     assessment_version: str = ""
-    started_at: str = field(default_factory=_now_iso)
+    started_at: str = field(default_factory=now_iso)
     completed_at: str | None = None
     responses: list[StudentResponse] = field(default_factory=list)
     score: float | None = None
@@ -162,7 +157,7 @@ class AssessmentSession:
             student_id=data.get("student_id", ""),
             assessment_artifact_id=data.get("assessment_artifact_id", ""),
             assessment_version=data.get("assessment_version", ""),
-            started_at=data.get("started_at", _now_iso()),
+            started_at=data.get("started_at", now_iso()),
             completed_at=data.get("completed_at"),
             responses=[StudentResponse.from_dict(r) for r in data.get("responses", [])],
             score=data.get("score"),
@@ -233,7 +228,7 @@ class CumulativePerformance:
         self.total_sessions += 1
         self.total_questions_attempted += session.total_responses
         self.correct_count += session.correct_count
-        self.last_session_at = session.completed_at or _now_iso()
+        self.last_session_at = session.completed_at or now_iso()
 
         if session.score is not None:
             # Running average
@@ -373,7 +368,7 @@ async def finalize_assessment(
         raise ValueError("No active session in data['_session']")
 
     session = AssessmentSession.from_dict(session_data)
-    session.completed_at = _now_iso()
+    session.completed_at = now_iso()
 
     # Calculate score from correct count
     if session.total_responses > 0:

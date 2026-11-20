@@ -214,11 +214,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   up first still works), or make a new record with `dataclasses.replace`. A
   test comparing one of those fields with a list (`== []`) now compares a
   tuple with a list and fails; compare with a tuple. `creation_context` and
-  `ToolInvocation.parameters` hold a copy of the mapping given, so changing
-  the caller's dict afterwards no longer changes the record. A single string
+  `ToolInvocation.parameters` are now a read-only `FrozenMapping`, a frozen
+  copy of the mapping given: assigning into one raises `TypeError`, a nested
+  list in it reads back as a tuple, and it is not a `dict`, so pass it
+  through `to_dict()` (or `thaw_structure`) before `json.dumps`. Changing the
+  caller's dict afterwards no longer changes the record. A single string
   passed for `review_history` is refused with `TypeError`. `create_provenance`
   takes typed keywords instead of `**kwargs`, so mypy now reports an unknown
-  field (the call raised `TypeError` at run time before, too).
+  field (the call raised `TypeError` at run time before, too). The private
+  `_now_iso` helpers in `artifacts.models`, `artifacts.assessment` and
+  `rubrics.models` are gone; every timestamp default is the one `now_iso`.
   `ArtifactRegistry.revise` adds its revision with `dataclasses.replace`
   rather than appending to a serialised copy. Stored provenance reads back
   unchanged; see the dataknobs-common changelog for the fields added.

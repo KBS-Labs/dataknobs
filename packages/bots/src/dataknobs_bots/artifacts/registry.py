@@ -54,9 +54,8 @@ from .models import (
     ArtifactStatus,
     ArtifactTypeDefinition,
     _generate_artifact_id,
-    _now_iso,
 )
-from .provenance import ProvenanceRecord, RevisionRecord, create_provenance
+from .provenance import ProvenanceRecord, RevisionRecord, create_provenance, now_iso
 from .transitions import validate_transition
 
 logger = logging.getLogger(__name__)
@@ -524,7 +523,7 @@ class ArtifactRegistry:
         validate_transition(artifact.status, status)
 
         artifact.status = status
-        artifact.updated_at = _now_iso()
+        artifact.updated_at = now_iso()
         await self._store_artifact(artifact)
 
         for hook in self._on_status_change_hooks:

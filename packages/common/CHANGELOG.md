@@ -482,9 +482,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   content written with a model can record its sources, tools, model calls and
   revisions without dataknobs-bots. The records are frozen dataclasses: a
   field holding several values keeps a tuple of any iterable it is given, and
-  refuses a single string; `creation_context` and `parameters` keep their own
-  copy of the mapping given (nested dicts and lists included), and `to_dict`
-  returns new containers. A revision is a new record, made with
+  refuses a single string; `creation_context` and `parameters` hold a frozen
+  copy of the mapping given, a `FrozenMapping` (nested dicts frozen too,
+  nested lists held as tuples), so neither the caller nor a reader can change
+  it, and `to_dict` returns plain, new dicts and lists. The three records
+  holding no mapping are hashable; `ToolInvocation` and `ProvenanceRecord`
+  declare themselves unhashable. A revision is a new record, made with
   `dataclasses.replace`. Three optional fields describe a part of the content
   rather than the whole: `LLMInvocation.invocation_id`, and
   `RevisionRecord.part`, `after` (`""` where the part was removed, `None`
