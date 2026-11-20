@@ -13,10 +13,10 @@ import asyncio
 import hashlib
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from io import BytesIO
 from typing import TYPE_CHECKING, BinaryIO, ClassVar
 
+from dataknobs_common.clock import utc_now
 from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConcurrencyError
 
@@ -193,14 +193,14 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
             content_type=content_type,
             size_bytes=len(data),
             checksum=checksum,
-            uploaded_at=datetime.now(UTC),
+            uploaded_at=utc_now(),
             metadata=metadata or {},
         )
         self._file_metadata[domain_id][path] = file_info
 
         # Update KB info
         kb_info = self._kb_info[domain_id]
-        kb_info.last_updated = datetime.now(UTC)
+        kb_info.last_updated = utc_now()
         kb_info.increment_version()
         if is_new:
             kb_info.file_count += 1
@@ -250,7 +250,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
 
         # Update KB info
         kb_info = self._kb_info[domain_id]
-        kb_info.last_updated = datetime.now(UTC)
+        kb_info.last_updated = utc_now()
         kb_info.increment_version()
         kb_info.file_count = len(self._files[domain_id])
         kb_info.total_size_bytes = sum(len(f) for f in self._files[domain_id].values())
@@ -290,7 +290,7 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
             domain_id=domain_id,
             file_count=0,
             total_size_bytes=0,
-            last_updated=datetime.now(UTC),
+            last_updated=utc_now(),
             version="1",
             ingestion_status=IngestionStatus.PENDING,
             metadata=metadata or {},
@@ -457,10 +457,11 @@ class InMemoryKnowledgeBackend(KnowledgeResourceBackendMixin):
         if overlay_key is None:
             kb_info = self._kb_info[domain_id]
         else:
-            kb_info = self._tenant_info.get(overlay_key)
-            if kb_info is None:
-                kb_info = KnowledgeBaseInfo.from_dict({"domain_id": domain_id})
-                self._tenant_info[overlay_key] = kb_info
+            overlay = self._tenant_info.get(overlay_key)
+            if overlay is None:
+                overlay = KnowledgeBaseInfo.from_dict({"domain_id": domain_id})
+                self._tenant_info[overlay_key] = overlay
+            kb_info = overlay
 
         kb_info.ingestion_status = normalize_ingestion_status(status)
         kb_info.ingestion_error = error

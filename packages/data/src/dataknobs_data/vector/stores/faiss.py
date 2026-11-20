@@ -9,10 +9,11 @@ import asyncio
 import logging
 import os
 import pickle
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from dataknobs_common.clock import utc_now
 from dataknobs_common.capabilities import Capability, require_capability
 
 from ..types import DistanceMetric
@@ -510,7 +511,7 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
         # original created_at across the internal-id change. Mirrors
         # MemoryVectorStore.add_vectors (preserve created, refresh
         # updated).
-        now = datetime.now(UTC)
+        now = utc_now()
         prior_created: dict[str, datetime] = {}
         for ext_id in ids:
             if ext_id in self.id_map:
@@ -1002,7 +1003,7 @@ class FaissVectorStore(PathPersistedCapabilityMixin, VectorStore[FaissVectorStor
         if not self._initialized:
             await self.initialize()
 
-        now = datetime.now(UTC)
+        now = utc_now()
         # The same write-path preparation ``add_vectors`` does — a copy,
         # so the caller keeps no handle on the stored row, and the
         # configured ``domain_id`` defaulted back in, because this path

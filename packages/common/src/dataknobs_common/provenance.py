@@ -7,7 +7,9 @@ Five records describe it: a :class:`SourceReference` for each source it rests
 on, a :class:`ToolInvocation` for each tool used, an :class:`LLMInvocation` for
 each model call, a :class:`RevisionRecord` for each revision, and the
 :class:`ProvenanceRecord` that holds them all. :func:`create_provenance` makes
-one, and :func:`now_iso` is the timestamp every record defaults to.
+one. A timestamp left unset defaults to
+:func:`dataknobs_common.clock.now_iso`, so
+:func:`~dataknobs_common.clock.use_clock` fixes it in a test.
 
 They are plain data and need nothing else from dataknobs, so a consumer that
 writes text with a model can record its provenance without running bots.
@@ -81,9 +83,9 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
+from dataknobs_common.clock import now_iso
 from dataknobs_common.copying import FrozenMapping, freeze_structure, thaw_structure
 
 __all__ = [
@@ -93,13 +95,7 @@ __all__ = [
     "SourceReference",
     "ToolInvocation",
     "create_provenance",
-    "now_iso",
 ]
-
-
-def now_iso() -> str:
-    """Return the current UTC time as an ISO 8601 string."""
-    return datetime.now(UTC).isoformat()
 
 
 def _revision_id() -> str:

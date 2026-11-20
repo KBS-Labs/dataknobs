@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
+from dataknobs_common.clock import utc_now
 
 
 @dataclass
@@ -51,9 +52,9 @@ class Registration:
     config: dict[str, Any]
     status: str = "active"
     metadata: dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    last_accessed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+    last_accessed_at: datetime = field(default_factory=utc_now)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization.
@@ -89,19 +90,15 @@ class Registration:
             status=data.get("status", "active"),
             metadata=dict(data.get("metadata") or {}),
             created_at=(
-                datetime.fromisoformat(data["created_at"])
-                if data.get("created_at")
-                else datetime.now(UTC)
+                datetime.fromisoformat(data["created_at"]) if data.get("created_at") else utc_now()
             ),
             updated_at=(
-                datetime.fromisoformat(data["updated_at"])
-                if data.get("updated_at")
-                else datetime.now(UTC)
+                datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else utc_now()
             ),
             last_accessed_at=(
                 datetime.fromisoformat(data["last_accessed_at"])
                 if data.get("last_accessed_at")
-                else datetime.now(UTC)
+                else utc_now()
             ),
         )
 

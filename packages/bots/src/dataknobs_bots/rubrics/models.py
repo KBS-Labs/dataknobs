@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from dataknobs_common.provenance import now_iso
+from dataknobs_common.clock import now_iso
 
 
 class ScoringType(str, Enum):

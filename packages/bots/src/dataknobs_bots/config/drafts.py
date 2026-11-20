@@ -34,11 +34,12 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
+from dataknobs_common.clock import now_iso
 from dataknobs_common.paths import safe_join_or_raise
 from dataknobs_common.structured_config import StructuredConfig
 
@@ -151,7 +152,7 @@ class ConfigDraftManager:
             The generated draft ID.
         """
         draft_id = uuid.uuid4().hex[:8]
-        now = datetime.now(UTC).isoformat()
+        now = now_iso()
 
         metadata = DraftMetadata(
             draft_id=draft_id,
@@ -193,7 +194,7 @@ class ConfigDraftManager:
 
         existing = self._read_file(draft_path)
         existing_meta = existing.get(self._metadata_key, {})
-        now = datetime.now(UTC).isoformat()
+        now = now_iso()
 
         metadata = DraftMetadata(
             draft_id=draft_id,

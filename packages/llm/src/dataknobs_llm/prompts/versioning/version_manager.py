@@ -13,8 +13,8 @@ This module provides version control capabilities including:
 import re
 import uuid
 from typing import Any, Dict, List
-from datetime import UTC, datetime
 
+from dataknobs_common.clock import utc_now
 from dataknobs_llm.exceptions import VersioningError
 
 from .store import InMemoryVersionStore, VersionStore, require_store
@@ -148,7 +148,7 @@ class VersionManager:
             defaults=defaults or {},
             validation=validation,
             metadata=metadata or {},
-            created_at=datetime.now(UTC),
+            created_at=utc_now(),
             created_by=created_by,
             parent_version=parent_version,
             tags=tags or [],

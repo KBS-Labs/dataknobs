@@ -6,10 +6,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
-from datetime import UTC, datetime
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.clock import utc_now
 from dataknobs_data import SortOrder
 
 from .models import Registration
@@ -40,6 +40,16 @@ def _sort_key(reg: Registration, field: str) -> Any:
     return getattr(reg, field, None)
 
 
+def _nones_last(field: str) -> Callable[[Registration], tuple[bool, Any]]:
+    """A sort key on ``field`` that orders a missing value after every present one."""
+
+    def key(reg: Registration) -> tuple[bool, Any]:
+        value = _sort_key(reg, field)
+        return (value is None, value)
+
+    return key
+
+
 def _apply_sort_limit_offset(
     regs: list[Registration],
     sort: list[SortSpec] | None,
@@ -49,10 +59,7 @@ def _apply_sort_limit_offset(
     """Apply Python-side sort, offset, and limit to ``regs`` in that order."""
     if sort:
         for spec in reversed(sort):
-            regs.sort(
-                key=lambda r, f=spec.field: (_sort_key(r, f) is None, _sort_key(r, f)),
-                reverse=(spec.order == SortOrder.DESC),
-            )
+            regs.sort(key=_nones_last(spec.field), reverse=(spec.order == SortOrder.DESC))
     if offset is not None and offset > 0:
         regs = regs[offset:]
     if limit is not None:
@@ -132,7 +139,7 @@ class InMemoryBackend:
             Registration object with metadata
         """
         async with self._lock:
-            now = datetime.now(UTC)
+            now = utc_now()
             meta = dict(metadata or {})
 
             if bot_id in self._registrations:
@@ -182,7 +189,7 @@ class InMemoryBackend:
                     metadata=reg.metadata,
                     created_at=reg.created_at,
                     updated_at=reg.updated_at,
-                    last_accessed_at=datetime.now(UTC),
+                    last_accessed_at=utc_now(),
                 )
                 return self._registrations[bot_id]
             return None
@@ -275,7 +282,7 @@ class InMemoryBackend:
                     status="inactive",
                     metadata=reg.metadata,
                     created_at=reg.created_at,
-                    updated_at=datetime.now(UTC),
+                    updated_at=utc_now(),
                     last_accessed_at=reg.last_accessed_at,
                 )
                 return True

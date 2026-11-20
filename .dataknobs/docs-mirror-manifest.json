@@ -34,6 +34,10 @@
           "site": "provenance.md"
         },
         {
+          "package": "guides/clock.md",
+          "site": "clock.md"
+        },
+        {
           "package": "guides/dotted-paths.md",
           "site": "dotted-paths.md"
         },

@@ -14,10 +14,11 @@ import uuid
 import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from dataknobs_common.clock import utc_now
 from dataknobs_common.callbacks import CallbackRegistry
 from dataknobs_common.capabilities import (
     Capability,
@@ -127,7 +128,7 @@ class IngestionResult:
     files_skipped: int = 0
     files_deleted: int = 0
     errors: list[dict[str, Any]] = field(default_factory=list)
-    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    started_at: datetime = field(default_factory=utc_now)
     completed_at: datetime | None = None
 
     def finish(self) -> IngestionResult:
@@ -137,7 +138,7 @@ class IngestionResult:
         from a ``finally`` block.
         """
         if self.completed_at is None:
-            self.completed_at = datetime.now(UTC)
+            self.completed_at = utc_now()
         return self
 
     @property
@@ -943,6 +944,8 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
         # additive delta (new files only) with a full re-ingest and
         # retired every untouched file's chunks.
         tombstone_scope: dict[str, Any] | None
+        modified_scope: dict[str, Any] | None
+        deleted_scope: dict[str, Any] | None
         if upsert_filter is None:
             # Full re-ingest: the whole domain is re-embedded, so the
             # entire old generation is the modified scope; nothing is
@@ -1218,7 +1221,7 @@ class KnowledgeIngestionManager(DynamicCapabilityMixin):
             chunks_created=result.chunks_created,
             files_deleted=result.files_deleted,
             status=status,
-            completed_at=(result.completed_at or datetime.now(UTC)).isoformat(),
+            completed_at=(result.completed_at or utc_now()).isoformat(),
         )
         await self.lifecycle_callbacks.fire_async(INGEST_DOMAIN_END, payload)
 

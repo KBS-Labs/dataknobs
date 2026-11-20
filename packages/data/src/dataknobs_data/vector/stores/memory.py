@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import pickle
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import numpy as np
 
+from dataknobs_common.clock import utc_now
 from dataknobs_common.capabilities import Capability, require_capability
 
 from .base import VectorStore
@@ -261,7 +262,7 @@ class MemoryVectorStore(PathPersistedCapabilityMixin, VectorStore[MemoryVectorSt
         # fresh per-row dicts (config-level domain_id defaulted in,
         # caller's dicts never aliased — see Items #8 / 131).
         rows = self._apply_domain_default(metadata, len(ids), ids=ids, stored=stored)
-        now = datetime.now(UTC)
+        now = utc_now()
         for i, vector_id in enumerate(ids):
             self.vectors[vector_id] = vectors[i]
             self.metadata_store[vector_id] = rows[i]
@@ -403,7 +404,7 @@ class MemoryVectorStore(PathPersistedCapabilityMixin, VectorStore[MemoryVectorSt
         if not self._initialized:
             await self.initialize()
 
-        now = datetime.now(UTC)
+        now = utc_now()
         # The same write-path preparation ``add_vectors`` does, for the
         # same two reasons. The row is stored as a copy, so the caller
         # keeps no handle on it through the dict it passed. And the

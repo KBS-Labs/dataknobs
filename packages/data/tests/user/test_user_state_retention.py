@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from dataknobs_common.testing import FixedClock
 
 from dataknobs_common.exceptions import ConfigurationError
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
@@ -37,19 +38,6 @@ _SECTIONS = [
 _START = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-class _Clock:
-    """A deterministic, advanceable UTC clock injected as the ``now`` component."""
-
-    def __init__(self, start: datetime) -> None:
-        self.value = start
-
-    def __call__(self) -> datetime:
-        return self.value
-
-    def advance(self, **kwargs: Any) -> None:
-        self.value = self.value + timedelta(**kwargs)
-
-
 def _config(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "backend": "memory",
@@ -66,11 +54,11 @@ def _config(**overrides: Any) -> dict[str, Any]:
 
 
 async def test_prune_removes_expired_records_async() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = await AsyncUserStateStore.from_config(_config(), now=clock)
     try:
         await store.add_record("u1", "activity", {"event": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
         await store.add_record("u1", "activity", {"event": "new"})
 
         pruned = await store.prune("u1", "activity")
@@ -83,11 +71,11 @@ async def test_prune_removes_expired_records_async() -> None:
 
 
 def test_prune_removes_expired_records_sync() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = UserStateStore.from_config(_config(), now=clock)
     try:
         store.add_record("u1", "activity", {"event": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
         store.add_record("u1", "activity", {"event": "new"})
 
         assert store.prune("u1", "activity") == 1
@@ -98,13 +86,13 @@ def test_prune_removes_expired_records_sync() -> None:
 
 
 async def test_prune_all_sections_skips_unwindowed_and_documents() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = await AsyncUserStateStore.from_config(_config(), now=clock)
     try:
         await store.add_record("u1", "activity", {"event": "old"})
         await store.add_record("u1", "notes", {"text": "keep"})
         await store.put_document("u1", "prefs", {"theme": "dark"})
-        clock.advance(days=100)
+        clock.advance(timedelta(days=100))
 
         # section=None prunes every windowed collection section; ``notes`` has
         # no window and ``prefs`` is a document, so both are untouched.
@@ -118,7 +106,7 @@ async def test_prune_all_sections_skips_unwindowed_and_documents() -> None:
 
 
 async def test_prune_document_section_rejected() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = await AsyncUserStateStore.from_config(_config(), now=clock)
     try:
         # A document section cannot be pruned explicitly (wrong kind).
@@ -134,11 +122,11 @@ async def test_prune_document_section_rejected() -> None:
 
 
 async def test_prune_on_query_when_enabled() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = await AsyncUserStateStore.from_config(_config(prune_on_query=True), now=clock)
     try:
         await store.add_record("u1", "activity", {"event": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
         await store.add_record("u1", "activity", {"event": "new"})
 
         # The read prunes first, so only the fresh record surfaces...
@@ -152,11 +140,11 @@ async def test_prune_on_query_when_enabled() -> None:
 
 
 async def test_prune_on_query_off_by_default() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = await AsyncUserStateStore.from_config(_config(), now=clock)
     try:
         await store.add_record("u1", "activity", {"event": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
         await store.add_record("u1", "activity", {"event": "new"})
 
         # No prune_on_query → the expired record is still returned.

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Dict, List
 from enum import Enum
+from dataknobs_common.clock import utc_now
 
 
 class VersionStatus(Enum):
@@ -61,7 +62,7 @@ class PromptVersion:
     defaults: Dict[str, Any] = field(default_factory=dict)
     validation: Dict[str, Any] | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = field(default_factory=utc_now)
     created_by: str | None = None
     parent_version: str | None = None
     tags: List[str] = field(default_factory=list)
@@ -157,7 +158,7 @@ class PromptExperiment:
     prompt_type: str
     variants: List[PromptVariant]
     traffic_split: Dict[str, float]
-    start_date: datetime = field(default_factory=lambda: datetime.now(UTC))
+    start_date: datetime = field(default_factory=utc_now)
     end_date: datetime | None = None
     status: str = "running"
     metrics: Dict[str, Any] = field(default_factory=dict)
@@ -329,7 +330,7 @@ class MetricEvent:
     """
 
     version_id: str
-    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = field(default_factory=utc_now)
     success: bool = True
     response_time: float | None = None
     tokens: int | None = None

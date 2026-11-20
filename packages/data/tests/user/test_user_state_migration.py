@@ -28,6 +28,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from dataknobs_common.testing import FixedClock
 
 from dataknobs_common.exceptions import ConcurrencyError, ConfigurationError
 from dataknobs_common.tenancy import BoundTenantContext
@@ -50,19 +51,6 @@ from dataknobs_data.user.migration import (
 from dataknobs_data.user.store import SECTION_WRITTEN_TOPIC
 
 _START = datetime(2026, 1, 1, tzinfo=UTC)
-
-
-class _Clock:
-    """A deterministic, advanceable UTC clock injected as the ``now`` component."""
-
-    def __init__(self, start: datetime) -> None:
-        self.value = start
-
-    def __call__(self) -> datetime:
-        return self.value
-
-    def advance(self, **kwargs: Any) -> None:
-        self.value = self.value + timedelta(**kwargs)
 
 
 # --- upgraders (pure; take a v_n payload, return the v_{n+1} payload) --- #
@@ -568,12 +556,12 @@ async def test_persist_migration_preserves_written_at_async(
 ) -> None:
     migrator("prefs", 1, _rename_color_to_theme)
     db = AsyncMemoryDatabase()
-    old_clock = _Clock(_START)
+    old_clock = FixedClock(_START)
     store_v1 = AsyncUserStateStore.from_components(
         UserStateStoreConfig.from_dict(_doc_cfg(1)), db=db, now=old_clock
     )
-    new_clock = _Clock(_START)
-    new_clock.advance(days=100)
+    new_clock = FixedClock(_START)
+    new_clock.advance(timedelta(days=100))
     store_v2 = AsyncUserStateStore.from_components(
         UserStateStoreConfig.from_dict(_doc_cfg(2, persist_migrations=True)),
         db=db,

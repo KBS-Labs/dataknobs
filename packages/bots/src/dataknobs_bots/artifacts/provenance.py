@@ -13,6 +13,10 @@ artifact's provenance is a :class:`ProvenanceRecord`:
 - Revision records: history of changes
 - Provenance records: complete creation context
 
+:func:`now_iso`, the timestamp the records default to, is re-exported from
+:mod:`dataknobs_common.clock`, so :func:`~dataknobs_common.clock.use_clock`
+fixes it in a test.
+
 The records are frozen. Fields holding several values are tuples, and a
 change is a new record made with :func:`dataclasses.replace`:
 
@@ -33,6 +37,7 @@ Example:
 
 from __future__ import annotations
 
+from dataknobs_common.clock import now_iso
 from dataknobs_common.provenance import (
     LLMInvocation,
     ProvenanceRecord,
@@ -40,7 +45,6 @@ from dataknobs_common.provenance import (
     SourceReference,
     ToolInvocation,
     create_provenance,
-    now_iso,
 )
 
 __all__ = [

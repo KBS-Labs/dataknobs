@@ -8,11 +8,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from dataknobs_common.clock import now_iso, utc_now
 from dataknobs_common.callbacks import run_callback
 
 from ..fields import FieldType
@@ -111,7 +112,7 @@ class MigrationStatus:
             {
                 "name": name,
                 "record_id": record_id,
-                "timestamp": datetime.now(UTC).isoformat(),
+                "timestamp": now_iso(),
                 "migrated": self.migrated_records,
                 "failed": self.failed_records,
             }
@@ -224,7 +225,7 @@ class VectorMigration:
         Returns:
             Migration status
         """
-        self.status = MigrationStatus(start_time=datetime.now(UTC))
+        self.status = MigrationStatus(start_time=utc_now())
 
         try:
             # Get all records from source
@@ -270,13 +271,13 @@ class VectorMigration:
                 if progress_callback:
                     await run_callback(progress_callback, self.status)
 
-            self.status.end_time = datetime.now(UTC)
+            self.status.end_time = utc_now()
             return self.status
 
         except Exception as e:
             logger.error(f"Migration failed: {e}")
             self.status.failed_records = self.status.total_records - self.status.migrated_records
-            self.status.end_time = datetime.now(UTC)
+            self.status.end_time = utc_now()
             return self.status
 
     async def start(self) -> None:
@@ -335,7 +336,7 @@ class VectorMigration:
                 "`embedder=` or `embedding_fn=` when building the migration"
             )
 
-        status = MigrationStatus(start_time=datetime.now(UTC))
+        status = MigrationStatus(start_time=utc_now())
 
         try:
             # Get records to migrate
@@ -466,7 +467,7 @@ class VectorMigration:
             raise
 
         finally:
-            status.end_time = datetime.now(UTC)
+            status.end_time = utc_now()
 
         logger.info(
             f"Migration completed: {status.migrated_records}/{status.total_records} "
@@ -628,7 +629,7 @@ class VectorMigration:
         Returns:
             Migration status
         """
-        status = MigrationStatus(start_time=datetime.now(UTC))
+        status = MigrationStatus(start_time=utc_now())
 
         try:
             # Get all records with vectors
@@ -682,7 +683,7 @@ class VectorMigration:
                     await run_callback(progress_callback, status)
 
         finally:
-            status.end_time = datetime.now(UTC)
+            status.end_time = utc_now()
 
         return status
 
@@ -986,7 +987,7 @@ class IncrementalVectorizer:
                 source_field=",".join(self.text_fields),
                 model_name=self.model_name,
                 model_version=self.model_version,
-                updated_at=datetime.now(UTC).isoformat(),
+                updated_at=now_iso(),
             )
             update_data[f"{self.vector_field}_metadata"] = {
                 **metadata.to_dict(),

@@ -18,9 +18,10 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.clock import utc_now
 from .backend import RegistryBackend
 from .memory import _apply_sort_limit_offset, _matches_metadata
 from .models import Registration
@@ -685,7 +686,7 @@ class HTTPRegistryBackend(RegistryBackend):
                     return datetime.fromisoformat(val.replace("Z", "+00:00"))
                 except ValueError:
                     pass
-            return datetime.now(UTC)
+            return utc_now()
 
         return Registration(
             bot_id=data.get("bot_id", data.get("id", "")),

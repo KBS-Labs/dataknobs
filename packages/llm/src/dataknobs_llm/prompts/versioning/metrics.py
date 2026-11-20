@@ -11,8 +11,9 @@ This module provides:
 """
 
 from typing import Any, Dict, List
-from datetime import UTC, datetime
+from datetime import datetime
 
+from dataknobs_common.clock import utc_now
 from .store import InMemoryVersionStore, MetricsStore, require_store
 from .types import (
     PromptMetrics,
@@ -107,7 +108,7 @@ class MetricsCollector:
         # Create event
         event = MetricEvent(
             version_id=version_id,
-            timestamp=datetime.now(UTC),
+            timestamp=utc_now(),
             success=success,
             response_time=response_time,
             tokens=tokens,

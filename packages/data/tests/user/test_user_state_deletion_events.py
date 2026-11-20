@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from dataknobs_common.testing import FixedClock
 
 from dataknobs_common.events import InMemoryEventBus
 from dataknobs_common.tenancy import BoundTenantContext
@@ -40,19 +41,6 @@ _SECTIONS = [
 ]
 
 _START = datetime(2026, 1, 1, tzinfo=UTC)
-
-
-class _Clock:
-    """A deterministic, advanceable UTC clock injected as the ``now`` component."""
-
-    def __init__(self, start: datetime) -> None:
-        self.value = start
-
-    def __call__(self) -> datetime:
-        return self.value
-
-    def advance(self, **kwargs: Any) -> None:
-        self.value = self.value + timedelta(**kwargs)
 
 
 def _config(**overrides: Any) -> dict[str, Any]:
@@ -159,12 +147,12 @@ def test_no_op_delete_fires_nothing_sync() -> None:
 
 
 async def test_prune_fires_event_async() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = await AsyncUserStateStore.from_config(_config(), now=clock)
     try:
         captured = _capture(store)
         await store.add_record("u1", "activity", {"event": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
         await store.add_record("u1", "activity", {"event": "new"})
 
         assert await store.prune("u1", "activity") == 1
@@ -186,12 +174,12 @@ async def test_prune_fires_event_async() -> None:
 
 
 def test_prune_fires_event_sync() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = UserStateStore.from_config(_config(), now=clock)
     try:
         captured = _capture(store)
         store.add_record("u1", "activity", {"event": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
         store.add_record("u1", "activity", {"event": "new"})
 
         assert store.prune("u1", "activity") == 1
@@ -212,12 +200,12 @@ def test_prune_fires_event_sync() -> None:
 
 
 async def test_prune_on_query_delete_is_observable_async() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = await AsyncUserStateStore.from_config(_config(prune_on_query=True), now=clock)
     try:
         captured = _capture(store)
         await store.add_record("u1", "activity", {"event": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
         await store.add_record("u1", "activity", {"event": "new"})
 
         # The read prunes first; the deletion must surface as an event.
@@ -231,12 +219,12 @@ async def test_prune_on_query_delete_is_observable_async() -> None:
 
 
 def test_prune_on_query_delete_is_observable_sync() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = UserStateStore.from_config(_config(prune_on_query=True), now=clock)
     try:
         captured = _capture(store)
         store.add_record("u1", "activity", {"event": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
         store.add_record("u1", "activity", {"event": "new"})
 
         rows = store.query("u1", "activity")
@@ -476,7 +464,7 @@ def _multi_config(**overrides: Any) -> dict[str, Any]:
 
 
 async def test_section_less_prune_reports_per_section_split_async() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = await AsyncUserStateStore.from_config(_multi_config(), now=clock)
     try:
         captured = _capture(store)
@@ -484,7 +472,7 @@ async def test_section_less_prune_reports_per_section_split_async() -> None:
         await store.add_record("u1", "activity", {"event": "a1"})
         await store.add_record("u1", "activity", {"event": "a2"})
         await store.add_record("u1", "sessions", {"sid": "s1"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
         # A fresh activity record that must survive (not counted).
         await store.add_record("u1", "activity", {"event": "a3"})
 
@@ -502,14 +490,14 @@ async def test_section_less_prune_reports_per_section_split_async() -> None:
 
 
 def test_section_less_prune_reports_per_section_split_sync() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = UserStateStore.from_config(_multi_config(), now=clock)
     try:
         captured = _capture(store)
         store.add_record("u1", "activity", {"event": "a1"})
         store.add_record("u1", "activity", {"event": "a2"})
         store.add_record("u1", "sessions", {"sid": "s1"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
         store.add_record("u1", "activity", {"event": "a3"})
 
         assert store.prune("u1") == 3
@@ -525,12 +513,12 @@ def test_section_less_prune_reports_per_section_split_sync() -> None:
 async def test_section_less_prune_omits_unaffected_sections_async() -> None:
     # Only ``sessions`` has an expired record this pass; ``activity`` has none,
     # so ``sections`` names only the section that actually lost records.
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = await AsyncUserStateStore.from_config(_multi_config(), now=clock)
     try:
         captured = _capture(store)
         await store.add_record("u1", "sessions", {"sid": "s1"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
         await store.add_record("u1", "activity", {"event": "fresh"})
 
         assert await store.prune("u1") == 1
@@ -541,12 +529,12 @@ async def test_section_less_prune_omits_unaffected_sections_async() -> None:
 
 
 def test_section_less_prune_omits_unaffected_sections_sync() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = UserStateStore.from_config(_multi_config(), now=clock)
     try:
         captured = _capture(store)
         store.add_record("u1", "sessions", {"sid": "s1"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
         store.add_record("u1", "activity", {"event": "fresh"})
 
         assert store.prune("u1") == 1
@@ -559,12 +547,12 @@ def test_section_less_prune_omits_unaffected_sections_sync() -> None:
 def test_single_section_prune_omits_sections_field_sync() -> None:
     # An explicit single-section prune names the target in ``section`` and does
     # not carry the ``sections`` split (which would be a redundant {name: n}).
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = UserStateStore.from_config(_multi_config(), now=clock)
     try:
         captured = _capture(store)
         store.add_record("u1", "activity", {"event": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
 
         assert store.prune("u1", "activity") == 1
         assert len(captured) == 1
@@ -575,12 +563,12 @@ def test_single_section_prune_omits_sections_field_sync() -> None:
 
 
 async def test_single_section_prune_omits_sections_field_async() -> None:
-    clock = _Clock(_START)
+    clock = FixedClock(_START)
     store = await AsyncUserStateStore.from_config(_multi_config(), now=clock)
     try:
         captured = _capture(store)
         await store.add_record("u1", "activity", {"event": "old"})
-        clock.advance(days=40)
+        clock.advance(timedelta(days=40))
 
         assert await store.prune("u1", "activity") == 1
         assert len(captured) == 1
