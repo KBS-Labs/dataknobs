@@ -34,6 +34,8 @@ __all__ = ["FixedClock"]
 
 
 def _aware(at: datetime) -> datetime:
+    if not isinstance(at, datetime):
+        raise TypeError(f"FixedClock takes an aware datetime, not {type(at).__name__}: {at!r}")
     if at.utcoffset() is None:
         raise ValueError(f"FixedClock takes an aware datetime; {at.isoformat()} is naive")
     return at
@@ -44,7 +46,7 @@ class FixedClock:
 
     Args:
         at: The instant to start at; an aware ``datetime``. A naive one is
-            refused with ``ValueError``.
+            refused with ``ValueError``, anything else with ``TypeError``.
     """
 
     def __init__(self, at: datetime) -> None:
@@ -71,6 +73,7 @@ class FixedClock:
         """Hold ``at`` from now on, earlier or later than before, and return it.
 
         Raises:
+            TypeError: ``at`` is not a ``datetime``.
             ValueError: ``at`` is naive.
         """
         self._now = _aware(at)

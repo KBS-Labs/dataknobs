@@ -5,8 +5,12 @@
 
 :func:`utc_now` returns the current time as an aware UTC
 :class:`~datetime.datetime`, and :func:`now_iso` returns it as an ISO 8601
-string. Every aware timestamp dataknobs writes is read through one of them,
-from a record's default to a log line's ``timestamp``.
+string. Every aware ``datetime`` timestamp dataknobs writes is read through
+one of them, from a record's default to a log line's ``timestamp``. Two kinds
+of stamp are not: epoch floats from :func:`time.time` (a registry's
+``registered_at``, a wizard's stage-entry time) and naive local
+``datetime.now()`` reads (an llm conversation's ``updated_at``). Moving either
+changes a stored value, so each waits on its own decision.
 
 **A test fixes the time with** :func:`use_clock`. It sets the clock for the
 current context, so it reaches every stamp made under it, including a
@@ -33,11 +37,19 @@ UTC.
 
 **Where the clock reaches.** The clock is held in a
 :class:`~contextvars.ContextVar`. :mod:`asyncio` copies the context into each
-task, and :func:`asyncio.to_thread` copies it into its worker, so a clock set
-in one test does not reach a concurrent one. A
-:class:`~concurrent.futures.ThreadPoolExecutor` and a bare
-:class:`threading.Thread` do **not** copy the context, so a stamp made on such
-a thread reads :func:`system_clock`.
+task when it is created, :func:`asyncio.to_thread` copies it into its worker,
+and :func:`asyncio.run_coroutine_threadsafe` carries the caller's into the
+loop, so a clock set in one test does not reach a concurrent one. A task
+created *before* the clock was set keeps the clock it started with, so a
+long-lived listener has to be started inside the block to see it.
+:meth:`loop.run_in_executor <asyncio.loop.run_in_executor>`, a
+:class:`~concurrent.futures.ThreadPoolExecutor`, a bare
+:class:`threading.Thread` and :func:`~dataknobs_common.async_iter.aiter_sync_in_thread`
+do **not** copy the context, so a stamp made there reads :func:`system_clock`;
+run the work with :meth:`contextvars.Context.run` on a copy to carry it. (On
+Python 3.14 with ``sys.flags.thread_inherit_context`` set, the default on a
+free-threaded build, a new thread inherits its parent's context and so the
+clock.)
 
 **Where a constructor takes a clock, that clock wins.** A component that
 accepts a :data:`Clock` (the per-user state store's ``components["now"]``)

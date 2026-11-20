@@ -40,8 +40,13 @@ def _sort_key(reg: Registration, field: str) -> Any:
     return getattr(reg, field, None)
 
 
-def _nones_last(field: str) -> Callable[[Registration], tuple[bool, Any]]:
-    """A sort key on ``field`` that orders a missing value after every present one."""
+def _missing_sorts_high(field: str) -> Callable[[Registration], tuple[bool, Any]]:
+    """A sort key on ``field`` that ranks a missing value above every present one.
+
+    So a missing value comes after the present ones in an ascending sort and,
+    because the caller reverses the whole key for a descending one, before
+    them in a descending sort.
+    """
 
     def key(reg: Registration) -> tuple[bool, Any]:
         value = _sort_key(reg, field)
@@ -59,7 +64,7 @@ def _apply_sort_limit_offset(
     """Apply Python-side sort, offset, and limit to ``regs`` in that order."""
     if sort:
         for spec in reversed(sort):
-            regs.sort(key=_nones_last(spec.field), reverse=(spec.order == SortOrder.DESC))
+            regs.sort(key=_missing_sorts_high(spec.field), reverse=(spec.order == SortOrder.DESC))
     if offset is not None and offset > 0:
         regs = regs[offset:]
     if limit is not None:

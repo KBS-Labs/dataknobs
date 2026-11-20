@@ -115,7 +115,7 @@ class Event:
             timestamp=(
                 datetime.fromisoformat(data["timestamp"])
                 if isinstance(data.get("timestamp"), str)
-                else data.get("timestamp", utc_now())
+                else (data["timestamp"] if "timestamp" in data else utc_now())
             ),
             event_id=data.get("event_id", str(uuid.uuid4())),
             source=data.get("source"),

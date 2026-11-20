@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tracker, sync and migration status, and the per-user state store's
   `_written_at` and retention clock when no `now` component is injected. An
   injected `now` still wins. No value changes. Server-side timestamps
-  (pgvector, Postgres) are the server's own and are not reached.
+  (pgvector, Postgres) are the server's own and are not reached, nor are
+  migration progress's epoch-float `timestamp`s from `time.time()`.
 
 - **BREAKING: the backend, vector-store and user-state configs are no longer
   hashable**, as no `StructuredConfig` now is (see `dataknobs-common`).

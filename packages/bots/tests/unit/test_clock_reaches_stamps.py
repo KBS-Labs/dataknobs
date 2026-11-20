@@ -16,11 +16,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import yaml
 from dataknobs_common.clock import use_clock
 from dataknobs_common.testing import FixedClock
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
 
 from dataknobs_bots.api.exceptions import APIError
+from dataknobs_bots.artifacts.assessment import AssessmentSession
+from dataknobs_bots.artifacts.models import Artifact
 from dataknobs_bots.artifacts.registry import ArtifactRegistry
 from dataknobs_bots.config.drafts import ConfigDraftManager
 from dataknobs_bots.middleware.logging import LoggingMiddleware
@@ -125,7 +128,69 @@ def test_a_draft_is_stamped_by_the_clock(tmp_path: Path) -> None:
     assert metadata.last_updated == LATER.isoformat()
 
 
+def test_a_draft_ages_out_by_the_clock_that_stamped_it(tmp_path: Path) -> None:
+    """Expiry is measured on the clock the stamp came from.
+
+    A draft stamped under a fixed clock and checked against the wall clock
+    would look months old the moment it was written, and advancing the fixed
+    clock could never age it.
+    """
+    manager = ConfigDraftManager(output_dir=tmp_path, max_age_hours=24)
+    clock = FixedClock(AT)
+    with use_clock(clock):
+        draft_id = manager.create_draft({"name": "bot"})
+        assert manager.cleanup_stale() == 0
+        assert manager.get_draft(draft_id) is not None
+
+        clock.advance(timedelta(hours=23))
+        assert manager.cleanup_stale() == 0
+        assert manager.get_draft(draft_id) is not None
+
+        clock.advance(timedelta(hours=2))
+        assert manager.cleanup_stale() == 1
+        assert manager.get_draft(draft_id) is None
+
+
+def test_a_named_configs_draft_block_ages_out_by_the_same_clock(tmp_path: Path) -> None:
+    manager = ConfigDraftManager(output_dir=tmp_path, max_age_hours=24)
+    clock = FixedClock(AT)
+    with use_clock(clock):
+        draft_id = manager.create_draft({"name": "bot"})
+        manager.update_draft(draft_id, {"name": "bot"}, config_name="named-bot")
+        manager.cleanup_stale()
+        assert "_draft" in yaml.safe_load((tmp_path / "named-bot.yaml").read_text())
+
+        clock.advance(timedelta(hours=25))
+        manager.cleanup_stale()
+    assert "_draft" not in yaml.safe_load((tmp_path / "named-bot.yaml").read_text())
+
+
 def test_an_api_error_body_is_stamped_by_the_clock() -> None:
     with use_clock(FixedClock(AT)):
         body = APIError("Bad request", status_code=400).to_dict()
     assert body["timestamp"] == AT.isoformat()
+
+
+def _refusing_clock() -> datetime:
+    """A clock no read may reach: it returns a naive value, which is refused."""
+    return datetime(2026, 1, 1)
+
+
+async def test_artifact_from_dict_does_not_read_the_clock_for_stored_stamps() -> None:
+    registry = ArtifactRegistry(db=AsyncMemoryDatabase())
+    with use_clock(FixedClock(AT)):
+        stored = (
+            await registry.create(artifact_type="content", name="Quote", content={"v": 1})
+        ).to_dict()
+    with use_clock(_refusing_clock):
+        restored = Artifact.from_dict(stored)
+    assert restored.created_at == AT.isoformat()
+    assert restored.updated_at == AT.isoformat()
+
+
+def test_an_assessment_session_from_dict_does_not_read_the_clock_for_a_stored_start() -> None:
+    with use_clock(FixedClock(AT)):
+        stored = AssessmentSession(student_id="s", assessment_artifact_id="a").to_dict()
+    with use_clock(_refusing_clock):
+        restored = AssessmentSession.from_dict(stored)
+    assert restored.started_at == AT.isoformat()

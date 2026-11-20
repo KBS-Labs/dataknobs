@@ -31,6 +31,14 @@ def test_a_naive_start_is_refused() -> None:
         FixedClock(datetime(2026, 1, 1, 12, 0))
 
 
+def test_something_other_than_a_datetime_is_refused_by_name() -> None:
+    with pytest.raises(TypeError, match="str"):
+        FixedClock("2026-01-01T00:00:00+00:00")  # type: ignore[arg-type]
+    clock = FixedClock(datetime(2026, 1, 1, tzinfo=UTC))
+    with pytest.raises(TypeError, match="int"):
+        clock.set(1767225600)  # type: ignore[arg-type]
+
+
 def test_advance_moves_it_forward() -> None:
     clock = FixedClock(AT)
     assert clock.advance(timedelta(seconds=5)) == AT + timedelta(seconds=5)

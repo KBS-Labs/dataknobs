@@ -9,13 +9,17 @@ the dataclass defaults included, without patching :mod:`datetime`.
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
 import dataknobs_common
 from dataknobs_common import clock
+from dataknobs_common.async_iter import aiter_sync_in_thread
 from dataknobs_common.clock import now_iso, system_clock, use_clock, utc_now
 
 AT = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -115,6 +119,12 @@ async def test_asyncio_to_thread_carries_the_clock() -> None:
         assert await asyncio.to_thread(utc_now) == AT
 
 
+#: Python 3.14 can start a thread in a copy of its parent's context, and does
+#: by default on a free-threaded build. Where it does, a bare thread carries
+#: the clock like any task.
+_THREADS_INHERIT_CONTEXT = bool(getattr(sys.flags, "thread_inherit_context", 0))
+
+
 def test_a_bare_thread_reads_the_default_clock() -> None:
     """The documented limit: a thread started without the context reads the default."""
     seen: list[datetime] = []
@@ -122,7 +132,48 @@ def test_a_bare_thread_reads_the_default_clock() -> None:
         thread = threading.Thread(target=lambda: seen.append(utc_now()))
         thread.start()
         thread.join()
-    assert seen and seen[0] != AT
+    assert seen
+    assert (seen[0] == AT) is _THREADS_INHERIT_CONTEXT
+
+
+def test_a_thread_pool_worker_reads_the_default_clock() -> None:
+    with use_clock(lambda: AT), ThreadPoolExecutor(max_workers=1) as pool:
+        assert pool.submit(utc_now).result() != AT
+
+
+async def test_run_in_executor_does_not_carry_the_clock() -> None:
+    """The usual asyncio hand-off to a thread is not ``to_thread``'s."""
+    loop = asyncio.get_running_loop()
+    with use_clock(lambda: AT):
+        assert await loop.run_in_executor(None, utc_now) != AT
+
+
+async def test_aiter_sync_in_thread_does_not_carry_the_clock() -> None:
+    """Its producer runs on a thread of its own, started without the context."""
+    with use_clock(lambda: AT):
+        seen = [stamp async for stamp in aiter_sync_in_thread(lambda: iter([utc_now()]))]
+    assert seen and (seen[0] == AT) is _THREADS_INHERIT_CONTEXT
+
+
+def test_copy_context_run_carries_the_clock_onto_a_thread() -> None:
+    """The documented way across: run the work in a copy of the context."""
+    with use_clock(lambda: AT), ThreadPoolExecutor(max_workers=1) as pool:
+        context = contextvars.copy_context()
+        assert pool.submit(context.run, utc_now).result() == AT
+
+
+def test_run_coroutine_threadsafe_carries_the_clock_to_the_loop() -> None:
+    """A sync caller handing a coroutine to a loop thread: the loop sees its clock."""
+    loop = asyncio.new_event_loop()
+    runner = threading.Thread(target=loop.run_forever, daemon=True)
+    runner.start()
+    try:
+        with use_clock(lambda: AT):
+            assert asyncio.run_coroutine_threadsafe(_read(), loop).result(timeout=5) == AT
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        runner.join(timeout=5)
+        loop.close()
 
 
 def test_the_names_are_reached_from_the_module_not_the_package_door() -> None:

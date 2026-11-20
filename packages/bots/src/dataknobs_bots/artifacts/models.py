@@ -144,8 +144,8 @@ class Artifact:
             rubric_ids=data.get("rubric_ids", []),
             evaluation_ids=data.get("evaluation_ids", []),
             metadata=dict(data.get("metadata") or {}),
-            created_at=data.get("created_at", now_iso()),
-            updated_at=data.get("updated_at", now_iso()),
+            created_at=data["created_at"] if "created_at" in data else now_iso(),
+            updated_at=data["updated_at"] if "updated_at" in data else now_iso(),
         )
 
 

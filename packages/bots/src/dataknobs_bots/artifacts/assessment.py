@@ -158,7 +158,7 @@ class AssessmentSession:
             student_id=data.get("student_id", ""),
             assessment_artifact_id=data.get("assessment_artifact_id", ""),
             assessment_version=data.get("assessment_version", ""),
-            started_at=data.get("started_at", now_iso()),
+            started_at=data["started_at"] if "started_at" in data else now_iso(),
             completed_at=data.get("completed_at"),
             responses=[StudentResponse.from_dict(r) for r in data.get("responses", [])],
             score=data.get("score"),

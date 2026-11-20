@@ -908,8 +908,8 @@ async def test_put_does_not_block(backend):
 
 `FixedClock` returns the instant it holds, so a test can assert a timestamp's
 value rather than only that one exists. Set it for a block with `use_clock`
-from `dataknobs_common.clock`, which every aware timestamp the library writes
-reads, or pass it where a constructor takes a clock:
+from `dataknobs_common.clock`, which every aware `datetime` timestamp the
+library writes reads, or pass it where a constructor takes a clock:
 
 ```python
 from datetime import UTC, datetime, timedelta
@@ -926,7 +926,9 @@ with use_clock(clock):
 
 A naive start or `set` is refused with `ValueError`. The
 [clock guide](https://kbs-labs.github.io/dataknobs/packages/common/clock/) covers
-where `use_clock` reaches and where it does not.
+where `use_clock` reaches and where it does not: epoch-float (`time.time()`)
+and naive (`datetime.now()`) stamps are outside it, and so is a thread that
+does not copy the context.
 
 ---
 

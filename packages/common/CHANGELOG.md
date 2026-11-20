@@ -479,19 +479,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test fixes it with.** `utc_now()` returns the current time as an aware UTC
   `datetime` and `now_iso()` as an ISO 8601 string; with no clock set they are
   `datetime.now(UTC)` and its `isoformat()`. `use_clock(clock)` sets the clock
-  for the current context, so it reaches every stamp made under it, dataclass
-  defaults included, and restores the previous clock when the block ends.
-  `asyncio` tasks and `asyncio.to_thread` carry it; a `ThreadPoolExecutor`
-  worker or a bare thread reads `system_clock`. A clock returning a value in
+  for the current context, so it reaches every aware stamp made under it,
+  dataclass defaults included, and restores the previous clock when the block
+  ends. `asyncio` tasks, `asyncio.to_thread` and
+  `asyncio.run_coroutine_threadsafe` carry it; `loop.run_in_executor`, a
+  `ThreadPoolExecutor` worker, a bare thread and the `aiter_sync_in_thread`
+  producer read `system_clock`. A clock returning a value in
   another zone is read as UTC, and one returning a naive value is refused
   with `ValueError`. Every aware timestamp in `dataknobs_common` (provenance
-  records, `Event.timestamp`, `Subscription.created_at`) reads it. Import the
+  records, `Event.timestamp`, `Subscription.created_at`) reads it; the
+  registries' `registered_at`, an epoch float from `time.time()`, does not. Import the
   names from the module; they are not exported from `dataknobs_common`.
 
 - **`dataknobs_common.testing.FixedClock`.** A clock that returns the instant
   it holds, with `advance(delta)` and `set(at)`; `set` accepts an earlier
   instant, so a test can reproduce a wall clock corrected backwards. A naive
-  instant is refused. It works under `use_clock` and wherever a constructor
+  instant is refused with `ValueError`, and anything other than a `datetime`
+  with `TypeError`. It works under `use_clock` and wherever a constructor
   takes a clock.
 
 - **`dataknobs_common.provenance`: provenance records outside bots, frozen.**
