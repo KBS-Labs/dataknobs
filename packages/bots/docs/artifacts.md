@@ -109,113 +109,70 @@ Create from config: `ArtifactTypeDefinition.from_config(type_id, config_dict)`.
 
 ## Provenance
 
-Every artifact carries a `ProvenanceRecord` that tracks its complete creation and revision history.
-
-### ProvenanceRecord
+Every artifact carries a `ProvenanceRecord` that tracks its complete creation and revision history. The records live in `dataknobs-common` and are re-exported here, so these imports and `dataknobs_common.provenance` name the same objects. The fields, the serialised form and the part-level revision fields are described in the [provenance guide](https://kbs-labs.github.io/dataknobs/packages/common/provenance/).
 
 ```python
 from dataknobs_bots.artifacts.provenance import (
-    ProvenanceRecord,
+    LLMInvocation,
     SourceReference,
     ToolInvocation,
-    LLMInvocation,
-    RevisionRecord,
     create_provenance,
 )
 
 provenance = create_provenance(
     created_by="system:generator:quiz_gen_v1",
     creation_method="generator",
+    creation_context={"topic": "biology"},
+    sources=[
+        SourceReference(
+            source_id="doc_123",
+            source_type="document",
+            source_location="/docs/biology.md",
+            relevance="Source material for questions",
+            confidence=0.95,
+        ),
+    ],
+    tool_chain=[
+        ToolInvocation(
+            tool_name="quiz_generator",
+            tool_version="2.1.0",
+            parameters={"topic": "biology", "count": 10},
+        ),
+    ],
+    llm_invocations=[
+        LLMInvocation(
+            purpose="generate_context",
+            model="llama3.2",
+            prompt_hash="a1b2c3d4",
+        ),
+    ],
 )
-
-# Add source references
-provenance.sources.append(SourceReference(
-    source_id="doc_123",
-    source_type="document",
-    source_location="/docs/biology.md",
-    relevance="Source material for questions",
-    confidence=0.95,
-))
-
-# Add tool chain
-provenance.tool_chain.append(ToolInvocation(
-    tool_name="quiz_generator",
-    tool_version="2.1.0",
-    parameters={"topic": "biology", "count": 10},
-))
-
-# Add LLM invocation
-provenance.llm_invocations.append(LLMInvocation(
-    purpose="generate_context",
-    model="llama3.2",
-    prompt_hash="a1b2c3d4",
-))
 ```
+
+**The records are frozen.** `sources`, `tool_chain`, `llm_invocations`, `review_history` and `revision_history` are tuples, and `creation_context` and a tool's `parameters` hold a read-only copy of the mapping given (a `FrozenMapping`, whose nested lists read back as tuples; `to_dict()` gives plain dicts and lists). Pass the values when the record is made: `create_provenance` takes any iterable, so a list built up first works (the constructors accept one at run time, but are typed with tuples). To add to a record, make a new one:
+
+```python
+import dataclasses
+
+provenance = dataclasses.replace(
+    provenance,
+    review_history=(*provenance.review_history, "eval_001"),
+)
+```
+
+`ArtifactRegistry.revise()` adds each `RevisionRecord` this way, so a superseded version keeps the provenance it had.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `created_by` | `str` | Who/what created it (e.g., `"system:generator:quiz_gen_v1"`, `"user:jane"`, `"bot:configbot"`) |
 | `created_at` | `str` | ISO 8601 creation timestamp |
 | `creation_method` | `str` | How it was created (`"generator"`, `"wizard"`, `"manual"`, `"derived"`, `"llm_assisted"`) |
-| `creation_context` | `dict[str, Any]` | Parameters, configuration, and other context |
-| `sources` | `list[SourceReference]` | References to source materials |
-| `tool_chain` | `list[ToolInvocation]` | Tools used during creation |
-| `llm_invocations` | `list[LLMInvocation]` | LLM calls made during creation |
-| `review_history` | `list[str]` | IDs of `RubricEvaluation` results |
-| `revision_history` | `list[RevisionRecord]` | Records of revisions |
-
-### SourceReference
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `source_id` | `str` | required | ID of source artifact, document, or external reference |
-| `source_type` | `str` | required | Category (`"artifact"`, `"document"`, `"vector_result"`, `"user_input"`, `"external"`) |
-| `source_location` | `str \| None` | `None` | URI, file path, or vector store reference |
-| `relevance` | `str` | `""` | Why this source was used |
-| `excerpt` | `str \| None` | `None` | Relevant portion of the source |
-| `confidence` | `float` | `1.0` | Relevance confidence (0.0 to 1.0) |
-
-### ToolInvocation
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `tool_name` | `str` | required | Function or tool identifier |
-| `tool_version` | `str \| None` | `None` | Version if applicable |
-| `parameters` | `dict[str, Any]` | `{}` | Input parameters |
-| `timestamp` | `str` | auto | ISO 8601 invocation time |
-
-### LLMInvocation
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `purpose` | `str` | required | Why the LLM was called (`"decode_intent"`, `"encode_feedback"`, `"generate_context"`) |
-| `model` | `str` | `""` | Model identifier used |
-| `prompt_hash` | `str` | `""` | Hash of the prompt (for reproducibility, not the full prompt) |
-| `timestamp` | `str` | auto | ISO 8601 invocation time |
-
-### RevisionRecord
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `revision_id` | `str` | auto | Unique ID (`rev_` prefix) |
-| `previous_version` | `str` | `""` | Version being revised |
-| `reason` | `str` | `""` | Why the revision was made |
-| `changes_summary` | `str` | `""` | What changed |
-| `triggered_by` | `str` | `""` | Who/what triggered it (e.g., `"rubric_evaluation:eval_123"`, `"user:jane"`) |
-| `timestamp` | `str` | auto | ISO 8601 timestamp |
-
-### create_provenance()
-
-Convenience factory:
-
-```python
-provenance = create_provenance(
-    created_by="bot:acme",
-    creation_method="generator",
-    # Additional ProvenanceRecord fields via **kwargs
-    creation_context={"topic": "biology"},
-)
-```
+| `creation_context` | `Mapping[str, Any]` | Parameters, configuration, and other context (read-only) |
+| `sources` | `tuple[SourceReference, ...]` | References to source materials |
+| `tool_chain` | `tuple[ToolInvocation, ...]` | Tools used during creation |
+| `llm_invocations` | `tuple[LLMInvocation, ...]` | LLM calls made during creation |
+| `review_history` | `tuple[str, ...]` | IDs of `RubricEvaluation` results |
+| `revision_history` | `tuple[RevisionRecord, ...]` | Records of revisions |
 
 ## Status Transitions
 

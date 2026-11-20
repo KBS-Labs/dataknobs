@@ -288,6 +288,19 @@ class TestFormatProvenanceChain:
         assert "generator_id" in result
         assert "quiz_gen" in result
 
+    def test_nested_creation_context_renders_as_plain_values(self) -> None:
+        """A record holds its context frozen; the timeline shows the plain values."""
+        provenance = create_provenance(
+            created_by="system",
+            creation_method="generator",
+            creation_context={"parameters": {"name": "Alice"}, "tags": ["x", "y"]},
+        )
+        result = format_provenance_chain(provenance)
+
+        assert "- **parameters:** {'name': 'Alice'}" in result
+        assert "- **tags:** ['x', 'y']" in result
+        assert "FrozenMapping" not in result
+
     def test_with_sources(self) -> None:
         provenance = ProvenanceRecord(
             created_by="system",

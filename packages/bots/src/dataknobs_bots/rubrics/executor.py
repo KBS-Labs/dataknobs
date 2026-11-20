@@ -27,6 +27,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.imports import resolve_callable
+from dataknobs_common.provenance import now_iso
 from dataknobs_llm.llm.base import AsyncLLMProvider, LLMMessage
 
 if TYPE_CHECKING:
@@ -41,7 +42,6 @@ from .models import (
     ScoringMethod,
     ScoringType,
     _generate_id,
-    _now_iso,
 )
 
 logger = logging.getLogger(__name__)
@@ -144,7 +144,7 @@ class RubricExecutor:
             criterion_results=criterion_results,
             weighted_score=weighted_score,
             passed=passed,
-            evaluated_at=_now_iso(),
+            evaluated_at=now_iso(),
         )
 
         evaluation.feedback_summary = await generate_feedback_summary(
@@ -307,7 +307,7 @@ class RubricExecutor:
                 "model": response.model,
                 "prompt_hash": prompt_hash,
                 "response_hash": response_hash,
-                "timestamp": _now_iso(),
+                "timestamp": now_iso(),
             }
             if response.usage:
                 llm_invocation["usage"] = response.usage
@@ -328,7 +328,7 @@ class RubricExecutor:
                 scoring_method_used=ScoringType.LLM_DECODE,
                 llm_invocation={
                     "prompt_hash": prompt_hash,
-                    "timestamp": _now_iso(),
+                    "timestamp": now_iso(),
                     "error": str(e),
                 },
             )

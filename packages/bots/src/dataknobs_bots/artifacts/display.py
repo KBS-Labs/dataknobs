@@ -19,6 +19,8 @@ Example:
 from __future__ import annotations
 
 
+from dataknobs_common.copying import thaw_structure
+
 from dataknobs_bots.rubrics.models import CriterionResult, RubricCriterion, RubricEvaluation
 
 from .provenance import ProvenanceRecord
@@ -231,7 +233,8 @@ def format_provenance_chain(provenance: ProvenanceRecord) -> str:
     if provenance.creation_context:
         lines.append("### Creation Context")
         lines.append("")
-        for key, value in provenance.creation_context.items():
+        # The record holds its context frozen; show the plain values it was given.
+        for key, value in thaw_structure(provenance.creation_context).items():
             lines.append(f"- **{key}:** {value}")
         lines.append("")
 
