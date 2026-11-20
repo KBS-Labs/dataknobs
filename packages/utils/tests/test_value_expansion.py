@@ -430,3 +430,18 @@ class TestCombiningMarks:
 
     def test_a_value_ending_in_a_mark_still_matches_as_a_word(self):
         assert _expand("cafe\u0301", "I like the cafe\u0301 and bistro") == "cafe\u0301 and bistro"
+
+
+class TestLengthChangingCase:
+    """Positions index the message the caller passed, whatever lowering does.
+
+    ``str.lower()`` is not length-preserving -- U+0130 (``\u0130``) lowers to two
+    characters -- so positions found in ``message.lower()`` pointed past the
+    value in ``message`` once one came before it.
+    """
+
+    def test_a_character_that_lowers_longer_does_not_shift_the_match(self):
+        assert _expand("ok", "\u0130\u0130 ok and fine") == "ok and fine"
+
+    def test_the_value_keeps_the_message_s_casing_after_one(self):
+        assert _expand("formal", "\u0130 Formal and academic") == "Formal and academic"

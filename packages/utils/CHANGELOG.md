@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `café` and expanded from the middle of the word. It asks
   `dataknobs_common.text.is_token_character` now, the predicate the scanning
   rungs use.
+- **`expand_value_in_message` returns the value it found, after a character
+  that lowercases to more than one.** It found the value in `message.lower()`
+  and sliced `message` at those positions, but lowering is not
+  length-preserving: `İ` becomes two characters, so every position after one
+  pointed too far right, and `"İİ ok and fine"` expanded `ok` to `"a"`. It
+  matches case-insensitively against `message` itself now.
 
 ### Added
 
