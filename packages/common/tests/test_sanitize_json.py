@@ -12,12 +12,15 @@ Validates:
 
 from __future__ import annotations
 
+import datetime
 import inspect
 import json
 import logging
 import math
+import uuid
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import PurePosixPath
 from enum import Enum, IntEnum
 from typing import Any
 
@@ -249,14 +252,14 @@ class TestTopLevelDrop:
     @pytest.mark.parametrize(
         "value",
         [
-            Decimal("1"),
+            1j,
             object(),
             _ExoticEnum.ODD,
             _RaisingToDict(),
             _ListToDict(),
         ],
         ids=[
-            "decimal",
+            "complex",
             "object",
             "enum-with-unrepresentable-value",
             "to-dict-raises",
@@ -270,12 +273,12 @@ class TestTopLevelDrop:
 
     def test_warn_still_names_the_root(self, caplog: Any) -> None:
         with caplog.at_level(logging.WARNING):
-            sanitize_for_json(Decimal("1"), on_drop="warn")
+            sanitize_for_json(1j, on_drop="warn")
         assert "<root>" in caplog.text
 
     def test_error_mode_still_raises_at_the_root(self) -> None:
         with pytest.raises(SerializationError, match="<root>"):
-            sanitize_for_json(Decimal("1"), on_drop="error")
+            sanitize_for_json(1j, on_drop="error")
 
 
 class TestDictKeys:
@@ -590,7 +593,7 @@ class TestSanitizeAndReport:
     @pytest.mark.parametrize(
         "value",
         [
-            {"a": 1, "b": [_Ratio.UNDEFINED, Decimal("1.5")]},
+            {"a": 1, "b": [_Ratio.UNDEFINED, Decimal("1.5"), 1j]},
             {(1, 2): "tuple key", "ok": {"x": len}},
             [_Reading("t", math.inf), object()],
         ],
@@ -616,3 +619,49 @@ class TestSanitizeAndReport:
         with caplog.at_level(logging.DEBUG, logger="dataknobs_common.serialization"):
             sanitize_and_report({"n": math.nan, "u": _Unpriced(), "fn": len})
         assert caplog.records == []
+
+
+class TestTextForms:
+    """A value with one standard text form is written in it, not dropped."""
+
+    @pytest.mark.parametrize(
+        ("value", "written"),
+        [
+            (datetime.datetime(2026, 1, 2, 3, 4, 5), "2026-01-02T03:04:05"),
+            (
+                datetime.datetime(2026, 1, 2, tzinfo=datetime.UTC),
+                "2026-01-02T00:00:00+00:00",
+            ),
+            (datetime.date(2026, 1, 2), "2026-01-02"),
+            (datetime.time(3, 4), "03:04:00"),
+            (Decimal("1.50"), "1.50"),
+            (uuid.UUID(int=1), "00000000-0000-0000-0000-000000000001"),
+            (PurePosixPath("/a/b"), "/a/b"),
+        ],
+        ids=["datetime", "aware-datetime", "date", "time", "decimal", "uuid", "path"],
+    )
+    def test_is_written_as_text_and_not_reported(self, value: Any, written: str) -> None:
+        assert sanitize_and_report({"v": value}) == ({"v": written}, [])
+
+    @pytest.mark.parametrize("value", [Decimal("NaN"), Decimal("sNaN"), Decimal("-Infinity")])
+    def test_a_non_finite_decimal_is_null(self, value: Decimal) -> None:
+        assert sanitize_and_report([value]) == ([None], [])
+
+    def test_a_set_is_a_sorted_list_of_its_converted_members(self) -> None:
+        data, dropped = sanitize_and_report({"s": {3, 1, 2}, "f": frozenset({uuid.UUID(int=2)})})
+        assert data == {"s": [1, 2, 3], "f": ["00000000-0000-0000-0000-000000000002"]}
+        assert dropped == []
+
+    def test_a_set_member_without_a_form_is_dropped_from_the_list(self) -> None:
+        data, dropped = sanitize_and_report({"s": {1, 1j}})
+        assert data == {"s": [1]}
+        assert dropped == ["s{} (type=complex)"]
+
+    def test_bytes_and_timedelta_have_no_rule(self) -> None:
+        """Neither has one standard text form, so neither is guessed at."""
+        _, dropped = sanitize_and_report([b"x", datetime.timedelta(1)])
+        assert dropped == ["[0] (type=bytes)", "[1] (type=timedelta)"]
+
+    def test_the_result_is_json(self) -> None:
+        value = {"when": datetime.datetime(2026, 1, 2), "ids": {uuid.UUID(int=3)}}
+        json.dumps(sanitize_for_json(value), allow_nan=False)

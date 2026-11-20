@@ -12,6 +12,9 @@ Types defined here:
 - :class:`WizardStageContext` — stage-level context snapshot
 - :class:`SubflowContext` — nested subflow parent state
 - :class:`WizardState` — central persistent state object
+- :class:`WizardDataPartition` — a data dict split by what its save keeps,
+  as :func:`partition_wizard_data` returns it, the one rule every stored
+  data dict of a :class:`WizardState` goes through
 - :class:`WizardAdvanceResult` — return type for ``advance()``
 - :class:`ExtractionPipelineResult` — return type for extraction pipeline
 - :class:`ConfirmationEvaluation` — result from confirmation evaluator
@@ -34,8 +37,13 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from dataknobs_common.copying import copy_structure
 from dataknobs_common.imports import resolve_class
-from dataknobs_common.serialization import sanitize_and_report, validate_json_safe
+from dataknobs_common.serialization import (
+    sanitize_and_report,
+    sanitize_for_json,
+    validate_json_safe,
+)
 from dataknobs_common.structured_config import StructuredConfig
 
 from .base import TurnHandle
@@ -93,7 +101,7 @@ def partition_wizard_data(
     ephemeral_keys: AbstractSet[str],
     *,
     where: str = "data",
-    log_level: int = logging.WARNING,
+    reported: set[str] | None = None,
 ) -> WizardDataPartition:
     """Split a wizard data dict into what its save keeps and what it does not.
 
@@ -105,10 +113,10 @@ def partition_wizard_data(
     walked once by ``sanitize_and_report``. A value the walk would drop
     part of (a live object, a ``to_dict()`` that raises, a dict key JSON
     cannot write, a value that holds itself) is transient whole, and
-    logged at *log_level* naming the first few things found and how many
+    logged as a warning naming the first few things found and how many
     more there were. Any other value is persistent, and its converted
     form is what the save writes: an ``Enum`` as its value, an object as
-    its ``to_dict()``, a NaN as ``None``.
+    its ``to_dict()``, a NaN as ``None``, a ``datetime`` as its ISO text.
 
     The check is per top-level key, so one live object anywhere in a value
     keeps that whole key out of storage. A NaN does not, being converted
@@ -118,7 +126,11 @@ def partition_wizard_data(
         data: The dict to split. Not modified.
         ephemeral_keys: Keys that are never stored.
         where: What *data* is, for the log message.
-        log_level: Level for the message about a value kept out of storage.
+        reported: Keys already reported during one serialization, shared
+            across the data dicts it stores. A key in it is logged at
+            DEBUG rather than warned again, and each key warned about here
+            is added to it, so one save warns once per key. ``None``
+            warns for every key.
 
     Returns:
         The persistent, transient and saved parts.
@@ -132,6 +144,10 @@ def partition_wizard_data(
             continue
         converted, problems = sanitize_and_report(value)
         if problems:
+            repeated = reported is not None and key in reported
+            log_level = logging.DEBUG if repeated else logging.WARNING
+            if reported is not None:
+                reported.add(key)
             if logger.isEnabledFor(log_level):
                 shown = ", ".join(problems[:_PROBLEMS_LOGGED])
                 more = len(problems) - _PROBLEMS_LOGGED
@@ -152,17 +168,18 @@ def partition_wizard_data(
 
 
 def _saved_copy(
-    data: Mapping[str, Any], ephemeral_keys: AbstractSet[str], where: str
+    data: Mapping[str, Any], ephemeral_keys: AbstractSet[str], where: str, reported: set[str]
 ) -> dict[str, Any]:
     """What the save writes for a copy of the working data.
 
     A subflow frame and a transition snapshot are copies of the working
-    data taken earlier in the conversation, and a value kept out of them
-    was reported when the working data holding it was saved. So the
-    message is DEBUG here rather than repeated, once per stored copy, on
-    every save.
+    data taken earlier in the conversation. A key kept out of one is warned
+    about unless the same serialization already did, in the working data or
+    another copy: the copies of one value repeat its report, while a value
+    that reached only a copy (pushed into a subflow frame in the turn it
+    appeared) would otherwise go unreported.
     """
-    return partition_wizard_data(data, ephemeral_keys, where=where, log_level=logging.DEBUG).saved
+    return partition_wizard_data(data, ephemeral_keys, where=where, reported=reported).saved
 
 
 # Extraction scope breadth ordering — used by scope escalation to
@@ -375,8 +392,13 @@ class SubflowContext:
     subflow_network: str
     push_timestamp: float = field(default_factory=time.time)
 
-    def to_dict(self, ephemeral_keys: AbstractSet[str] = DEFAULT_EPHEMERAL_KEYS) -> dict[str, Any]:
-        """Convert to a JSON-compatible dictionary.
+    def to_dict(
+        self,
+        ephemeral_keys: AbstractSet[str] = DEFAULT_EPHEMERAL_KEYS,
+        *,
+        reported: set[str] | None = None,
+    ) -> dict[str, Any]:
+        """Convert to a JSON-compatible dictionary that shares nothing with this frame.
 
         ``parent_data`` is stored by :func:`partition_wizard_data`, the rule
         the wizard's working data is stored by.
@@ -385,23 +407,36 @@ class SubflowContext:
             ephemeral_keys: Keys never stored. The default is the
                 framework's own; a wizard's settings can declare more,
                 which :meth:`WizardReasoning.serialize_state` applies.
+            reported: Keys the enclosing serialization already reported,
+                as :func:`partition_wizard_data` takes it.
 
         Returns:
             Dictionary representation of the subflow context
         """
         return {
             "parent_stage": self.parent_stage,
-            "parent_data": _saved_copy(self.parent_data, ephemeral_keys, "subflow parent_data"),
-            "parent_history": self.parent_history,
+            "parent_data": _saved_copy(
+                self.parent_data,
+                ephemeral_keys,
+                "subflow parent_data",
+                set() if reported is None else reported,
+            ),
+            "parent_history": list(self.parent_history),
             "return_stage": self.return_stage,
-            "result_mapping": self.result_mapping,
+            "result_mapping": dict(self.result_mapping),
             "subflow_network": self.subflow_network,
             "push_timestamp": self.push_timestamp,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SubflowContext:
-        """Create from dictionary.
+        """Create from dictionary, holding none of its containers.
+
+        The dict is usually stored state -- a conversation's metadata, or
+        an undo checkpoint's -- and a pop restores ``parent_data`` into the
+        working data, so a nested value held by reference would let a turn
+        rewrite the checkpoint. ``TransitionRecord.from_dict`` copies its
+        snapshot for the same reason.
 
         Args:
             data: Dictionary containing subflow context fields
@@ -411,30 +446,36 @@ class SubflowContext:
         """
         return cls(
             parent_stage=data["parent_stage"],
-            parent_data=data["parent_data"],
-            parent_history=data["parent_history"],
+            parent_data=copy_structure(data["parent_data"]),
+            parent_history=list(data["parent_history"]),
             return_stage=data["return_stage"],
-            result_mapping=data.get("result_mapping", {}),
+            result_mapping=dict(data.get("result_mapping", {})),
             subflow_network=data["subflow_network"],
             push_timestamp=data.get("push_timestamp", time.time()),
         )
 
 
 def _transition_stored_form(
-    record: TransitionRecord, ephemeral_keys: AbstractSet[str]
+    record: TransitionRecord, ephemeral_keys: AbstractSet[str], reported: set[str]
 ) -> dict[str, Any]:
     """A transition as the wizard stores it, its snapshot by the one rule.
 
     Built field by field rather than with ``TransitionRecord.to_dict()``,
     whose ``asdict`` deep-copies the snapshot and so raises on a value that
     cannot be copied (a lock, a task) before anything could leave it out.
-    Every field but ``data_snapshot`` is a string, number, bool or ``None``.
+    The other fields are typed as strings, numbers, bools and ``None``, but
+    a consumer records its own transitions, so each is written through
+    ``sanitize_for_json`` too (an ``Enum`` trigger as its value).
     """
-    stored = {f.name: getattr(record, f.name) for f in fields(record)}
-    if record.data_snapshot is not None:
-        stored["data_snapshot"] = _saved_copy(
-            record.data_snapshot, ephemeral_keys, "transition data_snapshot"
-        )
+    stored: dict[str, Any] = {}
+    for f in fields(record):
+        value = getattr(record, f.name)
+        if f.name == "data_snapshot" and value is not None:
+            stored[f.name] = _saved_copy(
+                value, ephemeral_keys, "transition data_snapshot", reported
+            )
+        else:
+            stored[f.name] = sanitize_for_json(value, on_drop="warn")
     return stored
 
 
@@ -638,15 +679,18 @@ class WizardState:
         Returns:
             Dictionary suitable for ``json.dumps(..., allow_nan=False)``.
         """
-        saved = partition_wizard_data(self.data, ephemeral_keys).saved
-        return self._stored_form(saved, ephemeral_keys)
+        reported: set[str] = set()
+        saved = partition_wizard_data(self.data, ephemeral_keys, reported=reported).saved
+        return self._stored_form(saved, ephemeral_keys, reported)
 
     def prepare_save(self, ephemeral_keys: AbstractSet[str]) -> dict[str, Any]:
         """Move what the save does not keep into ``transient``, and return what it writes.
 
         One walk of ``data`` decides both: ``data`` keeps the persistent
         values, ``transient`` becomes what was left out, and the result is
-        :meth:`to_dict` of the state as it now stands.
+        :meth:`to_dict` of the state as it now stands. ``data`` is updated
+        in place (:meth:`replace_data`), so a holder of it sees what was
+        kept rather than a dict the state no longer uses.
 
         Args:
             ephemeral_keys: Keys never stored.
@@ -654,23 +698,34 @@ class WizardState:
         Returns:
             The stored form, as :meth:`to_dict` returns it.
         """
-        self.data, self.transient, saved = partition_wizard_data(self.data, ephemeral_keys)
-        return self._stored_form(saved, ephemeral_keys)
+        reported: set[str] = set()
+        persistent, self.transient, saved = partition_wizard_data(
+            self.data, ephemeral_keys, reported=reported
+        )
+        self.replace_data(persistent)
+        return self._stored_form(saved, ephemeral_keys, reported)
 
     def _stored_form(
-        self, saved: dict[str, Any], ephemeral_keys: AbstractSet[str]
+        self, saved: dict[str, Any], ephemeral_keys: AbstractSet[str], reported: set[str]
     ) -> dict[str, Any]:
-        """The stored form around *saved*, the converted ``data``."""
+        """The stored form around *saved*, the converted ``data``.
+
+        It shares no container with the state, so a caller may change it.
+        """
         return {
             "current_stage": self.current_stage,
             "data": saved,
-            "history": self.history,
+            "history": list(self.history),
             "completed": self.completed,
             "clarification_attempts": self.clarification_attempts,
-            "transitions": [_transition_stored_form(t, ephemeral_keys) for t in self.transitions],
+            "transitions": [
+                _transition_stored_form(t, ephemeral_keys, reported) for t in self.transitions
+            ],
             "stage_entry_time": self.stage_entry_time,
             "tasks": self.tasks.to_dict(),
-            "subflow_stack": [s.to_dict(ephemeral_keys) for s in self.subflow_stack],
+            "subflow_stack": [
+                s.to_dict(ephemeral_keys, reported=reported) for s in self.subflow_stack
+            ],
             "skip_extraction": self.skip_extraction,
         }
 
@@ -688,7 +743,7 @@ class WizardState:
         return cls(
             current_stage=data["current_stage"],
             data=data.get("data", {}),
-            history=data.get("history", []),
+            history=list(data.get("history", [])),
             completed=data.get("completed", False),
             clarification_attempts=data.get("clarification_attempts", 0),
             transitions=[TransitionRecord.from_dict(t) for t in data.get("transitions", [])],

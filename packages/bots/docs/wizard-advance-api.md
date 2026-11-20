@@ -107,7 +107,7 @@ Build wizard metadata from state without advancing. Useful for initial page rend
 
 ### `WizardReasoning.serialize_state(state)`
 
-The stored form of a state: what a conversational save writes for it, as a dict `json.dumps(..., allow_nan=False)` can write. See [State Persistence](#state-persistence).
+The stored form of a state: the `fsm_state` a conversational save writes for it, as a dict `json.dumps(..., allow_nan=False)` can write. Memory banks and the artifact are not part of it. See [State Persistence](#state-persistence).
 
 ### `WizardReasoning.ephemeral_keys`
 
@@ -141,12 +141,15 @@ json_str = json.dumps(state_dict, allow_nan=False)
 state = WizardState.from_dict(json.loads(json_str))
 ```
 
-`serialize_state` writes what a conversational save writes: keys the wizard never
-stores are left out (the framework's own, such as `_message` and `_intent`, plus
-`settings.ephemeral_keys` and `settings.per_turn_keys`), a value holding a live
-object is left out whole, and the rest is written converted (an `Enum` as its
-value, a NaN as `None`). The same applies to the subflow stack's saved parent data
-and to each transition's data snapshot. It does not change `state`.
+`serialize_state` writes the `fsm_state` a conversational save writes: keys the
+wizard never stores are left out (the framework's own, such as `_message` and
+`_intent`, plus `settings.ephemeral_keys` and `settings.per_turn_keys`), a value
+holding a live object is left out whole, and the rest is written converted (an
+`Enum` as its value, a `datetime` as its ISO text, a set as a sorted list, a NaN
+as `None`). The same applies to the subflow stack's saved parent data and to each
+transition's data snapshot. It does not change `state`, and shares no container
+with it. Memory banks and the artifact, which a conversational save persists
+beside `fsm_state`, are not included.
 
 `state.to_dict()` applies the same rule, but knows only the framework's ephemeral
 keys; `serialize_state(state)` is `state.to_dict(reasoning.ephemeral_keys)`.

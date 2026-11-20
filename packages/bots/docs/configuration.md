@@ -2819,12 +2819,18 @@ The same rule, `partition_wizard_data` in `dataknobs_bots.reasoning.wizard_types
 stores each subflow frame's saved parent data and each transition's data snapshot,
 which are copies of `data` taken earlier in the conversation. Ephemeral keys are
 left out of them too, so a subflow that returns after a restore does not bring back
-a `_message` or `_intent` from the turn it was pushed. A value kept out of a copy is
-logged at DEBUG, since it was reported when the data holding it was saved.
+a `_message` or `_intent` from the turn it was pushed. One save warns once per key
+kept out of storage, wherever it is first found, and repeats it at DEBUG for the
+other copies.
+
+Ephemeral keys never reach storage. The conversation metadata's `data`, which
+`DynaBot.get_wizard_state()` returns, holds what `fsm_state.data` holds; the
+transient values are in the turn's response metadata and its templates.
 
 A value the save converts is persisted in its converted form: a dataclass as a
 dict, an `Enum` as its value, an object whose `to_dict()` returns a dict as that
-dict, and a NaN or infinite float as `None`, so a sparse record keeps its other
+dict, a set as a sorted list, a `datetime`, `date` or `time` as its ISO text, a
+`Decimal`, `UUID` or path as its string, and a NaN or infinite float as `None`, so a sparse record keeps its other
 values and a list keeps every position. After a restore, the key holds that
 converted form. Storage that writes JSON (SQLite, Postgres) also writes every dict
 key as text, so `{1: "produce"}` comes back as `{"1": "produce"}`; the in-memory

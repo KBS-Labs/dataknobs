@@ -1062,10 +1062,12 @@ Recursively traverse a value and drop anything not JSON-serializable. Keeps
 `None`, booleans, numbers, strings, dicts and lists; converts tuples to lists,
 dataclasses to dicts, an `Enum` to its value, and an object whose `to_dict()`
 returns a dict to that dict. A dataclass is converted field by field even when
-it defines its own `to_dict()`. Anything else is dropped, including sets, bytes
-and `datetime` values. A NaN or infinite float, which JSON cannot write, becomes
-`None`, as `JSON.stringify` writes it; that is a conversion and is not
-reported, so a list keeps every position. A
+it defines its own `to_dict()`. A set becomes a list of its members, sorted by
+each member's JSON. A `datetime`, `date` or `time` is written as `isoformat()`,
+and a `Decimal`, `UUID` or path as `str()`. Anything else is dropped, including
+`bytes` and `timedelta`. A NaN or infinite float, which JSON cannot write, becomes
+`None`, as `JSON.stringify` writes it (a non-finite `Decimal` too). These are
+conversions and are not reported, so a list keeps every position. A
 dict keeps the keys `json.dumps` can write (`str`, `int`, a finite `float`,
 `bool`, `None`), an `Enum` key becomes its value, and an entry with any other
 key, a NaN or infinite one included, is dropped. A container that holds itself

@@ -1652,8 +1652,10 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
             last_state = state.last_wizard_state
             if not last_state:
                 continue
+            # A save moves ephemeral keys into ``transient``, so after the
+            # first one a task is found there rather than in ``data``.
             for key in self._ephemeral_keys:
-                val = last_state.data.get(key)
+                val = last_state.transient.get(key, last_state.data.get(key))
                 if isinstance(val, asyncio.Task) and not val.done():
                     val.cancel()
                     with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -1700,11 +1702,14 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         The framework's own (``DEFAULT_EPHEMERAL_KEYS``), the wizard's
         ``settings.ephemeral_keys``, and its ``settings.per_turn_keys``.
+        They are left out of everything a save persists -- ``fsm_state``
+        and the conversation-level ``data`` beside it -- and kept only in
+        memory (``WizardState.transient``) and on the turn's response.
         """
         return self._ephemeral_keys
 
     def serialize_state(self, state: WizardState) -> dict[str, Any]:
-        """The stored form of *state*: what a conversational save writes.
+        """The stored form of *state*: the ``fsm_state`` a conversational save writes.
 
         For a caller of :meth:`advance`, which leaves persistence to its
         caller. It is ``state.to_dict(self.ephemeral_keys)``, so the keys
@@ -1712,6 +1717,10 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         the framework's, in ``data``, in each subflow frame and in each
         transition snapshot. *state* is not changed; restore it with
         ``WizardState.from_dict``.
+
+        Memory banks and the artifact are not part of it. A conversational
+        save persists them beside ``fsm_state``, and :meth:`advance` keeps
+        them in the strategy's default slot rather than in the state.
 
         Args:
             state: The state to serialize.
@@ -3751,7 +3760,8 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         mode that is not already a turn away.
 
         Args:
-            fsm_state: A stored ``WizardState.to_dict()`` payload.
+            fsm_state: A stored ``fsm_state``, as ``WizardState.prepare_save``
+                wrote it.
 
         Returns:
             A state carrying the snapshot's stage, history, data and
@@ -3895,16 +3905,19 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
 
         Partitions ``state.data`` into persistent and transient parts before
         persisting (``WizardState.prepare_save``).  Only persistent data is
-        written to ``fsm_state``, and its subflow frames and transition
-        snapshots are stored by the same rule.
-        ``_build_wizard_metadata`` is called *before* partition so the response
-        metadata (sent to the UI) still contains all keys.
+        written, to ``fsm_state`` and to the conversation-level ``data``
+        beside it, and the subflow frames and transition snapshots are
+        stored by the same rule.
+        ``_build_wizard_metadata`` is called *before* partition for the
+        stage-derived fields; its ``data`` is replaced with the stored form.
 
         Args:
             manager: ConversationManager instance
             state: WizardState to save
         """
-        # Build metadata BEFORE partition so UI sees all keys (incl. transient)
+        # Build metadata BEFORE partition; its `data` is replaced with the
+        # stored form below, since this dict is persisted. The turn's
+        # response builds its own, which keeps transient keys for the UI.
         wizard_meta = self._build_wizard_metadata(state)
 
         # Reverse sync: artifact → state.data (picks up tool-driven changes
@@ -3923,6 +3936,12 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         # working data got, so ephemeral keys came back on a subflow pop.
         fsm_state = state.prepare_save(self._ephemeral_keys)
         wizard_meta["fsm_state"] = fsm_state
+        # The conversation-level `data` beside `fsm_state` is persisted too,
+        # and read ahead of it by `normalize_wizard_state`, so it is the
+        # stored data rather than the response's working view, which keeps
+        # transient keys for the UI. A copy, so the two stored dicts are
+        # not one object a later write could change through either.
+        wizard_meta["data"] = copy_structure(fsm_state["data"])
         # Persist MemoryBank data alongside FSM state
         if self._banks:
             wizard_meta["banks"] = {name: bank.to_dict() for name, bank in self._banks.items()}

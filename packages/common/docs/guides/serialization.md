@@ -780,14 +780,15 @@ for JSON serialization. There are two policies over one walk, for two purposes:
 | | `sanitize_for_json` | `as_data` |
 |---|---|---|
 | for | state that may hold live objects (functions, asyncio tasks), saved as far as it can be | a value that must arrive whole, such as a reply made of nested frozen dataclasses |
-| order | `Enum`, non-finite float, primitives, `dict`, list/tuple, dataclass, `to_dict()` | `using`, `Enum`, non-finite float, primitives, `to_dict()`, dataclass, any `Mapping`, list/tuple, set |
+| order | `Enum`, non-finite float, primitives, `dict`, list/tuple, set, dataclass, date/time/`Decimal`/`UUID`/path, `to_dict()` | `using`, `Enum`, non-finite float, primitives, `to_dict()`, dataclass, any `Mapping`, list/tuple, set |
 | a mapping | `dict` only; keys kept as they are | any `Mapping`; keys written as text the way `json.dumps` writes them, two keys written the same refused |
 | NaN, infinity | `None`, not reported; as a key, its entry dropped and reported | refused; as a key, written as text (`"NaN"`, `"Infinity"`) |
-| a set | dropped | a sorted list |
+| a set | a sorted list | a sorted list |
+| `datetime`, `date`, `time`, `Decimal`, `UUID`, a path | their text form (`isoformat()`, `str()`), not reported | refused, unless `using` names the type |
 | a `to_dict()` that raises | dropped | refused, the original as `__cause__` |
 | no rule | dropped, reported by `on_drop` | refused at once, naming the path |
 | a container that holds itself | dropped where it repeats | refused |
-| paths | `notes.tare`, `items[1]`, `<root>` | `value.notes['tare']`, `value.items[1]` |
+| paths | `notes.tare`, `items[1]`, `tags{}`, `<root>` | `value.notes['tare']`, `value.items[1]` |
 
 `validate_json_safe` reports what `sanitize_for_json` would drop, without dropping it.
 `sanitize_and_report` gives both answers from one walk.
@@ -798,8 +799,17 @@ Recursively traverses a value and drops anything that isn't JSON-serializable.
 It keeps `None`, booleans, numbers, strings, dicts and lists; converts tuples
 to lists, dataclasses to dicts (field by field), an `Enum` to its value, and an
 object with a `to_dict()` returning a dict to that dict. A dataclass is
-converted field by field even when it defines its own `to_dict()`. Anything
-else is dropped, including sets, bytes and `datetime` values.
+converted field by field even when it defines its own `to_dict()`. A set or
+frozenset becomes a list of its members, sorted by each member's JSON so the
+same set always gives the same list. Anything else is dropped, including
+`bytes` and `timedelta`, which have no one standard text form.
+
+A value with one standard text form is written in it, as Django's and
+pydantic's JSON encoders write it: a `datetime`, `date` or `time` as
+`isoformat()`, a `Decimal` as `str()` (a float would round it), a `UUID` and a
+path as `str()`. A NaN or infinite `Decimal` becomes `None`, as a float one
+does. These are conversions, not drops, so none is reported; each reads back
+as a `str`, and a caller that needs the type back parses it on the way in.
 
 A NaN or infinite float is written as `None`, as `JSON.stringify` writes it.
 `json.dumps` would write it as `NaN` or `Infinity`, which is not JSON:

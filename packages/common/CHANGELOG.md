@@ -40,11 +40,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   level.** A dropped value is left out of the container holding it, but a
   top-level value has none, and the function returned its private marker
   object instead: not JSON, so `json.dumps` of the result raised `TypeError`.
-  This reached `sanitize_for_json(Decimal("1"))`, a bare `object()`, an
-  `Enum` whose value has no rule, and an object whose `to_dict()` raises or
-  returns something other than a dict, under `on_drop="silent"` (the default)
-  and `"warn"`. `on_drop="error"` still raises. The docs no longer say sets,
-  bytes and `datetime` values are handled: they have no rule and are dropped.
+  This reached a bare `object()`, a `bytes` value, an `Enum` whose value has
+  no rule, and an object whose `to_dict()` raises or returns something other
+  than a dict, under `on_drop="silent"` (the default) and `"warn"`.
+  `on_drop="error"` still raises.
+
+- **`sanitize_for_json` writes a set, a date or time, a `Decimal`, a `UUID`
+  and a path instead of dropping them.** The docs said sets and `datetime`
+  values were handled, and they were dropped. A set or frozenset is now a
+  list of its members, sorted by each member's JSON, as `as_data` writes one;
+  a `datetime`, `date` or `time` is its `isoformat()`; a `Decimal` is its
+  `str()` (a NaN or infinite one is `None`); a `UUID` and a path are their
+  `str()`. These are conversions, so `validate_json_safe` and
+  `sanitize_and_report` no longer list them. Each reads back as a `str`
+  rather than its type. A caller that relied on such a value being left out
+  now receives it. `bytes` and `timedelta` still have no rule and are
+  dropped. A dropped set member is reported at `tags{}`.
 
 - **`sanitize_for_json` and `validate_json_safe` read dict keys too.** A key
   `json.dumps` cannot write, such as a tuple, passed through both unchanged,
