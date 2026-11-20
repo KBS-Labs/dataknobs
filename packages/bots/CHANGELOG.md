@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Ollama's embedding endpoint in `dataknobs-llm` is not detected here: a
   persisted store holding `nomic-embed-text` vectors under a non-cosine metric
   must be rebuilt.
+- **`WizardReasoning.serialize_state(state)` returns the `fsm_state` a
+  conversation's save writes for a state**, for a caller of `advance()`, which
+  leaves persistence to its caller. Memory banks and the artifact, which a
+  conversation's save persists beside `fsm_state`, are not part of it. It is
+  `state.to_dict(reasoning.ephemeral_keys)`;
+  `WizardReasoning.ephemeral_keys` is the set the wizard never stores (the
+  framework's, `settings.ephemeral_keys` and `settings.per_turn_keys`). The
+  rule both apply is `partition_wizard_data(data, ephemeral_keys)` in
+  `dataknobs_bots.reasoning.wizard_types`, which returns the persistent,
+  transient and saved parts of one data dict.
 - **A grounded `database` source can read a Postgres table it does not
   own.** Its options take what `dataknobs-data`'s Postgres backend takes for
   one — `layout: native`, `id_column`, `scope` — and a field in its `schema:`
@@ -202,11 +212,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   disagree, and a save converts each value once for storage instead of twice.
   The visible effects:
   - a plain `Enum` value (not a `str` or `int` subclass, which were already
-    stored as their value), an object whose `to_dict()` returns a dict, and a
-    dict with non-`str` keys are now persisted, in the form the save converts
+    stored as their value), an object whose `to_dict()` returns a dict, a
+    dict with non-`str` keys, a set, and a `datetime`, `date`, `time`,
+    `Decimal`, `UUID` or path are now persisted, in the form the save converts
     them to, where they were kept live for the turn and absent after a
     restore. A caller comparing the restored value with an `Enum` member now
-    sees its value (`"active"`), not a missing key. From storage that writes
+    sees its value (`"active"`), not a missing key; a `datetime` reads back
+    as its ISO text and a set as a sorted list. From storage that writes
     JSON (SQLite, Postgres) an `int` key comes back as text (`"1"`); the
     in-memory backend keeps it as it was;
   - a NaN or infinite float is persisted as `None`, and reads back as `None`
@@ -218,15 +230,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a value that holds itself is moved to transient, where the check raised
     `RecursionError` and the save failed;
   - the warning for a key moved to transient names what was found in it, the
-    first three things and a count of the rest (`... moved to transient: conn
-    (type=Connection)`).
+    first three things and a count of the rest (`Non-serializable key 'handle'
+    in data (type=dict) kept out of storage: conn (type=Connection)`). One
+    save warns once per key, wherever the key is first found; the copies
+    described below repeat it at DEBUG.
 
-  This is the save a conversation's turns run, into the `ConversationManager`'s
-  metadata. `advance()` leaves persistence to its caller, and
-  `WizardState.to_dict()`, the serializer `WizardState` offers, applies
-  neither the split nor the conversion. The subflow stack's
-  saved parent data and the transition snapshots are written by their own
-  `sanitize_for_json` calls, not through this split.
+  The same rule stores every data dict the wizard's state holds: the data,
+  each subflow frame's `parent_data` and each transition's `data_snapshot`.
+  In the frames and snapshots, keys declared ephemeral (`_message`,
+  `_intent`, `settings.ephemeral_keys`, `settings.per_turn_keys`) are no
+  longer persisted, so they no longer come back into the data when a subflow
+  returns after a restore. A value there that the save cannot keep whole (a
+  live object anywhere inside it) is left out whole, key and all, where it
+  was stored with the object removed from inside it. A checkpoint written
+  before this change still holds those keys in its frames, so an undo to one
+  and a later pop bring them back once. A transition's other fields are
+  written through `sanitize_for_json` too, so a consumer-recorded transition
+  with an `Enum` trigger is stored as its value.
+
+  The conversation-level `data` stored beside `fsm_state` in
+  `metadata["wizard"]` follows the same rule. It was the turn's working
+  view, transient keys included, and it is persisted with the rest of the
+  metadata, so a `_message` (the user's raw text), an `_intent` or a
+  declared ephemeral key reached the conversation store. It now holds what
+  `fsm_state.data` holds. **`DynaBot.get_wizard_state()["data"]`, and
+  `BotTestHarness.wizard_data` with it, no longer show transient keys**,
+  which `normalize_wizard_state` read from there. They are still in the
+  turn's response metadata, built for the UI, and in the stage's templates.
+
+  `WizardState.to_dict()` applies the rule too, so what a caller of
+  `advance()` persists is what a conversation's save would write, and
+  `json.dumps(..., allow_nan=False)` can write it. It used to return the
+  data as it was: ephemeral keys were persisted, a live object made
+  `json.dumps` raise `TypeError`, a NaN was written as `NaN`, which Postgres
+  refuses, and a transition snapshot holding a value that cannot be
+  deep-copied (a lock, a task) made `to_dict()` itself raise. Called
+  without arguments it knows only the framework's ephemeral keys; persist
+  with `WizardReasoning.serialize_state(state)` to leave out the keys a
+  wizard's settings declare as well.
 
 - **`is_json_safe` means "the save keeps it whole", not "`json.dumps`
   accepts it".** It answers with `validate_json_safe`, so a value the save

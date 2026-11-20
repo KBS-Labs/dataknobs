@@ -1428,6 +1428,26 @@ class TestWizardPerConversationScoping:
         assert task_b.cancelled(), "conversation B's ephemeral task must cancel"
 
     @pytest.mark.asyncio
+    async def test_ephemeral_task_is_cancelled_after_a_save(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A save moves an ephemeral task into ``transient``; close() still finds it."""
+        created: list[CountingSyncDB] = []
+        _patch_counting_factory(monkeypatch, created)
+        strategy = _sqlite_bank_wizard(ephemeral_keys=["_bg_task"])
+
+        manager = await _real_conversation_manager()
+        state = strategy._get_wizard_state(manager)
+        task = asyncio.ensure_future(asyncio.sleep(3600))
+        state.data["_bg_task"] = task
+        await strategy._save_wizard_state(manager, state)
+        assert "_bg_task" in state.transient
+
+        await strategy.close()
+
+        assert task.cancelled(), "an ephemeral task saved into transient must cancel"
+
+    @pytest.mark.asyncio
     async def test_single_conversation_uses_exactly_one_slot(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -43,11 +43,15 @@ Example:
 """
 
 import dataclasses
+import datetime
 import json
 import logging
 import math
+import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from decimal import Decimal
 from enum import Enum
+from pathlib import PurePath
 from typing import (
     Any,
     ClassVar,
@@ -491,6 +495,13 @@ class _Walk:
             return _NO_RULE
         return _Open(((("index", i), None, item) for i, item in enumerate(value)), _as_list)
 
+    def _set(self, value: Any, path: _Path) -> Any:
+        # A list, sorted by each member's JSON, so the same set always gives
+        # the same list.
+        if not isinstance(value, (set, frozenset)):
+            return _NO_RULE
+        return _Open(((("member", None), None, item) for item in value), _as_sorted_list)
+
     def _fields(self, value: Any, path: _Path) -> Any:
         # Field by field rather than ``dataclasses.asdict()``, which deep-copies
         # every field value and so crashes on one that cannot be copied (an
@@ -510,7 +521,7 @@ class _Sanitize(_Walk):
     A dropped value is the private ``_SENTINEL``, which its container leaves
     out, and is reported according to *on_drop*; under ``"error"`` each drop
     is added to *dropped*. Paths are written ``a.b[0]``, with ``<root>`` for
-    the value itself. *quiet* leaves out the DEBUG lines for a ``to_dict()``
+    the value itself; a member of the set at ``a.tags`` is ``a.tags{}``. *quiet* leaves out the DEBUG lines for a ``to_dict()``
     that raised and for a non-finite float, for a caller that only asks.
     """
 
@@ -525,6 +536,9 @@ class _Sanitize(_Walk):
         for kind, part in path:
             if kind == "index":
                 text = f"{text}[{part}]"
+            elif kind == "member":
+                # A set has no order to give its member a position by.
+                text = f"{text}{{}}"
             else:
                 text = f"{text}.{part}" if text else str(part)
         # Only the value itself is labelled <root>. A key whose text is empty,
@@ -586,13 +600,33 @@ class _Sanitize(_Walk):
             return _NO_RULE
         return _Again(result)
 
+    def _text_form(self, value: Any, path: _Path) -> Any:
+        # Values with one standard text form, written in it, as Django's and
+        # pydantic's JSON encoders write them: a date or time in ISO 8601, a
+        # Decimal as its digits (a float would round it), a UUID and a path
+        # as their string. A conversion, so not reported; it is lossy in
+        # type, so each reads back as a ``str``. A NaN or infinite Decimal is
+        # written as null, as a float one is.
+        if isinstance(value, (datetime.date, datetime.time)):
+            return value.isoformat()
+        if isinstance(value, Decimal):
+            if not value.is_finite():
+                # float() raises on a signalling NaN, so a NaN is passed as one.
+                return self._non_finite(float(value) if value.is_infinite() else math.nan, path)
+            return str(value)
+        if isinstance(value, (uuid.UUID, PurePath)):
+            return str(value)
+        return _NO_RULE
+
     _rules = (
         _Walk._enum,
         _Walk._finite,
         _Walk._scalar,
         _dict,
         _Walk._sequence,
+        _Walk._set,
         _Walk._fields,
+        _text_form,
         _to_dict,
     )
 
@@ -731,11 +765,6 @@ class _AsData(_Walk):
 
         return _Open(children(), _as_dict)
 
-    def _set(self, value: Any, path: _Path) -> Any:
-        if not isinstance(value, (set, frozenset)):
-            return _NO_RULE
-        return _Open(((("member", None), None, item) for item in value), _as_sorted_list)
-
     _rules = (
         _from_using,
         _Walk._enum,
@@ -745,7 +774,7 @@ class _AsData(_Walk):
         _Walk._fields,
         _mapping,
         _Walk._sequence,
-        _set,
+        _Walk._set,
     )
 
 
@@ -775,8 +804,14 @@ def sanitize_for_json(value: Any, on_drop: OnDrop = "silent") -> Any:
       ``Enum`` key becomes its value; an entry with any other key, a NaN or
       infinite float among them, is dropped
     - ``list`` / ``tuple`` → recurse on elements; filter out non-convertible items
+    - ``set`` / ``frozenset`` → a list of its members, recursively, sorted by
+      each member's JSON so the same set always gives the same list
     - dataclass instance → field-by-field recursive sanitization. This rule
       comes first, so a dataclass's own ``to_dict()`` is not called
+    - ``datetime``, ``date``, ``time`` → ``isoformat()``; ``Decimal`` →
+      ``str()`` (a NaN or infinite one → ``None``); ``UUID`` and a path →
+      ``str()``. Conversions, not drops, and lossy in type: each reads back
+      as a ``str``
     - Object with ``to_dict()`` returning a ``dict`` → that dict, recursively
     - Anything else → dropped (behaviour controlled by *on_drop*)
 

@@ -388,7 +388,7 @@ class SubflowContext:
     push_timestamp: float          # When the subflow was pushed (time.time())
 ```
 
-`SubflowContext` supports serialization via `to_dict()` and `from_dict()` class methods, so the full subflow stack can be persisted and restored across conversation turns.
+`SubflowContext` supports serialization via `to_dict()` and `from_dict()`, so the full subflow stack can be persisted and restored across conversation turns. `parent_data` is stored by the rule the wizard's own data is stored by: ephemeral keys are left out, so a subflow that returns after a restore does not bring back a `_message` or `_intent` from the turn it was pushed.
 
 `WizardState` exposes three convenience properties for inspecting subflow status:
 
