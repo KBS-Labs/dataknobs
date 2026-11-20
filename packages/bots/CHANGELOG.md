@@ -41,6 +41,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An unknown path or a wrong method answers in the standard error body.**
+  `register_exception_handlers` registered its `HTTPException` handler under
+  FastAPI's class, but the router raises Starlette's, of which FastAPI's is a
+  subclass, so a 404 or 405 from routing answered `{"detail": "Not Found"}`
+  instead of `{"error", "message", "detail", "timestamp"}`. The handler is now
+  registered under Starlette's `HTTPException`, and `http_exception_handler`
+  is typed to take it. A client that parsed the old `detail` string from a
+  routing 404 or 405 reads `message` instead.
+- **`http_exception_handler` keeps the exception's headers.** It dropped them,
+  so a 401 raised with `WWW-Authenticate` lost the header, and a 405 would
+  have lost the `Allow` that RFC 9110 requires.
+
 - **A stream from `S3KnowledgeBackend.stream_file` read after `close()`
   raises `RuntimeError("Backend not initialized")`,** as every other call on a
   closed backend does. It raised `AttributeError` on `None`, because the check

@@ -310,8 +310,11 @@ The pairing is:
 #### Handler coverage
 
 `register_exception_handlers` registers handlers for `APIError`, for
-`DataknobsError`, for FastAPI's `HTTPException`, and a catch-all for
-`Exception`. The `DataknobsError` handler is what gives DataKnobs' own errors a
+`DataknobsError`, for Starlette's `HTTPException`, and a catch-all for
+`Exception`. The `HTTPException` handler covers FastAPI's subclass too, and the
+router's own refusals: an unknown path answers 404 and a method a route does
+not take answers 405, both in the same body as every other error, with the
+exception's headers (a 405's `Allow`) kept. The `DataknobsError` handler is what gives DataKnobs' own errors a
 status matching the failure — a `ConfigurationError` from config validation, a
 `RateLimitError` from `RateLimitMiddleware`, a `RecordNotFoundError` from a
 database backend. You do not need to catch these and re-raise them as API

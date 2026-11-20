@@ -790,6 +790,90 @@ class TestExceptionHandlerDispatch:
         assert "timestamp" in body
 
 
+async def _routing_response(method: str, path: str):
+    """Send a request the router itself refuses, with the handlers registered."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.get("/only-get")
+    async def only_get():
+        return {}
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.request(method, path)
+
+
+class TestHttpExceptionsTheRouterRaises:
+    """Every ``HTTPException`` answers in the module's body, with its headers.
+
+    The router raises Starlette's ``HTTPException``, of which FastAPI's is a
+    subclass. A handler registered for FastAPI's class is never consulted for
+    the router's, so an unknown path or a wrong method used to answer
+    ``{"detail": "Not Found"}`` beside every other error's
+    ``{"error", "message", "detail", "timestamp"}``.
+    """
+
+    async def test_an_unknown_path_answers_in_the_standard_body(self) -> None:
+        response = await _routing_response("GET", "/nowhere")
+
+        assert response.status_code == 404
+        body = response.json()
+        assert body["error"] == "HTTPException"
+        assert body["message"] == "Not Found"
+        assert body["detail"] == {}
+        assert "timestamp" in body
+
+    async def test_a_wrong_method_answers_in_the_standard_body_and_keeps_allow(self) -> None:
+        response = await _routing_response("POST", "/only-get")
+
+        assert response.status_code == 405
+        assert response.json()["message"] == "Method Not Allowed"
+        # RFC 9110 15.5.6: a 405 MUST carry Allow.
+        assert response.headers["allow"] == "GET"
+
+    async def test_an_app_raised_http_exception_keeps_its_headers(self) -> None:
+        from fastapi import HTTPException
+
+        response = await _response_for(
+            HTTPException(
+                status_code=401,
+                detail="Sign in",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        )
+
+        assert response.status_code == 401
+        assert response.json()["message"] == "Sign in"
+        assert response.headers["www-authenticate"] == "Bearer"
+
+
+async def test_a_registered_handler_refuses_a_type_it_was_not_registered_for() -> None:
+    """The pairing Starlette guarantees at run time is checked, not assumed.
+
+    Starlette never calls a handler with a type outside its registration, so
+    this reaches past it to the registered callable, as a mis-registration
+    would.
+    """
+    pytest.importorskip("fastapi")
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    register_exception_handlers(app)
+    handler = app.exception_handlers[APIError]
+    stray = ValueError("not an APIError")
+
+    with pytest.raises(TypeError, match="APIError was called with ValueError") as raised:
+        await handler(None, stray)
+    assert raised.value.__cause__ is stray
+
+
 class TestApiErrorDisclosure:
     """The API family carries its own disclosure gate.
 
