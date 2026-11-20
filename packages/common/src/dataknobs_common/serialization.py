@@ -520,8 +520,8 @@ class _Sanitize(_Walk):
 
     A dropped value is the private ``_SENTINEL``, which its container leaves
     out, and is reported according to *on_drop*; under ``"error"`` each drop
-    is added to *dropped*. Paths are written ``a.b[0]``, a set member ``s{}``, with ``<root>`` for
-    the value itself. *quiet* leaves out the DEBUG lines for a ``to_dict()``
+    is added to *dropped*. Paths are written ``a.b[0]``, with ``<root>`` for
+    the value itself; a member of the set at ``a.tags`` is ``a.tags{}``. *quiet* leaves out the DEBUG lines for a ``to_dict()``
     that raised and for a non-finite float, for a caller that only asks.
     """
 

@@ -5090,11 +5090,11 @@ class WizardReasoning(StructuredConfigConsumer[WizardReasoningConfig], Reasoning
         normalized = normalize_wizard_state(wizard_meta)
         current_stage = normalized["current_stage"] or "unknown"
 
-        # ``data`` and ``history`` deliberately stay on ``fsm_state``.
-        # The normalized ``data`` prefers ``wizard_meta["data"]``, which
-        # carries transient keys as well; ``get_state_snapshot`` reports
-        # the persistent set, and the two constructors of this type
-        # agreeing is the whole point of the change.
+        # ``data`` and ``history`` are read from ``fsm_state``, as
+        # ``get_state_snapshot`` reads them, so the two constructors of
+        # this type take them from the same record.  The save writes
+        # ``wizard_meta["data"]`` as a copy of ``fsm_state["data"]``, so
+        # the normalized ``data`` holds the same keys.
         # Copied, as the sibling constructor copies them.  These are the
         # live objects inside ``manager.metadata``: handed out by
         # reference, a consumer appending to ``snapshot.history`` --
