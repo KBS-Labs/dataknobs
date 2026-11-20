@@ -210,8 +210,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   appended to: `sources`, `tool_chain`, `llm_invocations`, `review_history`
   and `revision_history` are tuples, and `provenance.sources.append(...)`
   raises `AttributeError`. Pass the values when the record is made
-  (`create_provenance` and the constructors take any iterable, so a list built
-  up first still works), or make a new record with `dataclasses.replace`. A
+  (`create_provenance` takes any iterable, so a list built up first still
+  works; the constructors accept one at run time but are typed with tuples),
+  or make a new record with `dataclasses.replace`. A
   test comparing one of those fields with a list (`== []`) now compares a
   tuple with a list and fails; compare with a tuple. `creation_context` and
   `ToolInvocation.parameters` are now a read-only `FrozenMapping`, a frozen

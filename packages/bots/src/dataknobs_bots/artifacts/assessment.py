@@ -26,6 +26,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
+
 from .provenance import now_iso
 
 logger = logging.getLogger(__name__)

@@ -121,6 +121,10 @@ def _tuple_of(values: Iterable[Any], owner: str, name: str) -> tuple[Any, ...]:
     return tuple(values)
 
 
+#: How :func:`create_provenance` names itself in a refusal.
+_FACTORY = "create_provenance"
+
+
 def _hold_tuples(record: object, *names: str) -> None:
     """Keep each named field of a frozen ``record`` as a tuple of what it was given."""
     for name in names:
@@ -136,6 +140,22 @@ def _hold_frozen(record: object, name: str) -> None:
             f"{type(record).__name__}.{name} takes a mapping, not {type(given).__name__}: {given!r}"
         )
     object.__setattr__(record, name, freeze_structure(given))
+
+
+class _HoldsAMapping:
+    """A record holding a mapping, and therefore unhashable, as the mapping is.
+
+    The record compares by value, and a ``FrozenMapping`` cannot be hashed, so
+    a generated ``__hash__`` would raise from the call. Declaring ``None``
+    instead makes :class:`collections.abc.Hashable` answer no. It is set in
+    ``__init_subclass__``, which runs before ``@dataclass`` on each class
+    below it -- a consumer's own frozen subclass included -- because the
+    decorator would otherwise generate the hash again for every subclass.
+    """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        cls.__hash__ = None  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -189,7 +209,7 @@ class SourceReference:
 
 
 @dataclass(frozen=True)
-class ToolInvocation:
+class ToolInvocation(_HoldsAMapping):
     """A tool used in making the content.
 
     Attributes:
@@ -226,15 +246,9 @@ class ToolInvocation:
         return cls(
             tool_name=data["tool_name"],
             tool_version=data.get("tool_version"),
-            parameters=data.get("parameters", {}),
+            parameters=data.get("parameters") or {},
             timestamp=data.get("timestamp", ""),
         )
-
-
-# Declared after the class body, as ``FrozenMapping.__hash__`` is: the record
-# holds a mapping, which cannot be hashed, so it says so rather than offering
-# a hash that raises.
-ToolInvocation.__hash__ = None  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -350,12 +364,12 @@ class RevisionRecord:
             timestamp=data.get("timestamp", ""),
             part=data.get("part", ""),
             after=data.get("after"),
-            sources=tuple(data.get("sources", ())),
+            sources=data.get("sources", ()),
         )
 
 
 @dataclass(frozen=True)
-class ProvenanceRecord:
+class ProvenanceRecord(_HoldsAMapping):
     """Complete provenance for a piece of content: how it was made, and since.
 
     Attributes:
@@ -373,8 +387,11 @@ class ProvenanceRecord:
         review_history: IDs of evaluations of the content.
         revision_history: Revisions made since.
 
-    The last five take any iterable and hold a tuple of it. To add to one,
-    make a new record with :func:`dataclasses.replace`.
+    The last five hold tuples. At run time the constructor takes any iterable
+    and keeps a tuple of it, but they are typed as tuples, so typed code
+    passes a tuple here or a list to :func:`create_provenance`, whose
+    parameters take any iterable. To add to one, make a new record with
+    :func:`dataclasses.replace`.
     """
 
     created_by: str = ""
@@ -419,23 +436,17 @@ class ProvenanceRecord:
             created_by=data.get("created_by", ""),
             created_at=data.get("created_at", ""),
             creation_method=data.get("creation_method", ""),
-            creation_context=data.get("creation_context", {}),
+            creation_context=data.get("creation_context") or {},
             sources=tuple(SourceReference.from_dict(s) for s in data.get("sources", ())),
             tool_chain=tuple(ToolInvocation.from_dict(t) for t in data.get("tool_chain", ())),
             llm_invocations=tuple(
                 LLMInvocation.from_dict(c) for c in data.get("llm_invocations", ())
             ),
-            review_history=tuple(data.get("review_history", ())),
+            review_history=data.get("review_history", ()),
             revision_history=tuple(
                 RevisionRecord.from_dict(r) for r in data.get("revision_history", ())
             ),
         )
-
-
-# Declared after the class body, as ``FrozenMapping.__hash__`` is: the record
-# holds a mapping, which cannot be hashed, so it says so rather than offering
-# a hash that raises.
-ProvenanceRecord.__hash__ = None  # type: ignore[assignment]
 
 
 def create_provenance(
@@ -477,9 +488,9 @@ def create_provenance(
         created_at=now_iso() if created_at is None else created_at,
         creation_method=creation_method,
         creation_context=FrozenMapping() if creation_context is None else creation_context,
-        sources=tuple(sources),
-        tool_chain=tuple(tool_chain),
-        llm_invocations=tuple(llm_invocations),
-        review_history=_tuple_of(review_history, "create_provenance", "review_history"),
-        revision_history=tuple(revision_history),
+        sources=_tuple_of(sources, _FACTORY, "sources"),
+        tool_chain=_tuple_of(tool_chain, _FACTORY, "tool_chain"),
+        llm_invocations=_tuple_of(llm_invocations, _FACTORY, "llm_invocations"),
+        review_history=_tuple_of(review_history, _FACTORY, "review_history"),
+        revision_history=_tuple_of(revision_history, _FACTORY, "revision_history"),
     )

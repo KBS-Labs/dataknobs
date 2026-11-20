@@ -149,7 +149,7 @@ provenance = create_provenance(
 )
 ```
 
-**The records are frozen.** `sources`, `tool_chain`, `llm_invocations`, `review_history` and `revision_history` are tuples, and `creation_context` and a tool's `parameters` hold a read-only copy of the mapping given (a `FrozenMapping`, whose nested lists read back as tuples; `to_dict()` gives plain dicts and lists). Pass the values when the record is made: `create_provenance` and the constructors take any iterable, so a list built up first works. To add to a record, make a new one:
+**The records are frozen.** `sources`, `tool_chain`, `llm_invocations`, `review_history` and `revision_history` are tuples, and `creation_context` and a tool's `parameters` hold a read-only copy of the mapping given (a `FrozenMapping`, whose nested lists read back as tuples; `to_dict()` gives plain dicts and lists). Pass the values when the record is made: `create_provenance` takes any iterable, so a list built up first works (the constructors accept one at run time, but are typed with tuples). To add to a record, make a new one:
 
 ```python
 import dataclasses

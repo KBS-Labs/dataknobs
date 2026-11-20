@@ -486,8 +486,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copy of the mapping given, a `FrozenMapping` (nested dicts frozen too,
   nested lists held as tuples), so neither the caller nor a reader can change
   it, and `to_dict` returns plain, new dicts and lists. The three records
-  holding no mapping are hashable; `ToolInvocation` and `ProvenanceRecord`
-  declare themselves unhashable. A revision is a new record, made with
+  holding no mapping are hashable; `ToolInvocation` and `ProvenanceRecord`,
+  and any frozen dataclass subclassing them, declare themselves unhashable.
+  `from_dict` reads a stored `null` mapping as empty. A revision is a new record, made with
   `dataclasses.replace`. Three optional fields describe a part of the content
   rather than the whole: `LLMInvocation.invocation_id`, and
   `RevisionRecord.part`, `after` (`""` where the part was removed, `None`

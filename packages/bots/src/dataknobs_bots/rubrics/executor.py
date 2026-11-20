@@ -27,14 +27,13 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.imports import resolve_callable
+from dataknobs_common.provenance import now_iso
 from dataknobs_llm.llm.base import AsyncLLMProvider, LLMMessage
 
 if TYPE_CHECKING:
     from dataknobs_bots.prompts.resolver import PromptResolver
 
 from .feedback import generate_feedback_summary
-from dataknobs_common.provenance import now_iso
-
 from .models import (
     CriterionResult,
     Rubric,

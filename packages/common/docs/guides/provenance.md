@@ -60,9 +60,15 @@ assert record.sources[0].source_id == "QUOTE-0117"
 ```
 
 A field that holds several values takes any iterable, a list built up
-beforehand included, and the record keeps a tuple of it. A single string is
-refused where several values are held: `review_history="eval_1"` raises
-`TypeError` rather than recording six one-letter ids.
+beforehand included, and the record keeps a tuple of it. `create_provenance`
+is typed that way too. The record constructors accept any iterable at run
+time but are typed with the tuples they hold, so typed code passes a tuple
+to a constructor, or the list to `create_provenance`.
+
+A single string is refused where several values are held, on every way in:
+`review_history="eval_1"` raises `TypeError` from a constructor,
+`create_provenance` and `from_dict` alike, rather than recording six
+one-letter ids.
 
 ## The records are frozen
 
@@ -81,8 +87,8 @@ A record handed to a store, a renderer or another task cannot change under it:
   `("a", "b")` where `["a", "b"]` was given. Other values are shared, not
   copied, and a mapping that holds itself is refused with `ValueError`;
 - `to_dict` returns new, plain containers, dicts and lists again, so what it
-  returns can be written with `json.dumps` and edited without reaching the
-  record.
+  returns can be edited without reaching the record. Leaves pass through as
+  they were given, so it is JSON when what was given was.
 
 So adding to a record makes a new one, with `dataclasses.replace`:
 
@@ -109,7 +115,8 @@ The records compare by value. `SourceReference`, `LLMInvocation` and
 `RevisionRecord` are also hashable, so a set of sources works.
 `ToolInvocation` and `ProvenanceRecord` hold a mapping, which cannot be
 hashed, so they declare themselves unhashable: `hash()` raises `TypeError`
-and `isinstance(record, collections.abc.Hashable)` is false.
+and `isinstance(record, collections.abc.Hashable)` is false. A frozen
+dataclass subclassing either is declared unhashable as well.
 
 ## A revision of one part
 
@@ -131,7 +138,7 @@ edited = RevisionRecord(
     triggered_by="user:buyer",
     part="line-1",
     after="Linden Ceramics is cheaper per mug, but slower to deliver.",
-    sources=["QUOTE-0117", "QUOTE-0121"],
+    sources=("QUOTE-0117", "QUOTE-0121"),
 )
 removed = dataclasses.replace(edited, reason="rejected", after="")
 assert removed.to_dict()["after"] == ""

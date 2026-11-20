@@ -219,7 +219,7 @@ STORED = {
     "created_by": "system:generator:quiz_gen_v1",
     "created_at": AT,
     "creation_method": "generator",
-    "creation_context": {"topic": "algebra", "parameters": {"count": 5}},
+    "creation_context": {"topic": "algebra", "parameters": {"count": 5, "tags": ["a", "b"]}},
     "sources": [
         {"source_id": "doc_1", "source_type": "document", "confidence": 1.0},
         {
@@ -426,3 +426,51 @@ def test_only_the_records_without_a_mapping_are_hashable() -> None:
         assert not isinstance(record, Hashable)
         with pytest.raises(TypeError):
             hash(record)
+
+
+def test_a_single_string_is_refused_on_every_way_in() -> None:
+    with pytest.raises(TypeError, match=r"review_history"):
+        ProvenanceRecord.from_dict({"review_history": "eval_1"})
+    with pytest.raises(TypeError, match=r"sources"):
+        RevisionRecord.from_dict({"sources": "QUOTE-0117"})
+    for name in ("sources", "tool_chain", "llm_invocations", "revision_history"):
+        with pytest.raises(TypeError, match=name):
+            create_provenance("user:buyer", "manual", **{name: "xy"})
+
+
+def test_a_stored_null_mapping_reads_back_empty() -> None:
+    read = ProvenanceRecord.from_dict({"creation_context": None, "created_at": AT})
+    assert read.creation_context == {}
+    tool = ToolInvocation.from_dict({"tool_name": "search_quotes", "parameters": None})
+    assert tool.parameters == {}
+    assert create_provenance("user:buyer", "manual", creation_context=None).creation_context == {}
+
+
+def test_a_record_survives_pickle_and_deepcopy() -> None:
+    import copy
+    import pickle
+
+    for record in (RECORD, SEARCH, EDIT, ProvenanceRecord.from_dict(STORED)):
+        assert pickle.loads(pickle.dumps(record)) == record
+        assert copy.deepcopy(record) == record
+    restored = pickle.loads(pickle.dumps(RECORD))
+    with pytest.raises(TypeError):
+        restored.creation_context["task"] = "changed"  # type: ignore[index]
+
+
+def test_a_frozen_subclass_of_a_mapping_holder_is_unhashable_too() -> None:
+    from collections.abc import Hashable
+
+    @dataclasses.dataclass(frozen=True)
+    class Reviewed(ProvenanceRecord):
+        reviewer: str = ""
+
+    @dataclasses.dataclass(frozen=True)
+    class Versioned(ToolInvocation):
+        build: str = ""
+
+    for record in (Reviewed(created_at=AT, reviewer="user:buyer"), Versioned(tool_name="t")):
+        assert not isinstance(record, Hashable)
+        with pytest.raises(TypeError, match="unhashable type"):
+            hash(record)
+    assert Reviewed(created_at=AT) == Reviewed(created_at=AT)
