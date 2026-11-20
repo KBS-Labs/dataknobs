@@ -31,6 +31,8 @@ import dataclasses
 import logging
 from typing import Literal, Protocol, runtime_checkable
 
+from dataknobs_common.text import is_token_character
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CONJUNCTIONS: frozenset[str] = frozenset({"and", "or", "nor"})
@@ -179,11 +181,15 @@ def expand_value_in_message(
 
 
 def _at_word_boundary(text: str, pos: int, length: int) -> bool:
-    """Check that the match at ``pos`` is at word boundaries on both sides."""
-    if pos > 0 and text[pos - 1].isalnum():
+    """Check that the match at ``pos`` is at word boundaries on both sides.
+
+    A neighbour that is a token character -- alphanumeric, or a combining mark
+    written on the word -- means the match is inside a longer word.
+    """
+    if pos > 0 and is_token_character(text[pos - 1]):
         return False
     end = pos + length
-    if end < len(text) and text[end].isalnum():
+    if end < len(text) and is_token_character(text[end]):
         return False
     return True
 

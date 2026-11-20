@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`expand_value_in_message` does not match a value inside a word written
+  with a combining mark.** Its word-boundary check used `str.isalnum`, which is
+  False for every combining mark, so `cafe` matched inside a decomposed
+  `café` and expanded from the middle of the word. It asks
+  `dataknobs_common.text.is_token_character` now, the predicate the scanning
+  rungs use.
+
 ### Added
 
 - **`PostgresDB.query_rows()` and `PostgresDB.stream_rows()`.** `query_rows`

@@ -412,3 +412,21 @@ class TestPluginProtocol:
                 return None
 
         assert isinstance(MyPlugin(), ValueExpansionPlugin)
+
+
+class TestCombiningMarks:
+    """A combining mark belongs to the word it is written on.
+
+    ``str.isalnum`` is False for every combining mark, so a boundary check
+    built on it alone took ``cafe`` + U+0301 for the word ``cafe`` followed
+    by a boundary, and expanded from inside the word.
+    """
+
+    def test_a_value_does_not_match_before_a_combining_mark(self):
+        assert _expand("cafe", "I like the cafe\u0301 and bistro") is None
+
+    def test_a_value_does_not_match_after_a_combining_mark(self):
+        assert _expand("te", "I like the e\u0301te and fall") is None
+
+    def test_a_value_ending_in_a_mark_still_matches_as_a_word(self):
+        assert _expand("cafe\u0301", "I like the cafe\u0301 and bistro") == "cafe\u0301 and bistro"

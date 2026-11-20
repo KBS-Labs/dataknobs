@@ -8,7 +8,8 @@ Two halves, each a module of its own, and every name re-exported here so
 
 - :mod:`~dataknobs_common.text.scan` folds a surface form for lookup and says
   where in a string a form may sit -- the fold, the token spans and the
-  punctuation edge rule a scanning match reads. It imports nothing.
+  punctuation edge rule a scanning match reads, and the ``words`` tokens that
+  keep an in-word apostrophe. It imports only the standard library.
 - :mod:`~dataknobs_common.text.variants` makes an authored form's variants --
   *Apples* for *Apple*, *Fruit and Veg* for *Fruit & Veg* -- and refuses any
   that would make two entities collide. Its rules are named in a registry, so
@@ -22,13 +23,16 @@ over, so a configuration can choose one; it imports what ``variants`` does.
 """
 
 from dataknobs_common.text.scan import (
+    ApostropheMode,
     content_span,
     default_normalizer,
     edge_extensions,
+    is_token_character,
     narrowest,
     probe_spans,
     punctuation_edges,
     token_spans,
+    word_spans,
 )
 from dataknobs_common.text.tokenizers import TOKENIZERS, Tokenizer, tokenizer_from_config
 from dataknobs_common.text.variants import (
@@ -58,6 +62,7 @@ __all__ = [
     "DEFAULT_RULES",
     "TOKENIZERS",
     "VARIANT_RULES",
+    "ApostropheMode",
     "Declared",
     "Refusal",
     "Rule",
@@ -75,6 +80,7 @@ __all__ = [
     "hyphen",
     "inflect",
     "inflect_keeping",
+    "is_token_character",
     "narrowest",
     "parenthetical",
     "probe_spans",
@@ -85,4 +91,5 @@ __all__ = [
     "strip_prefix",
     "token_spans",
     "tokenizer_from_config",
+    "word_spans",
 ]

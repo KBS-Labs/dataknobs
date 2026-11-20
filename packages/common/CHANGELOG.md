@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`token_spans` keeps a combining mark in the word it is written on.** It
+  decided a token character by `str.isalnum`, which is False for every
+  combining mark, so `दुनिया` was three tokens with its vowel signs in none,
+  and a decomposed `é` split its word. A token character is now alphanumeric
+  or a combining mark (Unicode category `M*`), by the new
+  `is_token_character`, and the edge rule (`punctuation_edges`,
+  `edge_extensions`) and `narrowest` ask the same predicate, so a mark is no
+  longer punctuation a window is widened over or trimmed off. The scanning
+  rungs inherit it: a declared name written with marks is one window, where
+  `LexicalSignal` used to report it short by its last vowel sign. One
+  consequence: `default_normalizer` no longer changes any form's token count,
+  so a vocabulary declaring a mark that case-folds to a letter (`U+0345`)
+  keeps its `longest_form_tokens` bound.
+
 - **`PluginRegistry` keeps a factory's text out of every error it raises.**
   `get`, `get_async`, `create` and `create_async` bounded what a factory
   raised to `"Failed to create plugin '<key>' (<type>)"`, except a
@@ -495,6 +509,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.sources` still binds the name, so no existing import breaks.
 
 ### Added
+
+- **`word_spans` and the `words` tokenizer: the default tokens with an in-word
+  apostrophe kept.** `word_spans(text)` joins the tokens `token_spans` returns
+  where one U+0027 or U+2019 sits between two token characters, so *don't*
+  and *what’s* are one token each; `apostrophes="clitic"` starts a token at
+  each such apostrophe instead (`don` `'t`). A trailing or doubled apostrophe
+  stays a boundary, and tokens are slices of the text. Registered in
+  `TOKENIZERS` as `words`, so a configuration writes `tokenizer: words` or
+  `{name: words, apostrophes: clitic}`; an unknown key or mode is refused with
+  `ValidationError`. Also exported: `is_token_character`, the one predicate
+  every token rule in `dataknobs_common.text` asks, and `ApostropheMode`.
+  All three are re-exported from `dataknobs_common.entity_resolution`.
 
 - **`dataknobs_common.clock`: one read of the current time, and a seam a
   test fixes it with.** `utc_now()` returns the current time as an aware UTC

@@ -21,6 +21,7 @@ from dataknobs_common.text import (
     edge_extensions,
     narrowest,
     probe_spans,
+    is_token_character,
     punctuation_edges,
     token_spans,
 )
@@ -322,3 +323,58 @@ def test_narrowest_trims_every_default_probe_as_the_extension_rule_did() -> None
                 assert _core(text, span) == _punctuation_core(text, span), (text, span)
                 checked += 1
     assert checked > 10_000
+
+
+# A combining mark is part of the word it is written on. ``str.isalnum`` is
+# False for every one (Unicode category M*), so a predicate built on it alone
+# split such a word at the mark and left the mark in no token at all.
+
+_DUNIYA = "\u0926\u0941\u0928\u093f\u092f\u093e"  # दुनिया: three letters, three vowel signs
+_DECOMPOSED = "e\u0301te"  # e + COMBINING ACUTE ACCENT + te
+
+
+@pytest.mark.parametrize(
+    ("text", "spans"),
+    [
+        (_DUNIYA, ((0, 6),)),
+        (_DECOMPOSED, ((0, 4),)),
+        (f"hello {_DUNIYA}!", ((0, 5), (6, 12))),
+        # Precomposed and decomposed spellings tokenize alike.
+        ("\u00e9te", ((0, 3),)),
+        # A mark is a token character wherever it stands, so one with no base
+        # letter before it opens a token rather than vanishing.
+        (" \u0301x", ((1, 3),)),
+    ],
+)
+def test_a_combining_mark_stays_in_the_token_it_is_written_on(
+    text: str, spans: tuple[tuple[int, int], ...]
+) -> None:
+    assert token_spans(text) == spans
+
+
+@pytest.mark.parametrize("character", ["\u0301", "\u093f", "\u094d", "\u20dd"])
+def test_every_kind_of_mark_is_a_token_character(character: str) -> None:
+    """Nonspacing (Mn), spacing (Mc) and enclosing (Me) marks alike."""
+    assert not character.isalnum()
+    assert is_token_character(character)
+
+
+def test_the_token_character_predicate_is_alphanumeric_or_a_mark() -> None:
+    assert is_token_character("a")
+    assert is_token_character("7")
+    assert is_token_character("\u00df")
+    for character in (" ", "_", "-", "'", "\u2019", "$", "\u200d"):
+        assert not is_token_character(character), repr(character)
+
+
+def test_a_combining_mark_is_not_punctuation_at_a_form_s_edge() -> None:
+    """The edge rule measures the complement of the token predicate, so it moves too."""
+    assert punctuation_edges(_DECOMPOSED) == (0, 0)
+    assert punctuation_edges(f"({_DUNIYA})") == (1, 1)
+    # A span ending on the base letter is not widened over its own accent.
+    assert edge_extensions(_DECOMPOSED, (0, 1), None) == ()
+
+
+def test_narrowest_does_not_trim_a_combining_mark() -> None:
+    text = f"({_DECOMPOSED})"
+    assert _core(text, (0, len(text))) == (1, 5)
