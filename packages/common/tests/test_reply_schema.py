@@ -18,13 +18,16 @@ import jsonschema
 import pytest
 from jsonschema import Draft202012Validator
 
+import dataknobs_common
+from dataknobs_common.exceptions import SerializationError
+from dataknobs_common.fields import FieldType
 from dataknobs_common.reply_schema import STRING, array, strict
 
 #: An invoice line: the SKU billed and its amount, written as text.
-LINE = strict(sku=STRING, amount=STRING)
+LINE = strict({"sku": STRING, "amount": STRING})
 
 #: An invoice read into its number, its vendor's notes and its lines.
-INVOICE = strict(number=STRING, notes=array(STRING), lines=array(LINE))
+INVOICE = strict({"number": STRING, "notes": array(STRING), "lines": array(LINE)})
 
 #: A reply as a model would write it under :data:`INVOICE`.
 READ = {
@@ -101,8 +104,24 @@ def test_a_strict_object_requires_every_property_and_allows_no_other() -> None:
 
 
 def test_required_follows_the_order_the_properties_were_given() -> None:
-    assert strict(amount=STRING, sku=STRING)["required"] == ["amount", "sku"]
-    assert list(strict(amount=STRING, sku=STRING)["properties"]) == ["amount", "sku"]
+    built = strict({"amount": STRING, "sku": STRING})
+    assert built["required"] == ["amount", "sku"]
+    assert list(built["properties"]) == ["amount", "sku"]
+
+
+def test_any_property_name_can_be_written() -> None:
+    """Names a keyword argument could not carry, and names that are keywords
+    of JSON Schema itself, are properties like any other.
+    """
+    names = ["class", "unit-price", "2nd line", "type", "required", "properties"]
+    built = strict(dict.fromkeys(names, STRING))
+
+    assert built["required"] == names
+    assert built["type"] == "object"
+    reply = dict.fromkeys(names, "x")
+    assert admits(built, reply)
+    assert not admits(built, {**reply, "type": 1})
+    assert not admits(built, {k: v for k, v in reply.items() if k != "required"})
 
 
 def test_a_strict_object_inside_an_array_is_closed_too() -> None:
@@ -121,11 +140,16 @@ def test_a_strict_object_inside_an_array_is_closed_too() -> None:
 @pytest.mark.parametrize(
     "schema",
     [
-        strict(),
+        strict({}),
         LINE,
         INVOICE,
         array(INVOICE),
-        strict(batches=array(array(LINE)), approved_by=array(strict(name=STRING))),
+        strict(
+            {
+                "batches": array(array(LINE)),
+                "approved_by": array(strict({"name": STRING})),
+            }
+        ),
     ],
     ids=["empty", "line", "invoice", "invoices", "nested"],
 )
@@ -140,8 +164,8 @@ def test_every_object_built_is_closed(schema: dict[str, Any]) -> None:
 
 
 def test_an_object_with_no_properties_admits_only_an_empty_one() -> None:
-    assert admits(strict(), {})
-    assert not admits(strict(), {"sku": "SKU-1042"})
+    assert admits(strict({}), {})
+    assert not admits(strict({}), {"sku": "SKU-1042"})
 
 
 def test_a_built_schema_is_json_and_is_not_changed_by_its_parts_afterwards() -> None:
@@ -150,25 +174,25 @@ def test_a_built_schema_is_json_and_is_not_changed_by_its_parts_afterwards() -> 
     """
     notes: dict[str, Any] = {"type": "string"}
     line: dict[str, Any] = {"type": "string"}
-    built = strict(notes=array(notes), sku=line)
+    built = strict({"notes": array(notes), "sku": line})
     notes["maxLength"] = 3
     line["enum"] = ["SKU-1042"]
 
-    assert built == strict(notes=array(STRING), sku=STRING)
+    assert built == strict({"notes": array(STRING), "sku": STRING})
     assert json.loads(json.dumps(built)) == built
     jsonschema.validate({"notes": ["net 30"], "sku": "SKU-2210"}, built)
 
 
 def test_a_part_edited_below_its_top_level_does_not_reach_the_schema() -> None:
     """The copy is deep: a one-level copy would share ``line['properties']``."""
-    line = strict(sku=STRING, amount=STRING)
-    invoice = strict(number=STRING, lines=array(line))
+    line = strict({"sku": STRING, "amount": STRING})
+    invoice = strict({"number": STRING, "lines": array(line)})
     invoices = array(line)
 
     line["properties"]["amount"]["pattern"] = r"^\d+$"
     line["required"].append("qty")
 
-    assert invoice == strict(number=STRING, lines=array(LINE))
+    assert invoice == strict({"number": STRING, "lines": array(LINE)})
     assert invoices == array(LINE)
     assert admits(invoice, {"number": READ["number"], "lines": READ["lines"]})
 
@@ -177,8 +201,12 @@ def test_a_built_schema_shares_no_container_with_its_parts_or_another_schema() -
     """One part reused in three schemas, as a layout composes them, is three
     objects; editing one schema in place reaches neither the part nor the others.
     """
-    line = strict(sku=STRING, amount=STRING)
-    built = [strict(lines=array(line)), array(line), strict(first=line, last=line)]
+    line = strict({"sku": STRING, "amount": STRING})
+    built = [
+        strict({"lines": array(line)}),
+        array(line),
+        strict({"first": line, "last": line}),
+    ]
 
     source_ids = {id(each) for each in containers(line)}
     seen: set[int] = set()
@@ -195,21 +223,86 @@ def test_a_built_schema_shares_no_container_with_its_parts_or_another_schema() -
     assert line == LINE
 
 
+def test_a_container_repeated_inside_one_hand_written_part_is_copied_twice() -> None:
+    """Sharing in the caller's own part does not survive into the schema."""
+    code: dict[str, Any] = {"type": "string", "pattern": "^SKU-"}
+    built = array({"anyOf": [code, code]})
+
+    first, second = built["items"]["anyOf"]
+    assert first == second == code
+    assert first is not second
+    first["pattern"] = "^INV-"
+    assert second["pattern"] == "^SKU-"
+
+
 def test_string_cannot_be_changed() -> None:
     """Every schema built after such an edit would carry it."""
     with pytest.raises(TypeError):
         cast("Any", STRING)["format"] = "date"
-    assert strict(sku=STRING)["properties"]["sku"] == {"type": "string"}
+    assert strict({"sku": STRING})["properties"]["sku"] == {"type": "string"}
 
 
-def test_any_mapping_or_sequence_part_is_written_as_dict_and_list() -> None:
-    """A part handed in frozen or as a tuple comes out as ``json`` writes it."""
+def test_any_mapping_sequence_or_set_part_is_written_as_dict_and_list() -> None:
+    """A part handed in frozen, as a tuple or as a set comes out as ``json``
+    writes it: a set's members sorted, so the schema is the same on every run.
+    """
     currency = MappingProxyType({"type": "string", "enum": ("USD", "EUR")})
-    built = strict(currency=currency, lines=array(MappingProxyType(LINE)))
+    terms = {"type": "string", "enum": {"net 60", "net 30"}}
+    built = strict({"currency": currency, "terms": terms, "lines": array(MappingProxyType(LINE))})
 
     assert type(built["properties"]["currency"]) is dict
     assert built["properties"]["currency"]["enum"] == ["USD", "EUR"]
+    assert built["properties"]["terms"]["enum"] == ["net 30", "net 60"]
     assert type(built["properties"]["lines"]["items"]) is dict
     assert json.loads(json.dumps(built)) == built
-    assert admits(built, {"currency": "USD", "lines": READ["lines"]})
-    assert not admits(built, {"currency": "GBP", "lines": []})
+    reply = {"currency": "USD", "terms": "net 30", "lines": READ["lines"]}
+    assert admits(built, reply)
+    assert not admits(built, {**reply, "currency": "GBP"})
+
+
+@pytest.mark.parametrize(
+    ("build", "named"),
+    [
+        (lambda: strict({"sku": "string"}), "property 'sku'"),
+        (lambda: strict({"sku": FieldType.STRING}), "property 'sku'"),
+        (lambda: array(cast("Any", str)), "array items"),
+        (lambda: array(cast("Any", None)), "array items"),
+        (lambda: strict(cast("Any", [("sku", STRING)])), "mapping of name to schema"),
+        (lambda: strict(cast("Any", {1: STRING})), "names must be strings"),
+    ],
+    ids=["a-type-name", "a-field-type", "a-class", "none", "pairs", "a-non-string-name"],
+)
+def test_what_is_not_a_schema_mapping_is_refused(build: Any, named: str) -> None:
+    """A slip that would otherwise reach the vendor as an invalid schema."""
+    with pytest.raises(TypeError, match=named):
+        build()
+
+
+@pytest.mark.parametrize(
+    ("part", "path"),
+    [
+        ({"type": "string", "default": object()}, "default"),
+        ({"type": "number", "maximum": float("nan")}, "maximum"),
+    ],
+    ids=["an-object", "a-nan"],
+)
+def test_a_part_json_cannot_write_is_refused_naming_where(part: dict[str, Any], path: str) -> None:
+    with pytest.raises(SerializationError, match="property 'amount'") as raised:
+        strict({"sku": STRING, "amount": array(STRING) | {"items": part}})
+    assert path in str(raised.value)
+    assert raised.value.context["part"] == "property 'amount'"
+
+
+def test_a_part_that_holds_itself_is_refused() -> None:
+    part: dict[str, Any] = {"type": "object"}
+    part["properties"] = {"next": part}
+    with pytest.raises(SerializationError, match="array items"):
+        array(part)
+
+
+def test_the_builders_are_imported_from_their_module() -> None:
+    """Not from the package door, where ``STRING`` would sit beside
+    ``FieldType.STRING`` and ``array`` shadow the stdlib module under ``*``.
+    """
+    for name in ("STRING", "array", "strict"):
+        assert name not in dataknobs_common.__all__

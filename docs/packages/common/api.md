@@ -43,7 +43,7 @@ in full in the [auto-generated reference](../../api/reference/common.md):
 | `callbacks`, `async_iter`, `sync_bridge` | Callback registries, sync-iterator offloading, and the sync/async bridge |
 | `expressions` | Safe expression evaluation over a restricted builtin set |
 | `imports`, `copying`, `bounded_cache`, `aws` | Dotted-path resolution, structure copying, an LRU cache, and the shared aioboto3 session |
-| `reply_schema` | `strict`, `array` and `STRING`: JSON Schemas for a model's reply, closed at every depth, as OpenAI's strict mode and Anthropic require |
+| `reply_schema` | `strict`, `array` and `STRING`: JSON Schemas for a model's reply, closed at every depth, as OpenAI's strict mode and Anthropic ask. Imported from the module, not the package |
 | `ontology`, `hierarchy`, `entity_resolution`, `text` | An authored vocabulary and what reads it: `load_ontology`, the entity and assertion sources, the structural protocols and the walks over them, and the resolution cascade |
 | `testing` | Test utilities, skip markers, and configuration factories |
 
