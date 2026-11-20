@@ -44,6 +44,7 @@ in full in the [auto-generated reference](../../api/reference/common.md):
 | `expressions` | Safe expression evaluation over a restricted builtin set |
 | `imports`, `copying`, `bounded_cache`, `aws` | Dotted-path resolution, structure copying, an LRU cache, and the shared aioboto3 session |
 | `reply_schema` | `strict`, `array` and `STRING`: JSON Schemas for a model's reply, closed at every depth, as OpenAI's strict mode and Anthropic ask. Imported from the module, not the package |
+| `provenance` | `ProvenanceRecord` and the records it holds (`SourceReference`, `ToolInvocation`, `LLMInvocation`, `RevisionRecord`), with `create_provenance` and `now_iso`: frozen records of where content came from and how it was revised. Re-exported by `dataknobs_bots.artifacts.provenance`. Imported from the module, not the package |
 | `ontology`, `hierarchy`, `entity_resolution`, `text` | An authored vocabulary and what reads it: `load_ontology`, the entity and assertion sources, the structural protocols and the walks over them, and the resolution cascade |
 | `testing` | Test utilities, skip markers, and configuration factories |
 

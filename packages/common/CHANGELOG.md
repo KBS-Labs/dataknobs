@@ -475,6 +475,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`dataknobs_common.provenance`: provenance records outside bots, frozen.**
+  `SourceReference`, `ToolInvocation`, `LLMInvocation`, `RevisionRecord` and
+  `ProvenanceRecord`, with `create_provenance` and `now_iso`, move here from
+  `dataknobs_bots.artifacts.provenance`, which re-exports the same objects, so
+  content written with a model can record its sources, tools, model calls and
+  revisions without dataknobs-bots. The records are frozen dataclasses: a
+  field holding several values keeps a tuple of any iterable it is given, and
+  refuses a single string; `creation_context` and `parameters` keep their own
+  copy of the mapping given (nested dicts and lists included), and `to_dict`
+  returns new containers. A revision is a new record, made with
+  `dataclasses.replace`. Three optional fields describe a part of the content
+  rather than the whole: `LLMInvocation.invocation_id`, and
+  `RevisionRecord.part`, `after` (`""` where the part was removed, `None`
+  where not recorded) and `sources`. Each is written by `to_dict` only when
+  set, so a record that uses none of them serialises exactly as before and a
+  stored record reads back unchanged. `create_provenance` takes its optional
+  fields as typed keywords (any iterable, any mapping) rather than
+  `**kwargs`. `from_dict` reads any mapping. Import the names from the
+  module; they are not exported from `dataknobs_common`.
+
 - **`dataknobs_common.reply_schema`: JSON Schemas for a model's reply, closed
   by construction.** `strict(properties)` builds an object from a mapping of
   name to schema, listing every property in `required` in the order given and

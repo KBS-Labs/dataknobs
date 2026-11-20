@@ -33,6 +33,7 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -450,9 +451,12 @@ class ArtifactRegistry:
                 triggered_by=triggered_by,
             )
 
-            # Build new provenance from current
-            new_provenance = ProvenanceRecord.from_dict(current.provenance.to_dict())
-            new_provenance.revision_history.append(revision)
+            # The records are frozen: the revision is a new record, and the
+            # superseded version keeps the provenance it had.
+            new_provenance = dataclasses.replace(
+                current.provenance,
+                revision_history=(*current.provenance.revision_history, revision),
+            )
 
             new_artifact = Artifact(
                 id=artifact_id,

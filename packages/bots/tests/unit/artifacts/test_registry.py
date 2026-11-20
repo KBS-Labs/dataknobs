@@ -224,6 +224,43 @@ class TestArtifactRegistryVersioning:
         assert revision.previous_version == "1.0.0"
 
     @pytest.mark.asyncio
+    async def test_revise_leaves_the_superseded_provenance_unchanged(
+        self, registry: ArtifactRegistry
+    ) -> None:
+        """A revision is a new provenance record; the one revised keeps its history."""
+        original = await registry.create(
+            artifact_type="content",
+            name="Test",
+            content={"v": 1},
+            provenance=create_provenance(
+                "bot:test", "generator", creation_context={"topic": "algebra"}
+            ),
+        )
+        first = await registry.revise(
+            artifact_id=original.id,
+            new_content={"v": 2},
+            reason="first",
+            triggered_by="user",
+        )
+        second = await registry.revise(
+            artifact_id=original.id,
+            new_content={"v": 3},
+            reason="second",
+            triggered_by="user",
+        )
+
+        assert original.provenance.revision_history == ()
+        assert [r.reason for r in first.provenance.revision_history] == ["first"]
+        assert [r.reason for r in second.provenance.revision_history] == [
+            "first",
+            "second",
+        ]
+        assert second.provenance.creation_context == {"topic": "algebra"}
+        stored = await registry.get_version(original.id, original.version)
+        assert stored is not None
+        assert stored.provenance.revision_history == ()
+
+    @pytest.mark.asyncio
     async def test_revise_not_found_raises(self, registry: ArtifactRegistry) -> None:
         """Test that revising non-existent artifact raises ValueError."""
         with pytest.raises(ValueError, match="not found"):

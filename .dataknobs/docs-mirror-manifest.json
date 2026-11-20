@@ -30,6 +30,10 @@
           "site": "reply-schema.md"
         },
         {
+          "package": "guides/provenance.md",
+          "site": "provenance.md"
+        },
+        {
           "package": "guides/dotted-paths.md",
           "site": "dotted-paths.md"
         },

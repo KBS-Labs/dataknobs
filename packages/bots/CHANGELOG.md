@@ -203,6 +203,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: provenance records are frozen, and live in `dataknobs-common`.**
+  `dataknobs_bots.artifacts.provenance` now re-exports the records from
+  `dataknobs_common.provenance`, and every import path is unchanged. The
+  records are frozen dataclasses, so a field can no longer be assigned or
+  appended to: `sources`, `tool_chain`, `llm_invocations`, `review_history`
+  and `revision_history` are tuples, and `provenance.sources.append(...)`
+  raises `AttributeError`. Pass the values when the record is made
+  (`create_provenance` and the constructors take any iterable, so a list built
+  up first still works), or make a new record with `dataclasses.replace`. A
+  test comparing one of those fields with a list (`== []`) now compares a
+  tuple with a list and fails; compare with a tuple. `creation_context` and
+  `ToolInvocation.parameters` hold a copy of the mapping given, so changing
+  the caller's dict afterwards no longer changes the record. A single string
+  passed for `review_history` is refused with `TypeError`. `create_provenance`
+  takes typed keywords instead of `**kwargs`, so mypy now reports an unknown
+  field (the call raised `TypeError` at run time before, too).
+  `ArtifactRegistry.revise` adds its revision with `dataclasses.replace`
+  rather than appending to a serialised copy. Stored provenance reads back
+  unchanged; see the dataknobs-common changelog for the fields added.
+
 - **A conversation's saved wizard data (`fsm_state.data`) is exactly what
   its save keeps whole.** A key not declared ephemeral used to be routed by
   `is_json_safe`, a separate copy of the JSON-safety rules that had drifted
