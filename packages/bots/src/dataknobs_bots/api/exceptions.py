@@ -81,14 +81,14 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
 from functools import partial
 from pathlib import Path, PurePath
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, TypeVar
 from uuid import UUID
 
 from dataknobs_common.clock import now_iso
@@ -137,8 +137,11 @@ from dataknobs_common.exceptions import (
 from dataknobs_common.transitions import InvalidTransitionError
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI, HTTPException, Request
+    from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException
+
+_HandledError = TypeVar("_HandledError", bound=Exception)
 
 logger = logging.getLogger(__name__)
 
@@ -961,14 +964,19 @@ async def http_exception_handler(
     request: Request,
     exc: HTTPException,
 ) -> JSONResponse:
-    """Handle FastAPI HTTP exceptions.
+    """Handle an HTTP exception, whether the router or the application raised it.
+
+    Typed as Starlette's ``HTTPException`` because that is what the router
+    raises for an unknown path or a method a route does not take; FastAPI's
+    ``HTTPException`` is a subclass, so one handler answers both.
 
     Args:
         request: FastAPI request object
         exc: HTTP exception
 
     Returns:
-        JSON response with error details
+        JSON response with error details, carrying the exception's headers: a
+        405's ``Allow``, a 401's ``WWW-Authenticate``, whatever the raiser set.
     """
     return _error_response(
         status_code=exc.status_code,
@@ -977,6 +985,7 @@ async def http_exception_handler(
             message=str(exc.detail),
             detail={},
         ),
+        headers=dict(exc.headers) if exc.headers else None,
     )
 
 
@@ -1055,6 +1064,32 @@ def _reject_unreachable_policy_keys(
             )
 
 
+def _add_handler(
+    app: FastAPI,
+    exc_type: type[_HandledError],
+    handler: Callable[[Request, _HandledError], Awaitable[JSONResponse]],
+) -> None:
+    """Register ``handler`` for ``exc_type``, with the pairing checked.
+
+    Starlette types every handler as taking ``Exception``, because one
+    registry holds handlers for every type; it guarantees the narrower type
+    only at run time, by calling a handler for instances of the class it was
+    registered under. This states that guarantee where the type checker can
+    see it, so a handler registered under a class it cannot take is a type
+    error here rather than an ``AttributeError`` in production.
+    """
+
+    async def handle(request: Request, exc: Exception) -> JSONResponse:
+        if not isinstance(exc, exc_type):
+            raise TypeError(
+                f"the handler for {exc_type.__name__} was called with "
+                f"{type(exc).__name__}, which Starlette does not do"
+            ) from exc
+        return await handler(request, exc)
+
+    app.add_exception_handler(exc_type, handle)
+
+
 def register_exception_handlers(
     app: FastAPI,
     *,
@@ -1109,7 +1144,7 @@ def register_exception_handlers(
         API exception's MRO, which is what keeps ``api_error_handler``
         responsible for them.
     """
-    from fastapi import HTTPException
+    from starlette.exceptions import HTTPException
 
     table = dict(DEFAULT_ERROR_POLICY)
     if error_policy:
@@ -1118,9 +1153,9 @@ def register_exception_handlers(
 
     bound = partial(dataknobs_error_handler, table=table)
 
-    app.add_exception_handler(APIError, api_error_handler)
-    app.add_exception_handler(DataknobsError, bound)
-    app.add_exception_handler(HTTPException, http_exception_handler)
-    app.add_exception_handler(Exception, general_exception_handler)
+    _add_handler(app, APIError, api_error_handler)
+    _add_handler(app, DataknobsError, bound)
+    _add_handler(app, HTTPException, http_exception_handler)
+    _add_handler(app, Exception, general_exception_handler)
 
     return MappingProxyType(table)
