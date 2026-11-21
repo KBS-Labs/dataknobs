@@ -47,9 +47,10 @@ Configuration cascade::
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Any
+
+from dataknobs_common.text import is_token_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -221,12 +222,21 @@ class FieldGroundingResult:
 
 
 def _word_in_text(word: str, text: str) -> bool:
-    r"""Check if *word* appears as a whole word in *text*.
+    """Check if *word* appears as a whole word in *text*.
 
-    Uses ``\b`` word-boundary anchors to avoid substring
-    false positives (e.g. ``"base"`` matching ``"database"``).
+    Whole means no token of *text* straddles either end of the occurrence,
+    by :func:`~dataknobs_common.text.is_token_boundary` -- the boundary rule
+    the scanning rungs and value expansion use. So ``"base"`` is not found in
+    ``"database"``, ``"cafe"`` is not found inside a ``café`` whose accent is
+    a combining mark, and a word that starts or ends on punctuation (``-5``,
+    ``c++``) is found wherever the text around it does not continue a token.
     """
-    return bool(re.search(r"\b" + re.escape(word) + r"\b", text))
+    start = text.find(word)
+    while start != -1:
+        if is_token_boundary(text, start) and is_token_boundary(text, start + len(word)):
+            return True
+        start = text.find(word, start + 1)
+    return False
 
 
 def significant_words(
@@ -674,8 +684,7 @@ def _ground_boolean(
 
 def _ground_number(value: Any, user_message: str) -> bool:
     """Grounded if the number appears as a whole word in the message."""
-    pattern = r"\b" + re.escape(str(value)) + r"\b"
-    return re.search(pattern, user_message) is not None
+    return _word_in_text(str(value), user_message)
 
 
 def _ground_array(

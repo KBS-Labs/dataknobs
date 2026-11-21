@@ -615,7 +615,7 @@ def _checked_max_edge(max_edge: int | None) -> int | None:
 
     Shared so the twins refuse identically. Zero is legal, unlike
     ``max_window``'s: it extends nothing, which is the scan over tokens alone
-    and still answers every form whose edges are alphanumeric.
+    and still answers every form that starts and ends in a token.
 
     Raises:
         ValidationError: For a ``max_edge`` that is not a whole number, or is

@@ -2905,9 +2905,10 @@ def _default_sync_rungs(ontology: Ontology) -> list[MatchSignal]:
     candidates, an empty ``coverage.matched`` and the whole string unmatched
     -- the question spans were added to answer, unanswerable by the
     composition a document gets for free. It does not replace
-    :class:`ExactNormalizedSignal`: a probe is a slice between token
-    boundaries, so a declared form whose own first or last character is not
-    alphanumeric is reachable by the whole-string rungs and by no scan.
+    :class:`ExactNormalizedSignal`: a probe is a window of tokens, widened at
+    most over the punctuation beside it, so a declared form with no letter or
+    digit in it (``:-)``) is reachable by the whole-string rungs and by no
+    scan.
 
     **Last rather than first**, which decides nothing about what the cascade
     answers and one thing about what it reports. Measured over every query the

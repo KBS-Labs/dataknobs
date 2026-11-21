@@ -113,6 +113,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`expand_value_in_message` does not match a value inside a word written
+  with a combining mark.** Its word-boundary check used `str.isalnum`, which is
+  False for every combining mark, so `cafe` matched inside a decomposed
+  `café` and expanded from the middle of the word. It asks
+  `dataknobs_common.text.is_token_boundary` at both ends now, the rule the
+  scanning rungs use: a value is whole when no word straddles either end. So
+  a value may also start or end on punctuation after a letter (`&co` in
+  `Smith&co`), which the old check refused.
+- **`expand_value_in_message` returns the value it found, after a character
+  that lowercases to more than one.** It found the value in `message.lower()`
+  and sliced `message` at those positions, but lowering is not
+  length-preserving: `İ` becomes two characters, so every position after one
+  pointed too far right, and `"İİ ok and fine"` expanded `ok` to `"a"`. It
+  matches case-insensitively against `message` itself now, and reports an
+  expansion only when it absorbed something, so a bare case difference that
+  lowering does not map one-to-one (`Istanbul` found as `İstanbul`) returns
+  `None` as any other case difference does.
 - **`stream_record_paths`, `get_records_df` and `RecordPathBuilder` write each
   record once.** A record holds its own values plus the shared values (those
   with no array index) delivered before it ends, and no other record's values.

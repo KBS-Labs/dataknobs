@@ -412,3 +412,67 @@ class TestPluginProtocol:
                 return None
 
         assert isinstance(MyPlugin(), ValueExpansionPlugin)
+
+
+class TestCombiningMarks:
+    """A combining mark belongs to the word it is written on.
+
+    ``str.isalnum`` is False for every combining mark, so a boundary check
+    built on it alone took ``cafe`` + U+0301 for the word ``cafe`` followed
+    by a boundary, and expanded from inside the word.
+    """
+
+    def test_a_value_does_not_match_before_a_combining_mark(self):
+        assert _expand("cafe", "I like the cafe\u0301 and bistro") is None
+
+    def test_a_value_does_not_match_after_a_combining_mark(self):
+        assert _expand("te", "I like the e\u0301te and fall") is None
+
+    def test_a_value_ending_in_a_mark_still_matches_as_a_word(self):
+        assert _expand("cafe\u0301", "I like the cafe\u0301 and bistro") == "cafe\u0301 and bistro"
+
+    def test_a_mark_with_no_letter_before_it_is_a_boundary(self):
+        """U+FE0F after an emoji is not part of the word that follows it."""
+        assert _expand("Paris", "Fly \u2708\ufe0fParis and Rome") == "Paris and Rome"
+
+
+class TestLengthChangingCase:
+    """Positions index the message the caller passed, whatever lowering does.
+
+    ``str.lower()`` is not length-preserving -- U+0130 (``\u0130``) lowers to two
+    characters -- so positions found in ``message.lower()`` pointed past the
+    value in ``message`` once one came before it.
+    """
+
+    def test_a_character_that_lowers_longer_does_not_shift_the_match(self):
+        assert _expand("ok", "\u0130\u0130 ok and fine") == "ok and fine"
+
+    def test_the_value_keeps_the_message_s_casing_after_one(self):
+        assert _expand("formal", "\u0130 Formal and academic") == "Formal and academic"
+
+
+class TestCaseDifferenceIsNotExpansion:
+    """A value found with nothing after it to absorb is not an expansion.
+
+    Matching is case-insensitive one character at a time; deciding by
+    comparing ``str.lower()`` of the two strings disagreed with it wherever
+    lowering is not one-to-one, and reported a bare case difference as an
+    expansion.
+    """
+
+    def test_dotted_capital_i(self):
+        assert _expand("Istanbul", "\u0130stanbul to Rome") is None
+
+    def test_final_sigma(self):
+        assert _expand("\u039f\u0394\u039f\u03a3", "\u03bf\u03b4\u03bf\u03c3 to Rome") is None
+
+
+class TestPunctuationEdgedValues:
+    """A value may start or end on punctuation; only cutting a word is refused."""
+
+    def test_a_value_starting_with_punctuation_matches_after_a_letter(self):
+        """``&`` is not a token character, so ``Smith&co`` holds a whole ``&co``."""
+        assert _expand("&co", "Smith&co and partners") == "&co and partners"
+
+    def test_a_value_ending_inside_a_word_is_still_refused(self):
+        assert _expand("&co", "Smith&cobalt and partners") is None

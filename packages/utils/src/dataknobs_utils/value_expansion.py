@@ -29,7 +29,10 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import re
 from typing import Literal, Protocol, runtime_checkable
+
+from dataknobs_common.text import is_token_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -139,32 +142,42 @@ def expand_value_in_message(
     if cfg.expand_direction != "right":
         raise NotImplementedError(f"expand_direction={cfg.expand_direction!r} is not yet supported")
 
-    msg_lower = message.lower()
-    val_lower = value.lower().strip()
-
-    if not val_lower:
+    if not value.strip():
         return None
 
+    # Matched case-insensitively against ``message`` itself, not against
+    # ``message.lower()``: lowering is not length-preserving (``İ`` becomes two
+    # characters), so a position found in the lowered copy can point anywhere
+    # in the original. A match's span always indexes the string it was found in.
+    pattern = re.compile(re.escape(value.strip()), re.IGNORECASE)
     best: str | None = None
     search_start = 0
 
     while True:
-        pos = msg_lower.find(val_lower, search_start)
-        if pos == -1:
+        match = pattern.search(message, search_start)
+        if match is None:
             break
+        pos, end = match.span()
 
-        # Require word boundaries — don't match inside longer words
-        if not _at_word_boundary(msg_lower, pos, len(val_lower)):
+        # Require word boundaries — don't match inside longer words. The
+        # scanning rungs' rule: a span is whole when no token straddles
+        # either end, so a combining mark written on a neighbouring word
+        # counts as that word, and a value may start or end on punctuation.
+        if not (is_token_boundary(message, pos) and is_token_boundary(message, end)):
             search_start = pos + 1
             continue
 
-        # Use original-case message for output, lowercase for matching
-        original_value = message[pos : pos + len(val_lower)]
-        after_original = message[pos + len(val_lower) :]
+        # The message's own casing for output
+        original_value = message[pos:end]
+        after_original = message[end:]
         expanded_right = _expand_right(after_original, stopwords, cfg)
 
-        candidate = (original_value + expanded_right).strip()
-        if candidate.lower() != val_lower:
+        # Expanded means something was absorbed. Comparing lowered strings
+        # instead disagreed with the case-insensitive match wherever lowering
+        # is not one-to-one (İ, ς), and called a bare case difference an
+        # expansion.
+        if expanded_right:
+            candidate = (original_value + expanded_right).strip()
             if best is None or len(candidate) > len(best):
                 best = candidate
 
@@ -176,16 +189,6 @@ def expand_value_in_message(
             return override
 
     return best
-
-
-def _at_word_boundary(text: str, pos: int, length: int) -> bool:
-    """Check that the match at ``pos`` is at word boundaries on both sides."""
-    if pos > 0 and text[pos - 1].isalnum():
-        return False
-    end = pos + length
-    if end < len(text) and text[end].isalnum():
-        return False
-    return True
 
 
 def _expand_right(

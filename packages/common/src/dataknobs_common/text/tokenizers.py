@@ -7,16 +7,23 @@ A **tokenizer** takes a string and returns its tokens as half-open spans into
 it, in order and not overlapping -- the shape :func:`~dataknobs_common.text.token_spans`
 returns and :func:`~dataknobs_common.text.probe_spans` takes as ``tokens``.
 The scanning rungs take one as ``tokenizer=``, so a vocabulary whose forms are
-not runs of letters and digits -- a currency sign, a grouped number, a script
-written without spaces -- can be scanned over units that reach them.
+not runs of letters, digits and their marks -- a currency sign, a grouped
+number, a script written without spaces -- can be scanned over units that
+reach them.
 
 A rung takes the callable itself. A document cannot write a callable, so a
 configuration names one instead, and :data:`TOKENIZERS` is where the name is
-looked up. One entry ships, ``default``, which is
-:func:`~dataknobs_common.text.token_spans` itself rather than a wrapper around
-it: a rung asks whether its tokenizer *is* that function to decide whether the
-source's own measurements still bound its windows, so identity is the
-property, not a detail.
+looked up. Two entries ship:
+
+- ``default`` is :func:`~dataknobs_common.text.token_spans` itself rather than
+  a wrapper around it: a rung asks whether its tokenizer *is* that function to
+  decide whether the source's own measurements still bound its windows, so
+  identity is the property, not a detail.
+- ``words`` is :func:`~dataknobs_common.text.word_spans`: the same tokens with
+  an in-word apostrophe kept, for a reader that takes a token as a word.
+  ``{"name": "words", "apostrophes": "clitic"}`` splits *don't* as ``don``
+  ``'t`` instead. A rung over it takes the general path, since it is not
+  ``token_spans``.
 
 Register your own with a factory taking that tokenizer's parameters -- the
 spec's keys other than ``name`` -- and returning the tokenizer::
@@ -30,17 +37,18 @@ spec's keys other than ``name`` -- and returning the tokenizer::
     TOKENIZERS.register("symbols", _symbols)
 
 A separate module from :mod:`~dataknobs_common.text.scan` because that one
-promises to import nothing, and a registry is an import.
+imports only the standard library, and a registry is an import.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from typing import Any, TypeAlias
 
 from dataknobs_common.exceptions import OperationError, ValidationError
 from dataknobs_common.registry import PluginRegistry
-from dataknobs_common.text.scan import token_spans
+from dataknobs_common.text.scan import token_spans, word_spans
 
 __all__ = ["TOKENIZERS", "Tokenizer", "tokenizer_from_config"]
 
@@ -55,6 +63,19 @@ def _default_factory(config: Mapping[str, Any]) -> Tokenizer:
     return token_spans
 
 
+def _words_factory(config: Mapping[str, Any]) -> Tokenizer:
+    unknown = sorted(set(config) - {"apostrophes"})
+    if unknown:
+        raise ValueError(f"takes only 'apostrophes'; given {unknown}")
+    apostrophes = config.get("apostrophes", "keep")
+    if apostrophes == "keep":
+        return word_spans
+    # word_spans refuses an unknown mode, so check it now rather than on the
+    # first string the tokenizer is handed.
+    word_spans("", apostrophes=apostrophes)
+    return partial(word_spans, apostrophes=apostrophes)
+
+
 #: Every tokenizer a configuration can name, by name. Each entry is a factory
 #: taking the tokenizer's parameters -- the spec's keys other than ``name`` --
 #: and returning a :data:`Tokenizer`.
@@ -65,6 +86,7 @@ TOKENIZERS: PluginRegistry[Tokenizer] = PluginRegistry(
     not_found_kind="tokenizer",
 )
 TOKENIZERS.register("default", _default_factory)
+TOKENIZERS.register("words", _words_factory)
 
 
 def tokenizer_from_config(

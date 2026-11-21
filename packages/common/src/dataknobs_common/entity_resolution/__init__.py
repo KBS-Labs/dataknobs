@@ -38,8 +38,10 @@ is broken.
 ``punctuation_edges``, ``edge_extensions`` and ``probe_spans`` -- and
 ``narrowest``, the rule that keeps one piece of evidence per window, are
 re-exported here beside the rungs that need them, because writing a scanning
-rung is what they are for, as are ``Tokenizer``, ``TOKENIZERS`` and
-``tokenizer_from_config``, which say where a scan's tokens come from. They
+rung is what they are for, as are ``Tokenizer``, ``TOKENIZERS``,
+``tokenizer_from_config``, ``word_spans``, ``in_token`` and
+``is_token_boundary``, which say where a scan's tokens come from and where a
+token begins and ends. They
 stay in ``text`` itself, which imports nothing from this package, so the
 vocabulary side can fold and measure with the same policy without depending
 on it.
@@ -114,9 +116,12 @@ from dataknobs_common.text import (
     edge_extensions,
     narrowest,
     probe_spans,
+    in_token,
+    is_token_boundary,
     punctuation_edges,
     token_spans,
     tokenizer_from_config,
+    word_spans,
 )
 
 __all__ = [
@@ -163,6 +168,8 @@ __all__ = [
     "declared_candidates",
     "declared_signal_metadata",
     "edge_extensions",
+    "in_token",
+    "is_token_boundary",
     "finish",
     "merge_rung",
     "narrowest",
@@ -172,6 +179,7 @@ __all__ = [
     "signal_backends",
     "token_spans",
     "tokenizer_from_config",
+    "word_spans",
     "refuse_unknown_axes",
     "within_admits",
     "within_axes",
