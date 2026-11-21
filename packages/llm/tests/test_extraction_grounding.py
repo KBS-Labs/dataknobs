@@ -705,3 +705,39 @@ class TestFieldGroundingResult:
         )
         with pytest.raises(AttributeError):
             r.grounded = True  # type: ignore[misc]
+
+
+class TestWholeWordBoundaries:
+    r"""A whole word is a span no token straddles -- the scanning rungs' rule.
+
+    ``\b`` disagreed with it twice: Python's ``\w`` excludes combining marks,
+    so ``cafe`` was a whole word inside a decomposed ``café``; and ``\b`` needs
+    a word character on one side, so a value starting with punctuation was
+    found only where a letter preceded it -- ``-5`` in ``x-5``, not in
+    ``to -5``.
+    """
+
+    def test_an_enum_value_is_not_found_inside_a_word_with_a_combining_mark(self) -> None:
+        prop = {"type": "string", "enum": ["cafe", "bar"]}
+        result = is_field_grounded("place", "cafe", "meet at the cafe\u0301 later", prop)
+        assert result.grounded is False
+
+    def test_an_enum_value_ending_in_a_mark_is_found(self) -> None:
+        prop = {"type": "string", "enum": ["cafe\u0301", "bar"]}
+        result = is_field_grounded("place", "cafe\u0301", "meet at the cafe\u0301 later", prop)
+        assert result.grounded is True
+
+    def test_a_negative_number_is_found_after_a_space(self) -> None:
+        result = is_field_grounded("offset", -5, "set it to -5", _number_prop())
+        assert result.grounded is True
+
+    def test_a_negative_number_after_a_letter_is_still_found(self) -> None:
+        """A hyphen is not a token character, so ``x-5`` holds a whole ``-5``."""
+        result = is_field_grounded("offset", -5, "set it to x-5", _number_prop())
+        assert result.grounded is True
+
+    def test_a_number_is_still_not_found_inside_a_longer_one(self) -> None:
+        assert is_field_grounded("count", 5, "I need 50 items", _number_prop()).grounded is False
+        assert (
+            is_field_grounded("count", 3.5, "it is 3.50", _number_prop("number")).grounded is False
+        )

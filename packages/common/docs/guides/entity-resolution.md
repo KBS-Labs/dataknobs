@@ -877,8 +877,10 @@ rung.
 ### Your own tokens
 
 A window starts and ends on a token, and the default token is a run of letters,
-digits and the combining marks written on them (`is_token_character` in
-`dataknobs_common.text`, so *दुनिया* is one token, vowel signs included). That is the right unit for most vocabularies and the wrong one for
+digits and the combining marks written on them (`in_token` in
+`dataknobs_common.text`, so *दुनिया* is one token, vowel signs included). A
+mark continues a token and never starts one, so the U+FE0F after an emoji is
+a boundary: `✈️Paris` holds the token `Paris`. That is the right unit for most vocabularies and the wrong one for
 three kinds of form: a symbol (`$`), a unit the default splits (`1,234.50` is
 three tokens), and a name inside a script written without spaces
 (`東京タワーに行きました` is one token, so `東京タワー` is never a window). Give

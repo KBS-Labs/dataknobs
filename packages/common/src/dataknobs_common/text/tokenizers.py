@@ -7,8 +7,9 @@ A **tokenizer** takes a string and returns its tokens as half-open spans into
 it, in order and not overlapping -- the shape :func:`~dataknobs_common.text.token_spans`
 returns and :func:`~dataknobs_common.text.probe_spans` takes as ``tokens``.
 The scanning rungs take one as ``tokenizer=``, so a vocabulary whose forms are
-not runs of letters and digits -- a currency sign, a grouped number, a script
-written without spaces -- can be scanned over units that reach them.
+not runs of letters, digits and their marks -- a currency sign, a grouped
+number, a script written without spaces -- can be scanned over units that
+reach them.
 
 A rung takes the callable itself. A document cannot write a callable, so a
 configuration names one instead, and :data:`TOKENIZERS` is where the name is
@@ -36,7 +37,7 @@ spec's keys other than ``name`` -- and returning the tokenizer::
     TOKENIZERS.register("symbols", _symbols)
 
 A separate module from :mod:`~dataknobs_common.text.scan` because that one
-promises to import nothing, and a registry is an import.
+imports only the standard library, and a registry is an import.
 """
 
 from __future__ import annotations

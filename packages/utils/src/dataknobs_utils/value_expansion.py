@@ -32,7 +32,7 @@ import logging
 import re
 from typing import Literal, Protocol, runtime_checkable
 
-from dataknobs_common.text import is_token_character
+from dataknobs_common.text import is_token_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -142,9 +142,7 @@ def expand_value_in_message(
     if cfg.expand_direction != "right":
         raise NotImplementedError(f"expand_direction={cfg.expand_direction!r} is not yet supported")
 
-    val_lower = value.lower().strip()
-
-    if not val_lower:
+    if not value.strip():
         return None
 
     # Matched case-insensitively against ``message`` itself, not against
@@ -161,8 +159,11 @@ def expand_value_in_message(
             break
         pos, end = match.span()
 
-        # Require word boundaries — don't match inside longer words
-        if not _at_word_boundary(message, pos, end - pos):
+        # Require word boundaries — don't match inside longer words. The
+        # scanning rungs' rule: a span is whole when no token straddles
+        # either end, so a combining mark written on a neighbouring word
+        # counts as that word, and a value may start or end on punctuation.
+        if not (is_token_boundary(message, pos) and is_token_boundary(message, end)):
             search_start = pos + 1
             continue
 
@@ -171,8 +172,12 @@ def expand_value_in_message(
         after_original = message[end:]
         expanded_right = _expand_right(after_original, stopwords, cfg)
 
-        candidate = (original_value + expanded_right).strip()
-        if candidate.lower() != val_lower:
+        # Expanded means something was absorbed. Comparing lowered strings
+        # instead disagreed with the case-insensitive match wherever lowering
+        # is not one-to-one (İ, ς), and called a bare case difference an
+        # expansion.
+        if expanded_right:
+            candidate = (original_value + expanded_right).strip()
             if best is None or len(candidate) > len(best):
                 best = candidate
 
@@ -184,20 +189,6 @@ def expand_value_in_message(
             return override
 
     return best
-
-
-def _at_word_boundary(text: str, pos: int, length: int) -> bool:
-    """Check that the match at ``pos`` is at word boundaries on both sides.
-
-    A neighbour that is a token character -- alphanumeric, or a combining mark
-    written on the word -- means the match is inside a longer word.
-    """
-    if pos > 0 and is_token_character(text[pos - 1]):
-        return False
-    end = pos + length
-    if end < len(text) and is_token_character(text[end]):
-        return False
-    return True
 
 
 def _expand_right(

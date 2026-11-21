@@ -31,13 +31,16 @@ directly beside it, by every prefix of that run, as far as the vocabulary says
 its own forms' punctuation reaches. :func:`punctuation_edges` measures that
 reach on a form, :func:`edge_extensions` applies it to one span, and
 :func:`probe_spans` enumerates both in the order a scan publishes. Punctuation
-here is a character that is neither a token character nor whitespace, so an
+here is a character that is neither in a token nor whitespace, so an
 extension never crosses a word and never crosses a space.
 
-**A token character is alphanumeric or a combining mark**, by
-:func:`is_token_character`, and every rule in this module asks that one
-predicate. ``str.isalnum`` alone is False for every combining mark, so on its
-own it split *दुनिया* at each vowel sign and kept the signs in no token.
+**A token is a run of alphanumerics and the combining marks written on
+them**: a mark continues a token and never starts one. :func:`in_token` says
+whether one position of a string is in a token, and every rule in this module
+asks it. ``str.isalnum`` alone is False for every combining mark, so on its
+own it split *दुनिया* at each vowel sign and kept the signs in no token; a
+mark counted wherever it stood would glue the U+FE0F that follows most emoji
+to the next word.
 
 **The token half is the caller's to replace.** :func:`probe_spans` takes the
 tokens it enumerates over, so a caller whose units are not runs of
@@ -67,7 +70,8 @@ __all__ = [
     "default_normalizer",
     "ApostropheMode",
     "edge_extensions",
-    "is_token_character",
+    "in_token",
+    "is_token_boundary",
     "narrowest",
     "probe_spans",
     "punctuation_edges",
@@ -113,37 +117,93 @@ def content_span(form: str) -> tuple[int, int]:
     return (start, start + len(stripped))
 
 
-def is_token_character(character: str) -> bool:
-    """Whether ``character`` belongs to a token: alphanumeric, or a combining mark.
+def _is_mark(character: str) -> bool:
+    """A combining mark: Unicode category ``Mn``, ``Mc`` or ``Me``."""
+    return unicodedata.category(character)[0] == "M"
 
-    Alphanumeric by ``str.isalnum``, which is Unicode-aware rather than
-    ASCII-shaped, so ``ß`` and ``東`` qualify. A **combining mark** -- any
-    character of Unicode category ``Mn``, ``Mc`` or ``Me``, such as the vowel
-    signs of *दुनिया* or the U+0301 of a decomposed *é* -- is part of the word
-    it is written on, and ``str.isalnum`` is False for every one of them. A
-    mark counts wherever it stands, including with no letter before it, so no
-    character of the text silently falls out of every token.
 
-    Everything else is not: whitespace, punctuation, ``_``, a hyphen, an
-    apostrophe, a joiner.
+def _checked_index(text: str, index: int, *, end_allowed: bool) -> None:
+    limit = len(text) if end_allowed else len(text) - 1
+    if not 0 <= index <= limit:
+        bound = "len(text)" if end_allowed else "len(text) - 1"
+        raise IndexError(f"index {index} is outside 0..{bound} for a string of {len(text)}")
+
+
+def in_token(text: str, index: int) -> bool:
+    """Whether the character at ``text[index]`` is part of a token.
+
+    A token is a run of alphanumeric characters, by ``str.isalnum`` -- so
+    ``ß`` and ``東`` qualify -- together with the **combining marks** written
+    on them: characters of Unicode category ``Mn``, ``Mc`` or ``Me``, such as
+    the vowel signs of *दुनिया* or the U+0301 of a decomposed *é*.
+    ``str.isalnum`` is False for every mark, which is why the position is
+    needed and not just the character: **a mark continues a token and never
+    starts one**. A mark is in a token when the nearest character before it
+    that is not a mark is alphanumeric, so stacked marks all belong to their
+    letter, and a mark with no letter or digit before it -- the U+FE0F
+    (VARIATION SELECTOR-16) after an emoji, a mark after a space -- is a
+    boundary like punctuation.
+
+    Everything else is never in a token: whitespace, punctuation, ``_``, a
+    hyphen, an apostrophe, a format character such as U+200C or U+200D. A
+    joiner inside a word therefore splits it, a known limitation for Persian
+    and for Indic half-forms.
 
     Args:
-        character: One character.
+        text: The string.
+        index: A position in it, ``0 <= index < len(text)``.
 
     Returns:
-        ``True`` for a token character.
+        ``True`` when the character there belongs to a token.
+
+    Raises:
+        IndexError: For an index outside the string. A negative index is
+            refused rather than counted from the end.
     """
-    return character.isalnum() or unicodedata.category(character)[0] == "M"
+    _checked_index(text, index, end_allowed=False)
+    while _is_mark(text[index]):
+        if index == 0:
+            return False
+        index -= 1
+    return text[index].isalnum()
+
+
+def is_token_boundary(text: str, index: int) -> bool:
+    """Whether no token of ``text`` straddles position ``index``.
+
+    The gap before ``text[index]`` is a boundary unless the characters on
+    both sides of it are in one token, by :func:`in_token`. Both ends of the
+    string are boundaries. So a span ``text[start:end]`` is a whole word, or
+    a run of them, exactly when both ``start`` and ``end`` are boundaries --
+    a span that starts or ends on punctuation included: ``-5`` is whole in
+    ``to -5`` and in ``x-5``, and ``cafe`` is not whole inside a decomposed
+    *café*, whose accent is in the token.
+
+    Args:
+        text: The string.
+        index: A gap in it, ``0 <= index <= len(text)``.
+
+    Returns:
+        ``True`` when no token crosses the gap.
+
+    Raises:
+        IndexError: For an index outside ``0..len(text)``.
+    """
+    _checked_index(text, index, end_allowed=True)
+    if index in (0, len(text)):
+        return True
+    return not (in_token(text, index - 1) and in_token(text, index))
 
 
 def token_spans(text: str) -> tuple[tuple[int, int], ...]:
     """Where ``text``'s tokens are -- **the boundary policy a scan needs**.
 
-    A token is a maximal run of token characters, by
-    :func:`is_token_character` -- alphanumerics and combining marks -- so the
-    policy is Unicode-aware rather than ASCII-shaped: ``straße`` is one token,
-    so is ``ß``, and so is *दुनिया* with its vowel signs. Everything else --
-    whitespace, punctuation, ``_``, a hyphen, an apostrophe -- is a boundary.
+    A token is a maximal run of positions :func:`in_token` accepts --
+    alphanumerics and the combining marks written on them -- so the policy is
+    Unicode-aware rather than ASCII-shaped: ``straße`` is one token, so is
+    ``ß``, and so is *दुनिया* with its vowel signs. Everything else --
+    whitespace, punctuation, ``_``, a hyphen, an apostrophe, a mark with no
+    letter before it -- is a boundary.
 
     **This is what stops a scan matching inside a word.** A form is looked up
     at a *span*, and a span that begins and ends on a token boundary cannot
@@ -171,12 +231,14 @@ def token_spans(text: str) -> tuple[tuple[int, int], ...]:
 
     Returns:
         Half-open spans into ``text``, in order, non-overlapping and
-        non-touching. Empty for a string with no token character in it.
+        non-touching. Empty for a string with no letter or digit in it.
     """
     spans: list[tuple[int, int]] = []
     start: int | None = None
     for index, character in enumerate(text):
-        if is_token_character(character):
+        # in_token, without its walk back: inside an open token a mark
+        # continues it, and outside one a mark cannot start one.
+        if character.isalnum() or (start is not None and _is_mark(character)):
             if start is None:
                 start = index
         elif start is not None:
@@ -187,14 +249,14 @@ def token_spans(text: str) -> tuple[tuple[int, int], ...]:
     return tuple(spans)
 
 
-#: How :func:`word_spans` treats an apostrophe between two token characters.
+#: How :func:`word_spans` treats an apostrophe inside a word.
 ApostropheMode: TypeAlias = Literal["keep", "clitic"]
 
 _APOSTROPHE_MODES: tuple[ApostropheMode, ...] = ("keep", "clitic")
 
 #: U+0027 and U+2019, the two characters text writes an apostrophe with.
-#: U+02BC (MODIFIER LETTER APOSTROPHE) is a letter, so it is already a token
-#: character and needs no joining.
+#: U+02BC (MODIFIER LETTER APOSTROPHE) is a letter, so it is already in the
+#: token and needs no joining. U+2018, U+FF07 and a backtick are not joined.
 _APOSTROPHES = frozenset("\u0027\u2019")
 
 
@@ -207,9 +269,8 @@ def word_spans(text: str, apostrophes: ApostropheMode = "keep") -> tuple[tuple[i
     that reads a token as a word, such as a list of function words that holds
     *don't*. These are the same tokens with the tokens an **in-word
     apostrophe** separates joined: one U+0027 or U+2019 with a token
-    character directly on each side. Every other boundary is
-    :func:`token_spans`' own, so the two never disagree about what a token
-    character is.
+    directly on each side. Every other boundary is :func:`token_spans`' own,
+    so the two never disagree about what is in a token.
 
     - ``"keep"`` (the default): *don't*, *what's* (with either apostrophe)
       and *rock'n'roll* are one token each.
@@ -218,7 +279,7 @@ def word_spans(text: str, apostrophes: ApostropheMode = "keep") -> tuple[tuple[i
       in-word apostrophe splits, not a list of English clitics, so the rule
       holds in any language that writes one.
 
-    In both modes an apostrophe with no token character after it -- the
+    In both modes an apostrophe with no token directly after it -- the
     plural possessive *dogs'*, a closing quote -- and a doubled one stay
     boundaries and fall in no token, as every other punctuation character
     does. Telling a possessive from a closing quote needs quote balance,
@@ -254,15 +315,15 @@ def word_spans(text: str, apostrophes: ApostropheMode = "keep") -> tuple[tuple[i
     return tuple(words)
 
 
-def _is_edge_character(character: str) -> bool:
+def _is_edge_character(text: str, index: int) -> bool:
     """Neither part of a token nor a separator between words.
 
-    The complement of :func:`token_spans`'s predicate, minus whitespace: what
+    The complement of :func:`in_token`, minus whitespace: what
     an extension may absorb, and so what a form's edge is measured in. One
     predicate for both, because an edge counted any other way would bound the
     wrong extension.
     """
-    return not is_token_character(character) and not character.isspace()
+    return not text[index].isspace() and not in_token(text, index)
 
 
 def _checked_limit(limit: int | None) -> int | None:
@@ -274,8 +335,8 @@ def _checked_limit(limit: int | None) -> int | None:
 def punctuation_edges(form: str) -> tuple[int, int]:
     """How many punctuation characters ``form`` carries at its start and at its end.
 
-    The leading and trailing runs of characters that are neither token characters
-    nor whitespace: ``(beagle)`` is ``(1, 1)``, ``C.D.C.`` is ``(0, 1)``, and
+    The leading and trailing runs of characters that are neither in a token nor
+    whitespace, by :func:`in_token` over ``form``: ``(beagle)`` is ``(1, 1)``, ``C.D.C.`` is ``(0, 1)``, and
     ``K-9`` is ``(0, 0)`` -- interior punctuation is a boundary
     :func:`token_spans` already spans. A run stops at whitespace, so
     ``"( beagle )"`` is ``(1, 1)`` as well.
@@ -288,13 +349,13 @@ def punctuation_edges(form: str) -> tuple[int, int]:
     reporting would cost answers, so the measurement errs the cheap way.
     """
     leading = 0
-    for character in form:
-        if not _is_edge_character(character):
+    for index in range(len(form)):
+        if not _is_edge_character(form, index):
             break
         leading += 1
     trailing = 0
-    for character in reversed(form):
-        if not _is_edge_character(character):
+    for index in reversed(range(len(form))):
+        if not _is_edge_character(form, index):
             break
         trailing += 1
     return (leading, trailing)
@@ -306,7 +367,7 @@ def edge_extensions(
     """``span`` widened over the punctuation beside it -- every way, widest first.
 
     On each side, every non-empty prefix of the adjacent run of punctuation
-    (characters neither token characters nor whitespace), up to ``limit``
+    (characters neither in a token nor whitespace), up to ``limit``
     characters, paired with every one on the other side including none. In
     ``a (beagle), here`` the run right of ``beagle`` is ``),``, and only its
     prefix ``)`` reaches the declared form ``(beagle)``: **prefixes, not the
@@ -341,14 +402,14 @@ def edge_extensions(
     while (
         (limit is None or left < limit)
         and start - left > 0
-        and _is_edge_character(text[start - left - 1])
+        and _is_edge_character(text, start - left - 1)
     ):
         left += 1
     right = 0
     while (
         (limit is None or right < limit)
         and end + right < len(text)
-        and _is_edge_character(text[end + right])
+        and _is_edge_character(text, end + right)
     ):
         right += 1
     widened = sorted(
@@ -435,8 +496,8 @@ def probe_spans(
     their own lookup and cannot drift on what was enumerated.
 
     **The tokens may be the caller's.** ``tokens=None`` enumerates over
-    :func:`token_spans`, which has no token for a character that is neither a
-    letter nor a digit -- so a form like ``$`` is never a window, and a
+    :func:`token_spans`, which has no token for a form with no letter or digit
+    in it -- so a form like ``$`` is never a window, and a
     grouped number such as ``1,234.50`` is three tokens rather than one. A
     caller whose units differ passes their own spans and gets the same
     enumeration over them. Two things change with that:
@@ -480,19 +541,19 @@ def probe_spans(
 
 
 def _core(text: str, span: tuple[int, int]) -> tuple[int, int]:
-    """``span`` with every character that is not a token character trimmed off both ends.
+    """``span`` with every character not in a token trimmed off both ends.
 
     Whitespace goes with the punctuation, so ``", TX"`` and ``"TX"`` share a
-    core. A span with no token character in it has the empty core at
+    core. A span with no token in it has the empty core at
     its start, which keeps it distinct from a neighbour that has one and
     never produces a start past its own end.
     """
     start, end = span
-    while start < end and not is_token_character(text[start]):
+    while start < end and not in_token(text, start):
         start += 1
     if start == end:
         return (span[0], span[0])
-    while not is_token_character(text[end - 1]):
+    while not in_token(text, end - 1):
         end -= 1
     return (start, end)
 
@@ -516,7 +577,7 @@ def narrowest(
     there is, so it is kept.
 
     **The core.** Hits are grouped by the span left after trimming every
-    character that is not a letter or a digit off both ends, whitespace
+    character not in a token (:func:`in_token`) off both ends, whitespace
     included -- so over a caller's tokens that include ``,`` and a space,
     ``TX``, ``, TX`` and ``, TX,`` in ``Austin, TX, USA`` share one core and
     one is kept, at ``TX``. Over :func:`token_spans` and :func:`probe_spans`'s

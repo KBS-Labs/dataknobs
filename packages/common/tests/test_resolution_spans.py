@@ -2027,3 +2027,23 @@ async def test_every_rung_reaches_a_name_written_with_combining_marks() -> None:
     for async_rung in (AsyncScanningSignal, AsyncLexicalSignal):
         found = await async_rung(AsyncMappingEntitySource(WORLD)).candidates(query, k=5)
         assert [(c.entity_id, c.evidence[0].span) for c in found] == expected, async_rung.__name__
+
+
+PARIS = {"paris": Entity(id="paris", type="Place", name="Paris")}
+
+
+async def test_every_rung_reaches_a_name_written_right_after_an_emoji() -> None:
+    """U+FE0F after an emoji is a mark with no letter before it: a boundary.
+
+    A mark counted as a token character wherever it stood glued the selector
+    to the next word, so the window over ``Paris`` was ``\ufe0fParis`` and the
+    declared name was never looked up.
+    """
+    query = "Fly \u2708\ufe0fParis"
+    expected = [("paris", (6, 11))]
+    for rung in (ScanningSignal, LexicalSignal):
+        found = rung(MappingEntitySource(PARIS)).candidates(query, k=5)
+        assert [(c.entity_id, c.evidence[0].span) for c in found] == expected, rung.__name__
+    for async_rung in (AsyncScanningSignal, AsyncLexicalSignal):
+        found = await async_rung(AsyncMappingEntitySource(PARIS)).candidates(query, k=5)
+        assert [(c.entity_id, c.evidence[0].span) for c in found] == expected, async_rung.__name__

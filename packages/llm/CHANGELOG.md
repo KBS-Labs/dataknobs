@@ -86,6 +86,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Grounding finds a whole word by the scanning rungs' boundary rule, not
+  `\b`.** The enum, exact, boolean-keyword, array and number checks matched
+  with `\b...\b`, which disagreed with word boundaries twice. Python's `\w`
+  excludes combining marks, so `cafe` was grounded inside a decomposed
+  `café`. And `\b` needs a word character on one side, so a value starting
+  with punctuation was grounded only after a letter: `-5` was found in `x-5`
+  and not in `set it to -5`. They ask
+  `dataknobs_common.text.is_token_boundary` at both ends now, the rule value
+  expansion uses too, so the two halves of the wizard's grounding agree.
+
 - **An Ollama completion error no longer logs the conversation.** A non-200
   from `/api/chat` logged the whole request body at `ERROR`: every message,
   and any schema. It now logs the model, the message count and the request's

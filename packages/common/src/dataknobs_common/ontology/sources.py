@@ -631,8 +631,8 @@ class _EntityIndex:
         declares, so it cannot see a fold that merges only on some query no
         declared form resembles. ``default_normalizer`` is not such a fold:
         no character's case-fold changes the token count of the text around
-        it, because a combining mark is a token character before and after
-        folding (:func:`~dataknobs_common.text.is_token_character`). A
+        it, because a combining mark is in a token before and after folding
+        exactly when its letter is (:func:`~dataknobs_common.text.in_token`). A
         normalizer of the caller's own can be, and only what its declared
         forms show is caught. A rung that folds for itself is outside this
         entirely, and declines the bound for that reason rather than this one.

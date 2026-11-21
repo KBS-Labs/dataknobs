@@ -39,8 +39,9 @@ is broken.
 ``narrowest``, the rule that keeps one piece of evidence per window, are
 re-exported here beside the rungs that need them, because writing a scanning
 rung is what they are for, as are ``Tokenizer``, ``TOKENIZERS``,
-``tokenizer_from_config``, ``word_spans`` and ``is_token_character``, which say
-where a scan's tokens come from and what a token character is. They
+``tokenizer_from_config``, ``word_spans``, ``in_token`` and
+``is_token_boundary``, which say where a scan's tokens come from and where a
+token begins and ends. They
 stay in ``text`` itself, which imports nothing from this package, so the
 vocabulary side can fold and measure with the same policy without depending
 on it.
@@ -115,7 +116,8 @@ from dataknobs_common.text import (
     edge_extensions,
     narrowest,
     probe_spans,
-    is_token_character,
+    in_token,
+    is_token_boundary,
     punctuation_edges,
     token_spans,
     tokenizer_from_config,
@@ -166,7 +168,8 @@ __all__ = [
     "declared_candidates",
     "declared_signal_metadata",
     "edge_extensions",
-    "is_token_character",
+    "in_token",
+    "is_token_boundary",
     "finish",
     "merge_rung",
     "narrowest",
