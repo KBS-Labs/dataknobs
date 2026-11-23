@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from dataknobs_bots.prompts.resolver import PromptResolver
 
 from dataknobs_bots.prompts.memory import DEFAULT_SUMMARY_PROMPT
+from dataknobs_common.exceptions import _written_by_dataknobs
 from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
@@ -54,10 +55,12 @@ async def _resolve_summary_llm(
     if fallback_provider is not None:
         return fallback_provider
 
-    raise ValueError(
-        "Summary memory requires an LLM provider. Either include an 'llm' "
-        "section in the memory config or pass llm_provider to "
-        "create_memory_from_config()."
+    raise _written_by_dataknobs(
+        ValueError(
+            "Summary memory requires an LLM provider. Either include an 'llm' "
+            "section in the memory config or pass llm_provider to "
+            "create_memory_from_config()."
+        )
     )
 
 

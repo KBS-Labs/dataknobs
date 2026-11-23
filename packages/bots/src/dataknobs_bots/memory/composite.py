@@ -9,7 +9,7 @@ import logging
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from dataknobs_common.exceptions import DataknobsError
+from dataknobs_common.exceptions import DataknobsError, _written_by_dataknobs
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from .base import Memory
@@ -93,10 +93,14 @@ class CompositeMemory(StructuredConfigConsumer[CompositeMemoryConfig], Memory):
                 is out of range.
         """
         if not strategies:
-            raise ValueError("CompositeMemory requires at least one strategy")
+            raise _written_by_dataknobs(
+                ValueError("CompositeMemory requires at least one strategy")
+            )
         if primary_index < 0 or primary_index >= len(strategies):
-            raise ValueError(
-                f"primary_index {primary_index} out of range for {len(strategies)} strategies"
+            raise _written_by_dataknobs(
+                ValueError(
+                    f"primary_index {primary_index} out of range for {len(strategies)} strategies"
+                )
             )
         self._strategies = strategies
         self._primary_index = primary_index
@@ -130,8 +134,10 @@ class CompositeMemory(StructuredConfigConsumer[CompositeMemoryConfig], Memory):
                     )
                 )
             if not strategies:
-                raise ValueError(
-                    "Composite memory requires at least one strategy in 'strategies' list"
+                raise _written_by_dataknobs(
+                    ValueError(
+                        "Composite memory requires at least one strategy in 'strategies' list"
+                    )
                 )
             self._validate_and_bind(strategies, self.config.primary_index)
         except Exception:

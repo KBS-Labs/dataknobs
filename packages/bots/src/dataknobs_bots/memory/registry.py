@@ -34,13 +34,8 @@ import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from dataknobs_common.exceptions import (
-    DataknobsError,
-    NotFoundError,
-    OperationError,
-    PluginConfigError,
-)
-from dataknobs_common.registry import PluginFactory, PluginRegistry
+from dataknobs_common.exceptions import NotFoundError
+from dataknobs_common.registry import PluginFactory, PluginRegistry, create_surfacing_async
 from dataknobs_common.structured_config import (
     SKIP_VALIDATION,
     ConfigClassResolution,
@@ -172,8 +167,19 @@ async def create_memory_from_config(
 
     Raises:
         ValueError: If the memory type is not recognized, or a backend
-            reports a configuration problem (e.g. summary memory without an
-            LLM source, a composite with no strategies).
+            reports a configuration problem. dataknobs' own refusals (summary
+            memory without an LLM source, a composite with no strategies, an
+            unknown nested type) arrive as themselves, with their words. A
+            ``ValueError`` a backend raised with its own words arrives as a
+            bounded :class:`~dataknobs_common.exceptions.FactoryValueError`
+            (still a ``ValueError``), because a backend's text can carry the
+            connection URL it was handed; the original is on ``__cause__``.
+        PluginConfigError: A key the backend's config class refuses (also a
+            ``ValueError``), naming the key.
+        ResourceError: A backend that failed to connect, bounded the same
+            way; likewise ``TimeoutError``, ``ConcurrencyError``,
+            ``SerializationError`` and ``ConfigurationError``. Any other
+            failure arrives as a bounded ``OperationError``.
 
     Example:
         ```python
@@ -213,36 +219,22 @@ async def create_memory_from_config(
         })
         ```
     """
-    try:
-        return await memory_backends.create_async(
-            config=config,
-            llm_provider=llm_provider,
-            prompt_resolver=prompt_resolver,
-        )
-    except NotFoundError as exc:
-        memory_type = (config or {}).get("type", "buffer")
-        raise ValueError(
+    memory_type = (config or {}).get("type", "buffer")
+
+    def unknown(_: NotFoundError) -> ValueError:
+        return ValueError(
             f"Unknown memory type: {memory_type}. "
             f"Available types: {', '.join(sorted(memory_backends.list_keys()))}"
-        ) from exc
-    except PluginConfigError:
-        # A config refusal the registry carried: the refusal's own words plus
-        # the plugin ``key``. Raised as built -- the unwrap below would hand
-        # back the bare refusal and lose the key.
-        raise
-    except OperationError as exc:
-        # The registry wraps a backend-raised exception in OperationError.
-        # Surface the original cause unchanged: the public contract raises
-        # ValueError for config problems (missing LLM source, empty/invalid
-        # composite, unknown nested type), and a backend's native dataknobs
-        # error (``ResourceError`` from a vector backend that fails to
-        # connect, ``ConfigurationError``, …) should reach the caller as its
-        # own type rather than as a generic OperationError. A wrapper with no
-        # informative cause propagates as-is.
-        cause = exc.__cause__
-        if isinstance(cause, ValueError | DataknobsError):
-            raise cause from cause.__cause__
-        raise
+        )
+
+    return await create_surfacing_async(
+        memory_backends,
+        subject="memory backend",
+        unknown=unknown,
+        config=config,
+        llm_provider=llm_provider,
+        prompt_resolver=prompt_resolver,
+    )
 
 
 def register_memory_backend(

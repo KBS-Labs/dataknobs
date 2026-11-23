@@ -114,6 +114,9 @@ from dataknobs_common.exceptions import (
     DottedPathTypeError,
 )
 from dataknobs_common.exceptions import (
+    FactoryValueError as CommonFactoryValueError,
+)
+from dataknobs_common.exceptions import (
     NotFoundError as CommonNotFoundError,
 )
 from dataknobs_common.exceptions import (
@@ -203,7 +206,7 @@ def _jsonable(value: Any, _depth: int = 0) -> Any:
     actually holds when it fails do the opposite: a SQLAlchemy ``Engine``
     renders as ``Engine(postgresql://user:pw@host/db)`` and a psycopg2
     connection quotes its DSN, both deliberately, because a repr is a
-    debugging aid — written for a log, not for a response body. Seven rows in
+    debugging aid — written for a log, not for a response body. Eight rows in
     the default policy disclose ``context``.
 
     The allow-list keeps the cases where withholding would cost a real
@@ -588,14 +591,14 @@ class ErrorPolicy(NamedTuple):
 
 
 #: The default type -> policy mapping, resolved by MRO walk (see
-#: :func:`resolve_error_policy`). Sixteen entries govern more than fifty
+#: :func:`resolve_error_policy`). Seventeen entries govern more than fifty
 #: reachable classes: every ``DataknobsError`` subclass the other packages
 #: define resolves to its nearest listed ancestor, so ``RecordNotFoundError``
 #: returns 404 without appearing here. An exact-type table would cover the
-#: sixteen and silently 500 the rest -- which is the behaviour this handler
+#: seventeen and silently 500 the rest -- which is the behaviour this handler
 #: replaces.
 #:
-#: Fifteen come from ``dataknobs_common.exceptions``; the sixteenth,
+#: Sixteen come from ``dataknobs_common.exceptions``; the seventeenth,
 #: ``InvalidTransitionError``, is from ``dataknobs_common.transitions``. Any
 #: count here is checked against the shipped mapping by the parity test, so
 #: the two cannot drift.
@@ -636,6 +639,17 @@ DEFAULT_ERROR_POLICY: Mapping[type[DataknobsError], ErrorPolicy] = MappingProxyT
         # `ConfigFieldError` does not reach this type: a deployment tightening
         # one should tighten both.
         CommonPluginConfigError: ErrorPolicy(422, True, True),
+        # A bounded stand-in for a `ValueError` a plugin factory raised with its
+        # own words -- a tenant's memory, knowledge-base or source section that
+        # the backend refused. message: "Failed to create <subject> '<key>'
+        # (<type>)", which names the plugin and the error's type and never the
+        # factory's text, since a factory's text can carry the connection URL
+        # it was handed. context: `key`, `registry`, `cause_type`. The factory's
+        # error is on `__cause__`, which the log line carries.
+        #
+        # Without this row it would resolve to `ValidationError`'s, which is
+        # the same; the row is here because every common type is given one.
+        CommonFactoryValueError: ErrorPolicy(422, True, True),
         # context: `scope`, which the caller must act on, and `user_id`. That id is
         # the caller's own, so returning it to them discloses nothing new -- unless
         # a route attempts access on behalf of a third party, where it would.

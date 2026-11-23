@@ -28,13 +28,8 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from dataknobs_common.exceptions import (
-    DataknobsError,
-    NotFoundError,
-    OperationError,
-    PluginConfigError,
-)
-from dataknobs_common.registry import PluginFactory, PluginRegistry
+from dataknobs_common.exceptions import NotFoundError
+from dataknobs_common.registry import PluginFactory, PluginRegistry, create_surfacing_async
 from dataknobs_common.structured_config import (
     SKIP_VALIDATION,
     ConfigClassResolution,
@@ -145,7 +140,20 @@ async def create_knowledge_base_from_config(config: dict[str, Any]) -> Knowledge
 
     Raises:
         ValueError: If the knowledge base type is not supported, or a
-            backend reports a configuration problem.
+            backend reports a configuration problem. dataknobs' own refusals
+            (an unknown vector backend or embedding provider) arrive as
+            themselves, with their words. A ``ValueError`` a backend raised
+            with its own words arrives as a bounded
+            :class:`~dataknobs_common.exceptions.FactoryValueError` (still a
+            ``ValueError``), because a backend's text can carry the
+            connection URL it was handed; the original is on ``__cause__``.
+        PluginConfigError: A key the backend's config class refuses (also a
+            ``ValueError``), naming the key.
+        ResourceError: An embedding or vector backend that failed to
+            connect, bounded the same way; likewise ``TimeoutError``,
+            ``ConcurrencyError``, ``SerializationError`` and
+            ``ConfigurationError``. Any other failure arrives as a bounded
+            ``OperationError``.
 
     Example:
         ```python
@@ -157,30 +165,20 @@ async def create_knowledge_base_from_config(config: dict[str, Any]) -> Knowledge
         })
         ```
     """
-    try:
-        return await knowledge_base_backends.create_async(config=config)
-    except NotFoundError as exc:
-        kb_type = (config or {}).get("type", "rag")
-        raise ValueError(
+    kb_type = (config or {}).get("type", "rag")
+
+    def unknown(_: NotFoundError) -> ValueError:
+        return ValueError(
             f"Unknown knowledge base type: {kb_type}. "
             f"Available types: {', '.join(sorted(knowledge_base_backends.list_keys()))}"
-        ) from exc
-    except PluginConfigError:
-        # A config refusal the registry carried: the refusal's own words plus
-        # the plugin ``key``. Raised as built -- the unwrap below would hand
-        # back the bare refusal and lose the key.
-        raise
-    except OperationError as exc:
-        # The registry wraps a backend-raised exception in OperationError.
-        # Surface the original cause unchanged: a config-problem ValueError
-        # and the dataknobs error hierarchy (``ResourceError`` when the
-        # embedding/vector backend fails to connect, ``ConfigurationError``,
-        # …) should reach the caller as their own type. A wrapper with no
-        # informative cause propagates as-is.
-        cause = exc.__cause__
-        if isinstance(cause, ValueError | DataknobsError):
-            raise cause from cause.__cause__
-        raise
+        )
+
+    return await create_surfacing_async(
+        knowledge_base_backends,
+        subject="knowledge base",
+        unknown=unknown,
+        config=config,
+    )
 
 
 def register_knowledge_base_backend(
