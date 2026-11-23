@@ -1636,14 +1636,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 367,
-  the twenty-seven beyond them being the operation family, the near-spelling
+  the resolution cascade — 134 names, taking the package's `__all__` to 368,
+  the twenty-eight beyond them being the operation family, the near-spelling
   rung, the surface-form catalogue, the index-source family, the edge rule's
   three functions, `narrowest`, the tokenizer family (`Tokenizer`,
   `TOKENIZERS`, `tokenizer_from_config`), `aclosing_iter`, `PluginConfig`,
   `naming_refusals`, `fingerprint_value`, `freeze_structure`,
-  `thaw_structure`, `FrozenMapping` and `ConfigFieldError`, each added by its
-  own entry. `declared_candidates` is inside the 134 rather than beyond them,
+  `thaw_structure`, `FrozenMapping`, `ConfigFieldError` and
+  `PluginConfigError`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond them,
   which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to
