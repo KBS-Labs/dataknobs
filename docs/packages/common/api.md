@@ -163,6 +163,39 @@ except ConfigFieldError as e:
 
 See [A mapping that does not fit its class](structured-config.md#a-mapping-that-does-not-fit-its-class-configfielderror).
 
+#### `PluginConfigError`
+
+Raised by `PluginRegistry.get`, `get_async`, `create` and `create_async` when
+the factory's failure is, or was raised `from`, a `ConfigFieldError` that
+`StructuredConfig` wrote. A `NotFoundError` raised `from` one stays a bounded
+`NotFoundError`. Every other factory error is bounded to
+`"Failed to create plugin '<key>' (<type>)"`; this one keeps the refusal's
+words, because they name no value.
+
+```python
+class PluginConfigError(ConfigFieldError, OperationError):
+    """A config refusal raised while a registry built a plugin."""
+```
+
+The message is `"Failed to create plugin '<key>': "` followed by the refusal's.
+`context` is the refusal's as `from_dict` wrote it — `config_class`, with
+`missing`, or `unknown` and `accepted`, or `non_string_keys` — plus `key` and
+`registry`. What the factory raised is on `__cause__`. An
+`except OperationError` written against the bounded error still catches it.
+
+**Example:**
+```python
+from dataknobs_common import PluginConfigError
+
+try:
+    source = sources.create(config=spec)
+except PluginConfigError as e:
+    print(e)                         # Failed to create plugin 'file': ...
+    print(e.context.get("unknown"))  # e.g. ['pth']
+```
+
+See [Errors from a factory](plugin-registry.md#errors-from-a-factory).
+
 #### `ConfigurationError`
 
 Raised for configuration issues.

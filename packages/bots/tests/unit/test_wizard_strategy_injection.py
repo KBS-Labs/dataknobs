@@ -179,6 +179,87 @@ class TestResolveStageStrategy:
         with pytest.raises(ConfigurationError, match="subflows"):
             reasoning._resolve_stage_strategy({"reasoning": "wizard"})
 
+    def test_a_refusal_of_the_stage_config_keeps_its_words(self) -> None:
+        """A misspelt ``reasoning_config`` key is named, not reduced to a type.
+
+        The strategy registry carries a refusal ``StructuredConfig`` wrote as
+        a ``PluginConfigError``; the wizard's bound on whatever a strategy
+        constructor raises must not reduce that to ``(PluginConfigError)``.
+        """
+        from dataclasses import dataclass
+        from typing import ClassVar
+
+        from dataknobs_bots.reasoning.registry import get_registry
+        from dataknobs_common.exceptions import ConfigurationError
+        from dataknobs_common.structured_config import StructuredConfig
+
+        @dataclass(frozen=True)
+        class ClosedStrategyConfig(StructuredConfig):
+            _UNKNOWN_KEYS: ClassVar[str] = "raise"
+            strategy: str = ""
+            threshold: float = 0.5
+            max_iterations: int = 5
+            store_trace: bool = False
+            verbose: bool = False
+
+        def factory(config: dict[str, Any], **_: Any) -> SimpleReasoning:
+            ClosedStrategyConfig.from_dict(config)
+            return SimpleReasoning()
+
+        registry = get_registry()
+        registry.register("closed_strategy", factory)
+        try:
+            reasoning = self._make_reasoning(_make_wizard_config())
+            with pytest.raises(ConfigurationError) as caught:
+                reasoning._resolve_stage_strategy(
+                    {
+                        "name": "gather",
+                        "reasoning": "closed_strategy",
+                        "reasoning_config": {"treshold": 0.9},
+                    }
+                )
+        finally:
+            registry.unregister("closed_strategy")
+
+        message = str(caught.value)
+        assert message.startswith(
+            "Wizard stage 'gather': Failed to create plugin 'closed_strategy': "
+            "ClosedStrategyConfig does not accept 'treshold'"
+        )
+        assert "does not accept 'treshold' (did you mean 'threshold'?)" in message
+        assert "0.9" not in message
+        assert caught.value.context["unknown"] == ["treshold"]
+        assert caught.value.context["stage"] == "gather"
+        assert caught.value.context["strategy"] == "closed_strategy"
+
+    @pytest.mark.parametrize("raised", ["ConfigFieldError", "PluginConfigError"])
+    def test_a_strategy_constructors_own_error_stays_bounded(self, raised: str) -> None:
+        """Including the type the wizard keeps the words of, raised with a secret."""
+        from dataknobs_bots.reasoning.registry import get_registry
+        from dataknobs_common import exceptions
+        from dataknobs_common.exceptions import ConfigurationError
+
+        secret = "postgres://user:pw@db.internal/prod"
+        error_type = getattr(exceptions, raised)
+
+        def factory(config: dict[str, Any], **_: Any) -> SimpleReasoning:
+            raise error_type(f"cannot reach {secret}", context={"dsn": secret})
+
+        registry = get_registry()
+        registry.register("own_error_strategy", factory)
+        try:
+            reasoning = self._make_reasoning(_make_wizard_config())
+            with pytest.raises(ConfigurationError) as caught:
+                reasoning._resolve_stage_strategy(
+                    {"name": "gather", "reasoning": "own_error_strategy"}
+                )
+        finally:
+            registry.unregister("own_error_strategy")
+
+        assert secret not in str(caught.value)
+        assert str(caught.value).endswith("(OperationError)")
+        assert "dsn" not in caught.value.context
+
 
 # ---------------------------------------------------------------------------
 # TestStrategyStageResponse — full strategy dispatch in wizard context

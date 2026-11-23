@@ -367,6 +367,7 @@ values while its message can be a database driver's.
 |---|---|---|---|
 | `ValidationError` | 422 | yes | yes |
 | `ConfigFieldError` | 422 | yes | yes |
+| `PluginConfigError` | 422 | yes | yes |
 | `ConsentRequiredError` | 403 | yes | yes |
 | `ConcurrencyError` | 409 | yes | yes |
 | `InvalidTransitionError` | 409 | yes | yes |
@@ -423,6 +424,13 @@ over the defaults, so rows you do not mention keep working. The third argument
 defaults to `False`, so a row written as `ErrorPolicy(402, True)` discloses the
 message and withholds the `context`: forgetting to think about `context` fails
 closed.
+
+An override reaches the type it names and the subclasses with no row of their
+own. `PluginConfigError` has one: it is the `ConfigFieldError` a plugin
+registry raises when a tenant's knowledge-base, memory or source section does
+not fit its class, and it carries the same refusal. So a deployment that
+tightens `ConfigFieldError` — to withhold `detail`, say — writes the same row
+for `PluginConfigError`.
 
 **Adding a row means reading what that type's raise sites put in `context`, not
 only what its message says.** They are separate arguments precisely because the

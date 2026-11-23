@@ -32,6 +32,7 @@ from dataknobs_common.exceptions import (
     DataknobsError,
     NotFoundError,
     OperationError,
+    PluginConfigError,
 )
 from dataknobs_common.registry import PluginFactory, PluginRegistry
 from dataknobs_common.structured_config import (
@@ -164,6 +165,11 @@ async def create_knowledge_base_from_config(config: dict[str, Any]) -> Knowledge
             f"Unknown knowledge base type: {kb_type}. "
             f"Available types: {', '.join(sorted(knowledge_base_backends.list_keys()))}"
         ) from exc
+    except PluginConfigError:
+        # A config refusal the registry carried: the refusal's own words plus
+        # the plugin ``key``. Raised as built -- the unwrap below would hand
+        # back the bare refusal and lose the key.
+        raise
     except OperationError as exc:
         # The registry wraps a backend-raised exception in OperationError.
         # Surface the original cause unchanged: a config-problem ValueError

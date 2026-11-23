@@ -348,6 +348,9 @@ _EXPECTED_POLICY: dict[str, tuple[int, bool, bool]] = {
     # A ValidationError subclass; its message and context carry names, never
     # a value.
     "ConfigFieldError": (422, True, True),
+    # A ConfigFieldError raised through a registry; the refusal's text and
+    # context plus the plugin key and registry name, never a factory's words.
+    "PluginConfigError": (422, True, True),
     "ConsentRequiredError": (403, True, True),
     "ConcurrencyError": (409, True, True),
     # Overrides an inherited 500 rather than declaring a base's status; lives
@@ -1125,13 +1128,26 @@ class TestErrorPolicyTable:
         # wraps is not contiguous in the file. Flatten before matching.
         source = " ".join(raw.replace("#:", " ").split())
         count = len(DEFAULT_ERROR_POLICY)
-        spelled = {11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen", 15: "fifteen"}[count]
+        spelled = {
+            11: "eleven",
+            12: "twelve",
+            13: "thirteen",
+            14: "fourteen",
+            15: "fifteen",
+            16: "sixteen",
+        }[count]
 
         assert f"{spelled.capitalize()} entries govern" in source, (
             f"the table has {count} rows; update the comment over "
             f"DEFAULT_ERROR_POLICY, which spells a different number"
         )
         assert f"cover the {spelled}" in source
+
+        # The same failure, one table over: a docstring counting the rows that
+        # disclose ``context`` said five while six did.
+        disclosing = sum(p.disclose_context for p in DEFAULT_ERROR_POLICY.values())
+        spelled_disclosing = {5: "five", 6: "six", 7: "seven", 8: "eight"}[disclosing]
+        assert f"{spelled_disclosing.capitalize()} rows in the default policy disclose" in source
 
         # The split the comment claims: all but one come from the exceptions
         # module, and the odd one out is named.
@@ -1226,6 +1242,48 @@ class TestDataknobsErrorHandling:
             assert body["detail"]["probe"] == "value"
         else:
             assert body["detail"] == {}
+
+    async def test_a_config_refusal_built_through_a_registry_reaches_the_author(self):
+        """A tenant memory section with a misspelt key, through the public factory.
+
+        The registry bounds what a factory raises, and the bounded type is an
+        ``OperationError`` -- a masked 500. A refusal ``StructuredConfig``
+        wrote arrives as a ``PluginConfigError`` instead, and
+        ``create_memory_from_config`` must raise it as built rather than
+        unwrap it, so the author gets the 422, the text naming the key, and
+        the backend the section selected.
+        """
+        from dataclasses import dataclass
+        from typing import ClassVar
+
+        from dataknobs_bots.memory import create_memory_from_config, memory_backends
+        from dataknobs_common.structured_config import StructuredConfig
+
+        @dataclass(frozen=True)
+        class ClosedMemoryConfig(StructuredConfig):
+            _UNKNOWN_KEYS: ClassVar[str] = "raise"
+            max_messages: int
+
+        memory_backends.register(
+            "closed", lambda config, **kwargs: ClosedMemoryConfig.from_dict(config)
+        )
+        try:
+            with pytest.raises(common_exceptions.OperationError) as caught:
+                await create_memory_from_config({"type": "closed", "max_mesages": 10})
+        finally:
+            memory_backends.unregister("closed")
+
+        response = await _response_for(caught.value)
+
+        assert response.status_code == 422
+        body = response.json()
+        assert body["error"] == "PluginConfigError"
+        assert body["message"].startswith(
+            "Failed to create plugin 'closed': ClosedMemoryConfig does not accept 'max_mesages'"
+        )
+        assert "did you mean 'max_messages'?" in body["message"]
+        assert body["detail"]["unknown"] == ["max_mesages"]
+        assert body["detail"]["key"] == "closed"
 
     async def test_the_configuration_diagnostic_reaches_the_log_by_default(self, caplog):
         """The case the gap was reported for, and why it is masked by default.
@@ -1507,7 +1565,7 @@ class TestResponseEncoding:
         ...'>``. Both put the credential in the repr *by design*, because it
         is a debugging aid — for a log, not a response body.
 
-        Five rows in the default policy disclose ``context``, so this is the
+        Seven rows in the default policy disclose ``context``, so this is the
         live path, not a hypothetical one.
         """
 

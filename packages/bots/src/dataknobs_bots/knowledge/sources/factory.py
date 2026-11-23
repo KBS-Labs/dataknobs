@@ -20,6 +20,7 @@ from dataknobs_common.exceptions import (
     DataknobsError,
     NotFoundError,
     OperationError,
+    PluginConfigError,
     naming_refusals,
 )
 from dataknobs_common.imports import resolve_optional_callable
@@ -123,6 +124,11 @@ async def create_source_from_config(
             f"Unknown grounded source type: {config.source_type!r}. "
             f"Supported types: {', '.join(sorted(source_backends.list_keys()))}"
         ) from exc
+    except PluginConfigError:
+        # A config refusal the registry carried: the refusal's own words plus
+        # the plugin ``key``. Raised as built -- the unwrap below would hand
+        # back the bare refusal and lose the key.
+        raise
     except OperationError as exc:
         # The registry wraps a builder-raised exception in OperationError.
         # Surface the original cause unchanged — both config-problem

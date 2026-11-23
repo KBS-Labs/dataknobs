@@ -19,7 +19,8 @@ in-memory vector stores. No mocks.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, ClassVar
 
 import pytest
 
@@ -28,12 +29,14 @@ from dataknobs_bots.knowledge import (
     RAGKnowledgeBaseConfig,
     create_knowledge_base_from_config,
     is_knowledge_base_backend_registered,
+    knowledge_base_backends,
     list_knowledge_base_backends,
 )
 from dataknobs_bots.knowledge.sources import (
     create_source_from_config,
     is_source_backend_registered,
     list_source_backends,
+    source_backends,
 )
 from dataknobs_bots.memory import (
     BufferMemory,
@@ -52,6 +55,8 @@ from dataknobs_bots.memory import (
 )
 from dataknobs_bots.memory.summary import SummaryMemory
 from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
+from dataknobs_common.exceptions import ConfigFieldError, PluginConfigError
+from dataknobs_common.structured_config import StructuredConfig
 from dataknobs_common.testing import (
     assert_structured_config_consumer,
     assert_structured_config_roundtrip,
@@ -261,6 +266,87 @@ class TestBackendErrorTypePreserved:
                 await create_memory_from_config({"type": "failing"})
         finally:
             memory_backends.unregister("failing")
+
+
+@dataclass(frozen=True)
+class _ClosedSectionConfig(StructuredConfig):
+    """A backend config that refuses a key it does not read."""
+
+    _UNKNOWN_KEYS: ClassVar[str] = "raise"
+    path: str
+
+
+def _reads_a_closed_section(config: Any, **_: Any) -> Any:
+    """A backend factory that reads its section, as a real one does."""
+    section = config.options if isinstance(config, GroundedSourceConfig) else config
+    return _ClosedSectionConfig.from_dict(section)
+
+
+async def _build_memory(section: dict[str, Any]) -> Any:
+    return await create_memory_from_config({"type": "closed", **section})
+
+
+async def _build_knowledge_base(section: dict[str, Any]) -> Any:
+    return await create_knowledge_base_from_config({"type": "closed", **section})
+
+
+async def _build_source(section: dict[str, Any]) -> Any:
+    return await create_source_from_config(
+        GroundedSourceConfig(source_type="closed", name="s", options=section)
+    )
+
+
+_SUBSYSTEMS = {
+    "memory": (memory_backends, _build_memory),
+    "knowledge_base": (knowledge_base_backends, _build_knowledge_base),
+    "source": (source_backends, _build_source),
+}
+
+
+class TestAConfigRefusalKeepsItsWordsThroughTheSubsystemFactories:
+    """A misspelt key in a backend's section reaches the caller as the registry built it.
+
+    Each public factory unwraps the registry's ``OperationError`` to the
+    cause it wraps. A ``PluginConfigError`` is also an ``OperationError``,
+    so without its own handler the factory would discard it and re-raise the
+    bare refusal, losing the plugin ``key`` the registry added.
+    """
+
+    @pytest.mark.parametrize("subsystem", sorted(_SUBSYSTEMS))
+    @pytest.mark.asyncio
+    async def test_the_refusal_arrives_as_a_plugin_config_error(self, subsystem: str) -> None:
+        registry, build = _SUBSYSTEMS[subsystem]
+        registry.register("closed", _reads_a_closed_section)
+        try:
+            with pytest.raises(PluginConfigError) as caught:
+                await build({"pth": "data.csv"})
+        finally:
+            registry.unregister("closed")
+
+        assert str(caught.value).startswith(
+            "Failed to create plugin 'closed': _ClosedSectionConfig does not accept 'pth'"
+        )
+        assert "data.csv" not in str(caught.value)
+        assert caught.value.context["unknown"] == ["pth"]
+        assert caught.value.context["key"] == "closed"
+
+    @pytest.mark.parametrize("subsystem", sorted(_SUBSYSTEMS))
+    @pytest.mark.asyncio
+    async def test_a_backends_own_config_field_error_is_not_carried(self, subsystem: str) -> None:
+        """The unwrap still hands back the factory's error, as before this type existed."""
+        registry, build = _SUBSYSTEMS[subsystem]
+
+        def _own(config: Any, **_: Any) -> Any:
+            raise ConfigFieldError("the factory's own words")
+
+        registry.register("closed", _own)
+        try:
+            with pytest.raises(ConfigFieldError) as caught:
+                await build({})
+        finally:
+            registry.unregister("closed")
+
+        assert not isinstance(caught.value, PluginConfigError)
 
 
 # ===========================================================================

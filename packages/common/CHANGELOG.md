@@ -43,7 +43,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - the original is on `__cause__`;
   - a `NotFoundError` or `OperationError` a registry raised, such as a
     nested registry's miss inside a composite factory, still passes through
-    as itself.
+    as itself;
+  - a `ConfigFieldError` that `StructuredConfig` wrote (a missing field, an
+    unknown or misspelt key, a key that is not a string), or an error other
+    than a `NotFoundError` that a factory raised `from` one, becomes a
+    `PluginConfigError` that keeps the refusal's words:
+    `"Failed to create plugin '<key>': <refusal>"`, with the refusal's
+    `context` plus `key` and `registry`. It is both a `ConfigFieldError` and
+    an `OperationError`. The registry recognises the refusal by a mark only
+    `StructuredConfig` sets, so a factory's own `ConfigFieldError` is bounded
+    like any other error. The mark records the refusal's words as written,
+    and those are what is carried: a factory that amends the refusal before
+    raising it, with `naming_refusals` or by hand, adds nothing of its own.
 
   `except NotFoundError` and `except OperationError` catch what they caught
   before. **A caller catching a narrower class raised inside a factory**, for
@@ -1625,14 +1636,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 367,
-  the twenty-seven beyond them being the operation family, the near-spelling
+  the resolution cascade — 134 names, taking the package's `__all__` to 368,
+  the twenty-eight beyond them being the operation family, the near-spelling
   rung, the surface-form catalogue, the index-source family, the edge rule's
   three functions, `narrowest`, the tokenizer family (`Tokenizer`,
   `TOKENIZERS`, `tokenizer_from_config`), `aclosing_iter`, `PluginConfig`,
   `naming_refusals`, `fingerprint_value`, `freeze_structure`,
-  `thaw_structure`, `FrozenMapping` and `ConfigFieldError`, each added by its
-  own entry. `declared_candidates` is inside the 134 rather than beyond them,
+  `thaw_structure`, `FrozenMapping`, `ConfigFieldError` and
+  `PluginConfigError`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond them,
   which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to
@@ -2353,9 +2364,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documents `ValidationError` meets that contract with no translation. Its
   message names only the class, its fields and the keys the caller wrote,
   never a value, and its `context` carries `config_class` with `missing` or
-  `unknown` and `accepted`. A required field written `None` is still supplied,
-  not missing. On a class with `_UNKNOWN_KEYS = "raise"`, a key that is not a
-  string (YAML's reading of an unquoted `yes:`, `on:` or `null:`) raises the
+  `unknown` and `accepted`. Built through a `PluginRegistry`, the refusal
+  reaches the caller as a `PluginConfigError` carrying the same message and
+  `context` (see the `PluginRegistry` entry under Fixed). A required field
+  written `None` is still supplied, not missing. On a class with
+  `_UNKNOWN_KEYS = "raise"`, a key that is not a string (YAML's reading of an unquoted `yes:`, `on:` or `null:`) raises the
   same type, naming the key, instead of a `TypeError` from sorting the keys.
 
   - **Migration:** a caller that catches `TypeError` around `from_dict`,

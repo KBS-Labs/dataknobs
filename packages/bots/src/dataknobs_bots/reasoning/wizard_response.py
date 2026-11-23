@@ -1808,6 +1808,8 @@ class WizardResponder:
         if "verbose" not in reasoning_config:
             reasoning_config["verbose"] = verbose
 
+        from dataknobs_common.exceptions import ConfigurationError, PluginConfigError
+
         forwarded = self._get_forwardable_components()
         try:
             # Forward the parent wizard's forwardable collaborators
@@ -1820,9 +1822,23 @@ class WizardResponder:
                 config=reasoning_config,
                 **forwarded,
             )
+        except PluginConfigError as e:
+            # A config refusal raised while building the strategy: the
+            # stage's ``reasoning_config``, or a section the strategy
+            # built through another registry, did not fit its class. The
+            # registry raises this type only for a refusal
+            # ``StructuredConfig`` wrote, whose text names keys and never
+            # a value -- it bounds a strategy's own error, this type
+            # included -- so the words are kept. Its message names the
+            # plugin whose config was refused ("Failed to create plugin
+            # '<key>': ..."), and its context that plugin's ``key`` and
+            # ``registry``, so only the stage is prefixed.
+            stage_name = stage.get("name", "?")
+            raise ConfigurationError(
+                f"Wizard stage '{stage_name}': {e}",
+                context={**e.context, "stage": stage_name, "strategy": name},
+            ) from e
         except Exception as e:
-            from dataknobs_common.exceptions import ConfigurationError
-
             stage_name = stage.get("name", "?")
             hint = _maybe_strict_signature_hint(e, forwarded)
             # Bounded message: this constructs a strategy named by consumer
