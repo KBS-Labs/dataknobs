@@ -68,6 +68,7 @@ from dataknobs_common.exceptions import (
     DottedPathError,
     DottedPathReason,
     DottedPathTypeError,
+    _written_by_dataknobs,
 )
 
 __all__ = [
@@ -113,20 +114,24 @@ def _split(ref: str) -> tuple[str, str]:
             or either half being empty.
     """
     if not isinstance(ref, str) or not ref.strip():
-        raise DottedPathError(
-            f"Expected a dotted path of the form 'module.path:name'; got {ref!r}",
-            ref=str(ref),
-            reason=DottedPathReason.MALFORMED,
+        raise _written_by_dataknobs(
+            DottedPathError(
+                f"Expected a dotted path of the form 'module.path:name'; got {ref!r}",
+                ref=str(ref),
+                reason=DottedPathReason.MALFORMED,
+            )
         )
 
     ref = ref.strip()
     module_path, sep, attribute = ref.rpartition(":" if ":" in ref else ".")
 
     if not sep or not module_path or not attribute:
-        raise DottedPathError(
-            f"Invalid dotted path {ref!r}; expected 'module.path:name' or 'module.path.name'",
-            ref=ref,
-            reason=DottedPathReason.MALFORMED,
+        raise _written_by_dataknobs(
+            DottedPathError(
+                f"Invalid dotted path {ref!r}; expected 'module.path:name' or 'module.path.name'",
+                ref=ref,
+                reason=DottedPathReason.MALFORMED,
+            )
         )
 
     return module_path, attribute
@@ -223,10 +228,12 @@ def resolve_dotted(ref: str) -> Any:
     try:
         module = importlib.import_module(module_path)
     except ModuleNotFoundError as exc:
-        raise DottedPathError(
-            f"Cannot import module {module_path!r} from {ref!r} ({type(exc).__name__})",
-            ref=ref,
-            reason=DottedPathReason.MODULE_NOT_FOUND,
+        raise _written_by_dataknobs(
+            DottedPathError(
+                f"Cannot import module {module_path!r} from {ref!r} ({type(exc).__name__})",
+                ref=ref,
+                reason=DottedPathReason.MODULE_NOT_FOUND,
+            )
         ) from exc
     except Exception as exc:
         # `Exception`, not `ImportError`: the import runs the target module's
@@ -235,20 +242,24 @@ def resolve_dotted(ref: str) -> Any:
         # — a `from x import y` that failed inside the target — reaches here
         # rather than the clause above, which is right: the module began
         # executing.
-        raise DottedPathError(
-            f"Cannot import module {module_path!r} from {ref!r} ({type(exc).__name__})",
-            ref=ref,
-            reason=DottedPathReason.IMPORT_FAILED,
+        raise _written_by_dataknobs(
+            DottedPathError(
+                f"Cannot import module {module_path!r} from {ref!r} ({type(exc).__name__})",
+                ref=ref,
+                reason=DottedPathReason.IMPORT_FAILED,
+            )
         ) from exc
 
     try:
         return getattr(module, attribute)
     except AttributeError as exc:
-        raise DottedPathError(
-            f"Module {module_path!r} has no attribute {attribute!r} "
-            f"(from {ref!r}). Available: {_suggestions(module)}",
-            ref=ref,
-            reason=DottedPathReason.ATTRIBUTE_NOT_FOUND,
+        raise _written_by_dataknobs(
+            DottedPathError(
+                f"Module {module_path!r} has no attribute {attribute!r} "
+                f"(from {ref!r}). Available: {_suggestions(module)}",
+                ref=ref,
+                reason=DottedPathReason.ATTRIBUTE_NOT_FOUND,
+            )
         ) from exc
     except ModuleNotFoundError as exc:
         # A PEP 562 module-level `__getattr__` runs arbitrary code, so the
@@ -261,20 +272,24 @@ def resolve_dotted(ref: str) -> Any:
         # Catching only `AttributeError` let that escape as a raw exception, so
         # a caller's `except DottedPathError` did not match it and
         # `optional: true` did not cover the one case it most obviously should.
-        raise DottedPathError(
-            f"Module {module_path!r} raised resolving attribute "
-            f"{attribute!r} (from {ref!r}) ({type(exc).__name__})",
-            ref=ref,
-            reason=DottedPathReason.MODULE_NOT_FOUND,
+        raise _written_by_dataknobs(
+            DottedPathError(
+                f"Module {module_path!r} raised resolving attribute "
+                f"{attribute!r} (from {ref!r}) ({type(exc).__name__})",
+                ref=ref,
+                reason=DottedPathReason.MODULE_NOT_FOUND,
+            )
         ) from exc
     except Exception as exc:
         # The lazy export ran and failed for some reason other than a missing
         # module — present and broken, not absent.
-        raise DottedPathError(
-            f"Module {module_path!r} raised resolving attribute "
-            f"{attribute!r} (from {ref!r}) ({type(exc).__name__})",
-            ref=ref,
-            reason=DottedPathReason.IMPORT_FAILED,
+        raise _written_by_dataknobs(
+            DottedPathError(
+                f"Module {module_path!r} raised resolving attribute "
+                f"{attribute!r} (from {ref!r}) ({type(exc).__name__})",
+                ref=ref,
+                reason=DottedPathReason.IMPORT_FAILED,
+            )
         ) from exc
 
 
@@ -304,10 +319,12 @@ def resolve_callable(ref: str) -> Callable[..., Any]:
         # and no config layout to have gotten wrong -- the path simply names
         # the wrong symbol. `DottedPathTypeError` is reserved for a target
         # that failed a base the *caller* named.
-        raise DottedPathError(
-            f"{ref!r} resolved to {type(target).__name__}, which is not callable",
-            ref=ref,
-            reason=DottedPathReason.NOT_CALLABLE,
+        raise _written_by_dataknobs(
+            DottedPathError(
+                f"{ref!r} resolved to {type(target).__name__}, which is not callable",
+                ref=ref,
+                reason=DottedPathReason.NOT_CALLABLE,
+            )
         )
 
     return target
@@ -368,11 +385,13 @@ def resolve_class(ref: str, base: ClassConstraint[_T]) -> type[_T]:
     constraint = cast("type[_T]", base)
 
     if not isinstance(target, type) or not issubclass(target, constraint):
-        raise DottedPathTypeError(
-            f"{ref!r} must resolve to a subclass of "
-            f"{base.__module__}.{base.__qualname__}; got {target!r}",
-            ref=ref,
-            expected=constraint,
+        raise _written_by_dataknobs(
+            DottedPathTypeError(
+                f"{ref!r} must resolve to a subclass of "
+                f"{base.__module__}.{base.__qualname__}; got {target!r}",
+                ref=ref,
+                expected=constraint,
+            )
         )
 
     return target
@@ -415,12 +434,14 @@ def resolve_optional_callable(
     try:
         return resolve_callable(ref)
     except DottedPathError as exc:
-        raise DottedPathError(
-            f"{owner!r}: cannot resolve {field_name}={ref!r} — {exc}",
-            ref=exc.ref,
-            reason=exc.reason,
-            field_name=field_name,
-            owner=owner,
+        raise _written_by_dataknobs(
+            DottedPathError(
+                f"{owner!r}: cannot resolve {field_name}={ref!r} — {exc}",
+                ref=exc.ref,
+                reason=exc.reason,
+                field_name=field_name,
+                owner=owner,
+            )
         ) from exc
 
 

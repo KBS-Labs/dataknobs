@@ -41,7 +41,7 @@ from dataknobs_common.entity_resolution.protocols import (
     SurfaceFormCatalog,
 )
 from dataknobs_common.hierarchy import K
-from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.exceptions import ValidationError, _written_by_dataknobs
 from dataknobs_common.entity_resolution.values import (
     EntityCandidate,
     EvidenceKind,
@@ -204,10 +204,12 @@ def refuse_negative_k(k: int) -> None:
             becomes visible.
     """
     if k < 0:
-        raise ValidationError(
-            f"k must not be negative, got {k}: a rung cannot return fewer than "
-            "no entities, and the cut is a slice that would otherwise read a "
-            "negative as counting back from the end"
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"k must not be negative, got {k}: a rung cannot return fewer than "
+                "no entities, and the cut is a slice that would otherwise read a "
+                "negative as counting back from the end"
+            )
         )
 
 
@@ -492,9 +494,13 @@ def _checked_count(value: object, name: str, at_least: int, consequence: str) ->
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValidationError(f"{name} must be a whole number, got {value!r}")
+        raise _written_by_dataknobs(
+            ValidationError(f"{name} must be a whole number, got {value!r}")
+        )
     if value < at_least:
-        raise ValidationError(f"{name} must be at least {at_least}, got {value}. {consequence}")
+        raise _written_by_dataknobs(
+            ValidationError(f"{name} must be at least {at_least}, got {value}. {consequence}")
+        )
     return value
 
 
@@ -579,11 +585,13 @@ def _checked_callable(
         ValidationError: For a value that is neither ``None`` nor callable.
     """
     if value is not None and not callable(value):
-        raise ValidationError(
-            f"{parameter} must be callable or None, got {type(value).__name__} "
-            f"({value!r}). A configuration document cannot write a callable, so "
-            f"a dotted path here names nothing this rung can call -- build the "
-            f"rung in code, or resolve the path before handing it over."
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"{parameter} must be callable or None, got {type(value).__name__} "
+                f"({value!r}). A configuration document cannot write a callable, so "
+                f"a dotted path here names nothing this rung can call -- build the "
+                f"rung in code, or resolve the path before handing it over."
+            )
         )
     return value
 
@@ -720,11 +728,13 @@ def _require_flavour(entities: object, member: str, *, asynchronous: bool) -> No
     wanted, got = (
         ("asynchronous", "synchronous") if asynchronous else ("synchronous", "asynchronous")
     )
-    raise ValidationError(
-        f"{type(entities).__name__} publishes {member}() as a {got} member, "
-        f"and this rung needs the {wanted} one. The two protocols spell the "
-        f"member identically, so a structural check cannot tell them apart -- "
-        f"pass the {wanted} source, or the rung of the other flavour."
+    raise _written_by_dataknobs(
+        ValidationError(
+            f"{type(entities).__name__} publishes {member}() as a {got} member, "
+            f"and this rung needs the {wanted} one. The two protocols spell the "
+            f"member identically, so a structural check cannot tell them apart -- "
+            f"pass the {wanted} source, or the rung of the other flavour."
+        )
     )
 
 
@@ -747,13 +757,15 @@ def _refuse_catalogue(entities: object, protocol: str) -> NoReturn:
     Raises:
         ValidationError: Always.
     """
-    raise ValidationError(
-        f"{type(entities).__name__} does not publish its surface forms, so a "
-        f"near-spelling rung has nothing to compare a query against. It must "
-        f"satisfy {protocol}, which asks for one member: surface_forms(), "
-        f"answering with every form the vocabulary declares. The protocol is "
-        f"structural -- a source satisfies it by having the member, with "
-        f"nothing to subclass or register."
+    raise _written_by_dataknobs(
+        ValidationError(
+            f"{type(entities).__name__} does not publish its surface forms, so a "
+            f"near-spelling rung has nothing to compare a query against. It must "
+            f"satisfy {protocol}, which asks for one member: surface_forms(), "
+            f"answering with every form the vocabulary declares. The protocol is "
+            f"structural -- a source satisfies it by having the member, with "
+            f"nothing to subclass or register."
+        )
     )
 
 
@@ -796,17 +808,19 @@ def _refuse_unfolded(entities: object, rung: str) -> None:
         return
     if Capability.SURFACE_FORM_LOOKUP in describe().capabilities:
         return
-    raise ValidationError(
-        f"{type(entities).__name__} withholds {Capability.SURFACE_FORM_LOOKUP.value}, "
-        f"so the {rung!r} rung has nothing it may fold a query against. That "
-        f"source holds its forms as they were written and no engine folds at "
-        f"query time the way str.casefold does, so by_surface_form would raise "
-        f"rather than answer -- and an empty answer, which is what this rung "
-        f"would otherwise have to report, already means the vocabulary was "
-        f"asked and matched nothing. Give the source a folded lookup to read, "
-        f"or compose a cascade without the rungs that read one -- each kind "
-        f"declares whether it does, as `reads_surface_forms` on the rung and "
-        f"in the registry it is registered under."
+    raise _written_by_dataknobs(
+        ValidationError(
+            f"{type(entities).__name__} withholds {Capability.SURFACE_FORM_LOOKUP.value}, "
+            f"so the {rung!r} rung has nothing it may fold a query against. That "
+            f"source holds its forms as they were written and no engine folds at "
+            f"query time the way str.casefold does, so by_surface_form would raise "
+            f"rather than answer -- and an empty answer, which is what this rung "
+            f"would otherwise have to report, already means the vocabulary was "
+            f"asked and matched nothing. Give the source a folded lookup to read, "
+            f"or compose a cascade without the rungs that read one -- each kind "
+            f"declares whether it does, as `reads_surface_forms` on the rung and "
+            f"in the registry it is registered under."
+        )
     )
 
 
@@ -940,13 +954,17 @@ def _checked_threshold(threshold: float) -> float:
             ``(0, 1]``.
     """
     if isinstance(threshold, bool) or not isinstance(threshold, int | float):
-        raise ValidationError(f"threshold must be a number, got {threshold!r}")
+        raise _written_by_dataknobs(
+            ValidationError(f"threshold must be a number, got {threshold!r}")
+        )
     if not 0.0 < threshold <= 1.0:
-        raise ValidationError(
-            f"threshold must be greater than 0 and at most 1, got {threshold}. "
-            f"A threshold of 0 or less admits every form for every query, and "
-            f"one above 1 is unreachable for a score that is a ratio, so "
-            f"neither builds a rung that can answer."
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"threshold must be greater than 0 and at most 1, got {threshold}. "
+                f"A threshold of 0 or less admits every form for every query, and "
+                f"one above 1 is unreachable for a score that is a ratio, so "
+                f"neither builds a rung that can answer."
+            )
         )
     return threshold
 
