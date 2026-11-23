@@ -31,6 +31,7 @@ Example:
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from .environment_aware import resolve_resource_references
@@ -40,7 +41,13 @@ logger = logging.getLogger(__name__)
 
 
 class BindingResolverError(Exception):
-    """Error during resource binding resolution."""
+    """Error during resource binding resolution.
+
+    When a factory fails, the message names the resource and the factory
+    error's type, never its text -- a factory builds a backend from deployment
+    config, and its text can carry the connection URL it was handed. The
+    factory's error is on ``__cause__``, for a server-side log.
+    """
 
     pass
 
@@ -49,6 +56,15 @@ class FactoryNotFoundError(BindingResolverError):
     """Factory not registered for resource type."""
 
     pass
+
+
+def _creation_failed(
+    resource_type: str, logical_name: str, error: Exception
+) -> BindingResolverError:
+    """The bounded error for a factory that raised: the resource and the error's type."""
+    return BindingResolverError(
+        f"Failed to create {resource_type}[{logical_name}] ({type(error).__name__})"
+    )
 
 
 @runtime_checkable
@@ -238,13 +254,13 @@ class ConfigBindingResolver:
         # Get factory for this type
         factory = self._get_factory(resource_type)
 
-        # Create instance
+        # Find how to call the factory first, so a factory with no callable
+        # surface is refused in words of the resolver's own, then call it.
+        construct = self._constructor(factory)
         try:
-            instance = self._create_instance(factory, config)
+            instance = construct(config)
         except Exception as e:
-            raise BindingResolverError(
-                f"Failed to create {resource_type}[{logical_name}]: {e}"
-            ) from e
+            raise _creation_failed(resource_type, logical_name, e) from e
 
         # Cache the instance
         if use_cache:
@@ -295,13 +311,13 @@ class ConfigBindingResolver:
         # Get factory for this type
         factory = self._get_factory(resource_type)
 
-        # Create instance (async if supported)
+        # Create instance (async if supported). As in ``resolve``, the
+        # factory's surface is chosen before the call.
+        construct = self._async_constructor(factory)
         try:
-            instance = await self._create_instance_async(factory, config)
+            instance = await construct(config)
         except Exception as e:
-            raise BindingResolverError(
-                f"Failed to create {resource_type}[{logical_name}]: {e}"
-            ) from e
+            raise _creation_failed(resource_type, logical_name, e) from e
 
         # Cache the instance
         if use_cache:
@@ -406,6 +422,53 @@ class ConfigBindingResolver:
             )
         return self._factories[resource_type]
 
+    def _constructor(
+        self,
+        factory: ResourceFactory | Callable[..., Any],
+    ) -> Callable[[dict[str, Any]], Any]:
+        """How to build from ``factory``: its ``create``, ``build``, or the factory itself.
+
+        Raises:
+            BindingResolverError: When ``factory`` has none of the three.
+        """
+        if hasattr(factory, "create"):
+            create = factory.create
+            return lambda config: create(**config)
+        if hasattr(factory, "build"):
+            build = factory.build
+            return lambda config: build(**config)
+        if callable(factory):
+            call = factory
+            return lambda config: call(**config)
+        raise BindingResolverError(
+            f"Factory {factory} has no create(), build(), or __call__ method"
+        )
+
+    def _async_constructor(
+        self,
+        factory: ResourceFactory | Callable[..., Any],
+    ) -> Callable[[dict[str, Any]], Awaitable[Any]]:
+        """How to build from ``factory`` asynchronously.
+
+        A registered consumer class's ``from_config_async`` is preferred (it
+        takes the whole config, not a kwarg splat), then a factory's
+        ``create_async``, then the synchronous :meth:`_constructor`.
+        """
+        if hasattr(factory, "from_config_async"):
+            from_config_async: Callable[[dict[str, Any]], Awaitable[Any]] = (
+                factory.from_config_async
+            )
+            return from_config_async
+        if hasattr(factory, "create_async"):
+            create_async = factory.create_async
+            return lambda config: create_async(**config)
+        construct = self._constructor(factory)
+
+        async def build(config: dict[str, Any]) -> Any:
+            return construct(config)
+
+        return build
+
     def _create_instance(
         self,
         factory: ResourceFactory | Callable[..., Any],
@@ -420,21 +483,7 @@ class ConfigBindingResolver:
         Returns:
             Created instance
         """
-        # Try create method first
-        if hasattr(factory, "create"):
-            return factory.create(**config)
-
-        # Try build method
-        if hasattr(factory, "build"):
-            return factory.build(**config)
-
-        # Try calling directly (for callable factories)
-        if callable(factory):
-            return factory(**config)
-
-        raise BindingResolverError(
-            f"Factory {factory} has no create(), build(), or __call__ method"
-        )
+        return self._constructor(factory)(config)
 
     async def _create_instance_async(
         self,
@@ -450,18 +499,7 @@ class ConfigBindingResolver:
         Returns:
             Created instance
         """
-        # Prefer the StructuredConfigConsumer async entry point when the
-        # target is a consumer class (it takes the whole config, not a
-        # kwarg splat), then fall back to a factory ``create_async``.
-        if hasattr(factory, "from_config_async"):
-            return await factory.from_config_async(config)
-
-        # Try async create method first
-        if hasattr(factory, "create_async"):
-            return await factory.create_async(**config)
-
-        # Fall back to sync methods
-        return self._create_instance(factory, config)
+        return await self._async_constructor(factory)(config)
 
     def get_cached(
         self,
