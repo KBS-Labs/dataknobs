@@ -269,8 +269,15 @@ def _value_free_refusal_behind(exc: BaseException) -> tuple[str, dict[str, Any]]
 _WRITTEN_BY_DATAKNOBS = "_dataknobs_written_by_dataknobs"
 
 
-def _written_by_snapshot(exc: BaseException) -> tuple[str, dict[str, Any] | None] | None:
-    """What ``exc`` says now: its message and a deep copy of its ``context``.
+def _written_by_snapshot(
+    exc: BaseException,
+) -> tuple[str, dict[str, Any] | None, tuple[object, ...]] | None:
+    """What ``exc`` says now: its message, a deep copy of its ``context``, and its notes.
+
+    The notes are part of it because ``add_note`` is the other way a handler
+    puts words on an error it re-raises: they print with it in every
+    traceback and log line, so a connection URL added that way travels as
+    surely as one appended to the message.
 
     ``None`` when the ``context`` cannot be copied, so such an error is never
     marked -- which bounds it, the safe direction.
@@ -278,9 +285,10 @@ def _written_by_snapshot(exc: BaseException) -> tuple[str, dict[str, Any] | None
     context = getattr(exc, "context", None)
     try:
         copied = copy.deepcopy(dict(context)) if isinstance(context, Mapping) else None
+        notes = tuple(getattr(exc, "__notes__", ()))
     except Exception:
         return None
-    return str(exc), copied
+    return str(exc), copied, notes
 
 
 def _written_by_dataknobs(exc: _E) -> _E:
@@ -302,7 +310,8 @@ def _written_by_dataknobs(exc: _E) -> _E:
     in place of the instance: a surfaced error is raised again *as itself*,
     so the only safe answer to "its words changed since" is "then it is no
     longer only ours". An error a handler amends after marking (appending to
-    ``args``, changing ``context``) reads as unmarked and is bounded.
+    ``args``, changing ``context``, adding a note) reads as unmarked and is
+    bounded.
     :func:`naming_refusals` is the one amender that marks again, and only an
     error that was marked when it arrived.
 

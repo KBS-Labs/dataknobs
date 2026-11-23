@@ -52,20 +52,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolve_async` returned it unawaited and cached it. `resolve_async` now
   awaits whatever the factory returned. `resolve`, which cannot await,
   raises a `BindingResolverError` naming the factory's type and the
-  resource and saying to call `resolve_async()`; nothing is cached, and the
-  coroutine is closed so no `RuntimeWarning` follows. `AsyncCallableFactory`'s
-  own "requires async context" text now reaches the caller instead of
-  `(RuntimeError)`.
+  resource and saying to call `resolve_async()`; nothing is cached. A
+  coroutine is closed so no `RuntimeWarning` follows, and a `Task` or `Future`
+  is cancelled. `AsyncCallableFactory`'s own "requires async context" text
+  now reaches the caller instead of `(RuntimeError)`.
 
-- **`resolve` builds a class through its `from_config`, as `resolve_async`
-  does.** The two paths chose a constructor separately: `resolve_async`
-  preferred `from_config_async`, while `resolve` called `cls(**config)` even
-  for a class with `from_config`. Both now follow one precedence --
-  `from_config_async` and `create_async` when the caller can await, then
-  `from_config`, `create`, `build` or the factory itself -- which is the
-  order `PluginRegistry` and `ObjectBuilder` use. A class registered directly
-  on the resolver whose `from_config` behaves differently from its
-  constructor is now built through `from_config` on both paths.
+- **Both resolver paths choose how to call a factory the same way.** They
+  chose separately: `resolve_async` called `from_config_async` on anything
+  that had one, factory objects included, while `resolve` called
+  `cls(**config)` even for a class with `from_config`. Both now follow one
+  precedence. A *consumer class* -- a class with `from_config` and none of
+  `create`, `create_async` or `build`, the test `ObjectBuilder` already
+  applies -- is built through `from_config_async` (when the caller can
+  await) or `from_config`. Anything else is called through `create_async`
+  (when the caller can await), `create`, `build`, or as a callable. So a
+  factory object whose class inherits `ConfigurableBase`, and with it a
+  `from_config` classmethod, is still called through its `create`. A
+  consumer class registered directly on the resolver whose `from_config`
+  behaves differently from its constructor is now built through
+  `from_config` on the sync path too.
 
 - **`ConfigBindingResolver` keeps a factory's words out of its error.**
   `resolve` and `resolve_async` raised

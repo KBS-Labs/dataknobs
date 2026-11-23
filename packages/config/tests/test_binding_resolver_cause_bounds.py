@@ -74,7 +74,10 @@ class TestTheResolversMessageIsBounded:
         with pytest.raises(BindingResolverError) as caught:
             _resolve(lane, _resolver(Inert()))
 
-        assert str(caught.value) == "Factory Inert has no create(), build(), or __call__ method"
+        assert str(caught.value) == (
+            "Factory Inert has none of from_config(), from_config_async(), "
+            "create(), create_async(), build(), or __call__"
+        )
         assert caught.value.__cause__ is None
 
     def test_a_refusal_dataknobs_wrote_keeps_its_words(self, lane: str) -> None:

@@ -641,11 +641,15 @@ is awaited when it is awaitable. `resolve` cannot await, so it refuses such a
 factory with a `BindingResolverError` naming its type and saying to call
 `resolve_async()`, and caches nothing.
 
-**How a factory is called.** Both methods follow one precedence. `resolve_async`
-first tries `from_config_async(config)` and `create_async(**config)`; then both
-try `from_config(config)`, `create(**config)`, `build(**config)`, and finally
-`factory(**config)`. A class with `from_config` is built through it on both
-paths, as `ObjectBuilder` and `PluginRegistry` build it.
+**How a factory is called.** Both methods follow one precedence. A class with
+`from_config` and none of `create`, `create_async` or `build` is the resource
+itself, and is built through `from_config_async(config)` (by `resolve_async`,
+when it has one) or `from_config(config)` -- the test `ObjectBuilder` applies
+to a `factory:`. Anything else is a factory, called through
+`create_async(**config)` (by `resolve_async`), `create(**config)`,
+`build(**config)`, or `factory(**config)`. A factory object whose class
+inherits `ConfigurableBase` therefore still goes through its `create`, even
+though that base gives it a `from_config` classmethod.
 
 ## Usage Patterns
 

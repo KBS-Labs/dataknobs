@@ -17,10 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `create`, `create_async`, `get` and `get_async`, since the registry
   recognised its error by a mark on the instance rather than by its words. It
   now passes one through only while its message and `context` are what the
-  registry wrote; an amended one is bounded like any factory error,
-  `"Failed to create plugin '<outer key>' (<type>)"`, with the amended error
-  on `__cause__`. An error `naming_refusals` prefixed still passes through,
-  prefix included.
+  registry wrote, and while it carries no note added since; an amended one
+  is bounded like any factory error, `"Failed to create plugin '<outer key>'
+  (<type>)"`, with the amended error on `__cause__`. An error
+  `naming_refusals` prefixed still passes through, prefix included. The same
+  record now covers notes everywhere the written-by mark is read: an error
+  given a note after it was marked (`add_note`) is no longer shown as
+  dataknobs' words, since a note prints with it in every traceback and log
+  line.
 
 - **A backend declared unavailable is reported with its reason through the
   helpers.** `create_surfacing` called its `unknown` hook for every miss, so a

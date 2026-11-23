@@ -159,6 +159,18 @@ class TestTheMarkVouchesForWordsNotForAnInstance:
         error = _written_by_dataknobs(ValidationError("ours", context={"field": "x"}))
         assert _is_written_by_dataknobs(error)
 
+    def test_an_error_given_a_note_after_marking_is_no_longer_ours(self) -> None:
+        """A note travels with the error into every traceback and log line."""
+        error = _written_by_dataknobs(ValueError("ours"))
+        error.add_note(f"tried {DSN}")
+        assert not _is_written_by_dataknobs(error)
+
+    def test_a_note_present_when_marked_is_part_of_what_is_vouched_for(self) -> None:
+        error = ValueError("ours")
+        error.add_note("see the configuration guide")
+        _written_by_dataknobs(error)
+        assert _is_written_by_dataknobs(error)
+
     def test_a_context_that_cannot_be_copied_is_never_vouched_for(self) -> None:
         class Uncopyable:
             def __deepcopy__(self, memo: Any) -> Any:

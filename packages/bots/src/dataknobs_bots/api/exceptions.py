@@ -681,10 +681,13 @@ DEFAULT_ERROR_POLICY: Mapping[type[DataknobsError], ErrorPolicy] = MappingProxyT
         # A plugin a registry knows of but cannot build in this install -- a
         # tenant's memory or knowledge-base section naming a backend whose
         # optional dependency is missing. message: "<kind> '<key>' is not
-        # available here: <reason>", where the reason is the registry owner's
-        # sentence about what to install, never the caller's config. context:
-        # `available`, the registry's keyspace, for the same reason as its
-        # parent's row.
+        # available here: <reason>". The reason is whatever the code that
+        # declared the key unavailable wrote, never the caller's config:
+        # dataknobs' own backends name the missing module and how to install
+        # it, and keep an import error's text -- which can carry an install
+        # path -- for the log. A deployment declaring its own backends
+        # unavailable owns the reasons it writes. context: `available`, the
+        # registry's keyspace, for the same reason as its parent's row.
         #
         # Without this row it would resolve to `NotFoundError`'s, which is the
         # same; the row is here because every common type is given one.

@@ -1,5 +1,6 @@
 """Tests for ConfigBindingResolver class."""
 
+import asyncio
 import gc
 import warnings
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from dataknobs_common.structured_config import (
     StructuredConfig,
     StructuredConfigConsumer,
 )
+from dataknobs_config.builders import ConfigurableBase
 from dataknobs_config.binding_resolver import (
     AsyncCallableFactory,
     BindingResolverError,
@@ -755,3 +757,120 @@ class TestBothPathsPreferFromConfig:
         built = await resolver.resolve_async("databases", "primary")
 
         assert built.via == "from_config"
+
+
+class _FactoryWithFromConfig(ConfigurableBase):
+    """A real factory whose base happens to give it a ``from_config`` classmethod."""
+
+    def __init__(self, **_: object) -> None:
+        pass
+
+    def create(self, backend: str, **kwargs):
+        return MockDatabase(backend=backend, **kwargs)
+
+    async def create_async(self, backend: str, **kwargs):
+        return MockAsyncDatabase(backend=backend, connected=True)
+
+
+class _InstanceWithFromConfigAsync:
+    """A factory instance that also answers ``from_config_async``."""
+
+    async def from_config_async(self, config: dict):
+        return "built by from_config_async"
+
+    def create(self, backend: str, **kwargs):
+        return MockDatabase(backend=backend, **kwargs)
+
+
+class TestAFactorysOwnMethodsWin:
+    """``from_config`` builds a class that *is* the resource, never a factory object.
+
+    ``ConfigurableBase`` gives every subclass a ``from_config`` classmethod,
+    so ``hasattr`` is true on a factory instance too. A factory's ``create``
+    must still win, or the resolver builds a second factory from the
+    resource's config and hands that back as the resource.
+    """
+
+    @pytest.fixture
+    def env_config(self):
+        return EnvironmentConfig(
+            name="test",
+            resources={"databases": {"primary": {"backend": "postgres"}}},
+        )
+
+    def test_resolve_calls_create_not_the_inherited_from_config(self, env_config) -> None:
+        resolver = ConfigBindingResolver(env_config)
+        resolver.register_factory("databases", _FactoryWithFromConfig())
+
+        assert isinstance(resolver.resolve("databases", "primary"), MockDatabase)
+
+    @pytest.mark.asyncio
+    async def test_resolve_async_calls_create_async_not_the_inherited_from_config(
+        self, env_config
+    ) -> None:
+        resolver = ConfigBindingResolver(env_config)
+        resolver.register_factory("databases", _FactoryWithFromConfig())
+
+        db = await resolver.resolve_async("databases", "primary")
+
+        assert isinstance(db, MockAsyncDatabase)
+
+    @pytest.mark.asyncio
+    async def test_from_config_async_on_a_factory_instance_does_not_outrank_create(
+        self, env_config
+    ) -> None:
+        resolver = ConfigBindingResolver(env_config)
+        resolver.register_factory("databases", _InstanceWithFromConfigAsync())
+
+        db = await resolver.resolve_async("databases", "primary")
+
+        assert isinstance(db, MockDatabase)
+
+
+class TestTheAsyncRefusalNamesTheFactory:
+    @pytest.fixture
+    def env_config(self):
+        return EnvironmentConfig(
+            name="test",
+            resources={"databases": {"primary": {"backend": "postgres"}}},
+        )
+
+    def test_an_async_function_is_named_by_its_own_name(self, env_config) -> None:
+        resolver = ConfigBindingResolver(env_config)
+        resolver.register_factory("databases", _async_def_factory)
+
+        with pytest.raises(BindingResolverError) as caught:
+            resolver.resolve("databases", "primary")
+
+        assert "Factory _async_def_factory for databases[primary]" in str(caught.value)
+
+    def test_a_factory_object_is_named_by_its_class(self, env_config) -> None:
+        resolver = ConfigBindingResolver(env_config)
+        resolver.register_factory("databases", _AsyncDef())
+
+        with pytest.raises(BindingResolverError) as caught:
+            resolver.resolve("databases", "primary")
+
+        assert "Factory _AsyncDef for databases[primary]" in str(caught.value)
+
+    @pytest.mark.asyncio
+    async def test_a_future_a_sync_factory_returned_is_cancelled(self, env_config) -> None:
+        """A coroutine is closed; a Future or Task has no ``close`` and would keep running."""
+        future = asyncio.get_running_loop().create_future()
+        resolver = ConfigBindingResolver(env_config)
+        resolver.register_factory("databases", lambda **_: future)
+
+        with pytest.raises(BindingResolverError):
+            resolver.resolve("databases", "primary")
+
+        assert future.cancelled()
+
+    def test_a_factory_with_no_surface_is_told_what_is_accepted(self, env_config) -> None:
+        resolver = ConfigBindingResolver(env_config)
+        resolver.register_factory("databases", object())
+
+        with pytest.raises(BindingResolverError) as caught:
+            resolver.resolve("databases", "primary")
+
+        assert "from_config" in str(caught.value)
+        assert "create_async" in str(caught.value)

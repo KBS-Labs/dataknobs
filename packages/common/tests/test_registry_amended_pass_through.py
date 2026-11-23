@@ -154,3 +154,23 @@ class TestAnUnamendedRegistryErrorPassesThrough:
 
         assert str(caught.value).startswith("source 'cases': Failed to create plugin 'closed'")
         assert caught.value.context["registry"] == "gadgets"
+
+
+@pytest.mark.parametrize("lane", LANES)
+class TestANoteIsAnAmendment:
+    async def test_an_inner_miss_given_a_note_is_bounded(self, lane: str) -> None:
+        inner: PluginRegistry[Any] = PluginRegistry("gadgets")
+
+        def body() -> Any:
+            try:
+                return inner.create(key="nope")
+            except NotFoundError as exc:
+                exc.add_note(f"tried {DSN}")
+                raise
+
+        outer = _outer(lane, body)
+        with pytest.raises(NotFoundError) as caught:
+            await _build(lane, outer, "composite")
+
+        assert str(caught.value) == "Failed to create plugin 'composite' (NotFoundError)"
+        assert not getattr(caught.value, "__notes__", None)
