@@ -72,11 +72,19 @@ from typing import (
 )
 
 from dataknobs_common.exceptions import (
+    ConcurrencyError,
+    ConfigurationError,
     DataknobsError,
+    FactoryValueError,
     NotFoundError,
     OperationError,
     PluginConfigError,
+    ResourceError,
+    SerializationError,
+    TimeoutError as DataknobsTimeoutError,
+    _is_written_by_dataknobs,
     _value_free_refusal_behind,
+    _written_by_dataknobs,
 )
 
 if TYPE_CHECKING:
@@ -139,6 +147,55 @@ def _ours(exc: _Raised) -> _Raised:
     """
     setattr(exc, _RAISED_BY_A_REGISTRY, True)
     return exc
+
+
+def surfaced_cause(exc: BaseException) -> BaseException | None:
+    """The error behind a registry's bounded failure that its caller may be shown.
+
+    A :class:`PluginRegistry` bounds what a factory raises to
+    ``"Failed to create plugin '<key>' (<type>)"``, with the factory's error
+    on ``__cause__``, because a factory builds a backend from deployment
+    config and its text can carry the connection URL it was handed. A helper
+    in front of the registry that hands ``__cause__`` back to its caller
+    undoes that bound, and choosing by the cause's *type* does not help: a
+    ``ValueError`` dataknobs raised to say a summary memory has no LLM and one
+    a driver raised with a DSN in it are the same type.
+
+    This answers by who wrote the text instead. It returns ``exc.__cause__``
+    when a registry raised it, or when dataknobs raised it and its words have
+    not changed since; otherwise ``None``, and the caller should keep the
+    bounded error, or bound its own. It reads one link only, because the
+    registry's bound is one link deep: what the cause was itself raised
+    ``from`` is the cause's business.
+
+    A helper over a registry calls this, or uses :func:`create_surfacing`,
+    which calls it. Nothing outside this module should read a registry
+    error's ``__cause__`` to decide what to show.
+
+    Args:
+        exc: Usually the ``OperationError`` a registry raised for a factory
+            failure; any exception is accepted.
+
+    Returns:
+        The cause, when it may be shown; else ``None``.
+
+    Example:
+        ```python
+        try:
+            backend = backends.create(config=config)
+        except OperationError as exc:
+            cause = surfaced_cause(exc)
+            if cause is not None:
+                raise cause from cause.__cause__
+            raise
+        ```
+    """
+    cause = exc.__cause__
+    if cause is None:
+        return None
+    if getattr(cause, _RAISED_BY_A_REGISTRY, False) or _is_written_by_dataknobs(cause):
+        return cause
+    return None
 
 
 PluginFactory: TypeAlias = type[T] | Callable[..., T] | Callable[..., Awaitable[T]]
@@ -2684,6 +2741,210 @@ class PluginRegistry(Generic[T]):
         )
 
 
+def _shown_failure(exc: BaseException) -> BaseException | None:
+    """What of a registry's failure a caller interpolating it may show.
+
+    The error whose text may go into a message the caller writes: a
+    :class:`~dataknobs_common.exceptions.PluginConfigError` itself (its words
+    are a value-free refusal's), a registry error with nothing behind it (its
+    own refusal), or the :func:`surfaced_cause` of one that wraps a factory's
+    error. ``None`` when the factory's text may not be shown, and the caller
+    names it by type instead. Shared by the doors in ``dataknobs_common`` that
+    write their own message around a registry failure rather than raising it.
+    """
+    if isinstance(exc, PluginConfigError) or exc.__cause__ is None:
+        return exc
+    return surfaced_cause(exc)
+
+
+#: The common families a bounded factory failure keeps, in the order they are
+#: tested. Each takes the uniform ``(message, context)`` constructor and has a
+#: row of its own in an error policy (the bots API renders a ``ResourceError``
+#: as 503, a ``TimeoutError`` as 504, a ``ConcurrencyError`` as 409), so a
+#: backend that fails to connect is reported as that, bounded, rather than as a
+#: generic failure. This is the rule ``PluginRegistry`` applies to
+#: ``NotFoundError``, one layer up: a helper raises no type it did not raise
+#: before. Anything else not a ``ValueError`` stays the registry's bounded
+#: ``OperationError``.
+_BOUNDED_FAMILIES: tuple[type[DataknobsError], ...] = (
+    ResourceError,
+    DataknobsTimeoutError,
+    ConcurrencyError,
+    SerializationError,
+    ConfigurationError,
+)
+
+
+def _bounded(exc: OperationError, cause: BaseException, subject: str) -> BaseException:
+    """The error a helper raises for a factory failure it may not show.
+
+    ``exc`` is the registry's bounded error and ``cause`` the factory's. A
+    ``ValueError`` becomes a :class:`FactoryValueError`, one of
+    :data:`_BOUNDED_FAMILIES` a bounded instance of its family, and anything
+    else the registry's own error, unchanged. The text names the subject,
+    the key and the cause's type, never the cause's words.
+    """
+    if isinstance(cause, ValueError):
+        family: type[DataknobsError] = FactoryValueError
+    else:
+        found = next((f for f in _BOUNDED_FAMILIES if isinstance(cause, f)), None)
+        if found is None:
+            return exc
+        family = found
+    key = exc.context.get("key")
+    context = {
+        "key": key,
+        "registry": exc.context.get("registry"),
+        "cause_type": type(cause).__name__,
+    }
+    return _ours(
+        family(
+            f"Failed to create {subject} '{key}' ({type(cause).__name__})",
+            context=context,
+        )
+    )
+
+
+def _is_this_registrys_miss(exc: NotFoundError, registry: "PluginRegistry[Any]") -> bool:
+    """Whether ``exc`` is ``registry``'s own "no such key", not a factory's error.
+
+    A registry's miss and the bounded error for a factory's own
+    ``NotFoundError`` are both registry-raised ``NotFoundError``s. The miss
+    has no cause and lists what is available; the bounded one is raised
+    ``from`` the factory's error. A miss from a *different* registry, passed
+    through by a factory that looked something up, is not this one's.
+    """
+    return (
+        bool(getattr(exc, _RAISED_BY_A_REGISTRY, False))
+        and exc.__cause__ is None
+        and "available" in exc.context
+        and exc.context.get("registry") == registry.name
+    )
+
+
+def _raise_surfaced(
+    exc: NotFoundError | OperationError,
+    registry: "PluginRegistry[Any]",
+    *,
+    subject: str,
+    unknown: Callable[[NotFoundError], BaseException] | None,
+) -> NoReturn:
+    """What :func:`create_surfacing` and its async twin raise for ``exc``.
+
+    The one statement of the rule both share; only the ``await`` differs
+    between them.
+    """
+    if isinstance(exc, NotFoundError):
+        if unknown is not None and _is_this_registrys_miss(exc, registry):
+            raise _written_by_dataknobs(unknown(exc)) from exc
+        raise exc
+    if isinstance(exc, PluginConfigError):
+        # A config refusal the registry carried: its own words plus the key.
+        raise exc
+    cause = surfaced_cause(exc)
+    if cause is not None:
+        raise cause from cause.__cause__
+    if exc.__cause__ is None:
+        # The registry's own refusal (a ``validate_type`` mismatch, an
+        # awaitable factory on the sync lane): its text, nothing behind it.
+        raise exc
+    bounded = _bounded(exc, exc.__cause__, subject)
+    if bounded is exc:
+        raise exc
+    raise bounded from exc.__cause__
+
+
+def create_surfacing(
+    registry: "PluginRegistry[T]",
+    *,
+    subject: str,
+    unknown: Callable[[NotFoundError], BaseException] | None = None,
+    key: str | None = None,
+    config: PluginConfig | None = None,
+    **kwargs: Any,
+) -> T:
+    """Create through ``registry``, surfacing what of a failure may be shown.
+
+    The shared body of a helper in front of a :class:`PluginRegistry` -- a
+    ``create_memory_from_config``, a ``create_intent_classifier`` -- so no
+    helper reads a registry error's ``__cause__`` itself. ``key``, ``config``
+    and ``kwargs`` go to :meth:`PluginRegistry.create` unchanged. What the
+    caller sees when it fails:
+
+    - **the registry has no such key:** ``unknown(error)``, when given -- the
+      helper's own "Unknown <subject> type ... Available types: ..." text,
+      built from ``error.context["key"]`` and ``registry.list_keys()``.
+      Without ``unknown``, the registry's ``NotFoundError``;
+    - **a config refusal:** the registry's
+      :class:`~dataknobs_common.exceptions.PluginConfigError`, as built;
+    - **an error a registry raised, or dataknobs wrote** (see
+      :func:`surfaced_cause`): that error, as itself. This is what keeps
+      dataknobs' own diagnostics -- "Summary memory requires an LLM
+      provider", a nested helper's "Unknown memory type" -- in front of the
+      config's author;
+    - **any other error a factory raised:** bounded. A ``ValueError``
+      becomes a :class:`~dataknobs_common.exceptions.FactoryValueError`
+      (still a ``ValueError``); a ``ResourceError``, ``TimeoutError``,
+      ``ConcurrencyError``, ``SerializationError`` or ``ConfigurationError``
+      a bounded instance of its family; anything else the registry's
+      bounded ``OperationError``. The message is
+      ``"Failed to create <subject> '<key>' (<type>)"`` and the factory's
+      error is on ``__cause__``.
+
+    Args:
+        registry: The registry to create through.
+        subject: What is being created, as the bounded message names it
+            (``"memory backend"``).
+        unknown: Builds the error for a key the registry does not have. The
+            result is treated as dataknobs' text, so build it from names
+            only. Called only for this registry's own miss, never for a
+            factory's ``NotFoundError``.
+        key: Passed to :meth:`PluginRegistry.create`.
+        config: Passed to :meth:`PluginRegistry.create`.
+        **kwargs: Passed to :meth:`PluginRegistry.create`.
+
+    Returns:
+        The created instance.
+
+    Example:
+        ```python
+        def create_widget(config: dict[str, Any]) -> Widget:
+            return create_surfacing(
+                widget_backends,
+                subject="widget",
+                unknown=lambda e: ValueError(
+                    f"Unknown widget type: {e.context['key']}. "
+                    f"Available types: {', '.join(widget_backends.list_keys())}"
+                ),
+                config=config,
+            )
+        ```
+    """
+    try:
+        return registry.create(key=key, config=config, **kwargs)
+    except (NotFoundError, OperationError) as exc:
+        _raise_surfaced(exc, registry, subject=subject, unknown=unknown)
+
+
+async def create_surfacing_async(
+    registry: "PluginRegistry[T]",
+    *,
+    subject: str,
+    unknown: Callable[[NotFoundError], BaseException] | None = None,
+    key: str | None = None,
+    config: PluginConfig | None = None,
+    **kwargs: Any,
+) -> T:
+    """The async twin of :func:`create_surfacing`, over :meth:`PluginRegistry.create_async`.
+
+    Identical in what it raises; see :func:`create_surfacing`.
+    """
+    try:
+        return await registry.create_async(key=key, config=config, **kwargs)
+    except (NotFoundError, OperationError) as exc:
+        _raise_surfaced(exc, registry, subject=subject, unknown=unknown)
+
+
 __all__ = [
     "AsyncRegistry",
     "BackendRegistry",
@@ -2698,4 +2959,7 @@ __all__ = [
     "PluginRegistry",
     "Registry",
     "Unavailable",
+    "create_surfacing",
+    "create_surfacing_async",
+    "surfaced_cause",
 ]
