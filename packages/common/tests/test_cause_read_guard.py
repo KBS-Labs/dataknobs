@@ -74,6 +74,8 @@ class TestAssertNoCauseRead:
         [
             "import traceback\ndef fault(exc):\n    return traceback.format_exception(exc)\n",
             "from traceback import format_exc\n",
+            "import traceback as tb\ndef fault(exc):\n    return tb.format_exception(exc)\n",
+            "import os, traceback as tb\ndef fault():\n    return tb.format_exc()\n",
         ],
     )
     def test_formatting_the_chain_is_flagged(self, tmp_path: Path, source: str) -> None:

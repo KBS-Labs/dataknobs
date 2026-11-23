@@ -1724,7 +1724,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Messages and types are unchanged, except that a value in one of these
   refusals that a configuration document could not have written (a live
   object handed in where config was expected) is now named by its type
-  rather than its `repr`, in the message and in `context`.
+  rather than its `repr`, in the message and in `context`. A subclass of a
+  plain type counts as a live object, and a long value is cut short. The
+  Postgres identifier refusal no longer repeats the identifier: it gives its
+  length and the first character the pattern refuses, so a connection URL
+  put under `schema:` or `table:` by mistake is not shown to callers.
+
+- **A Postgres identifier, a database name or a SQL field name ending in a
+  newline is refused.** The validators matched an anchored pattern with
+  `re.match`, whose `$` also matches before a final newline, so `"records\n"`
+  passed. They now require the whole value to match.
 
 - **A sync S3 `update` stamps `created_at` and `updated_at` from one read of
   the clock.** For a stored object with no `created_at`, the two stamps came

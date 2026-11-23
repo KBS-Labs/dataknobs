@@ -195,3 +195,19 @@ class TestStreamReadAppliesTheBuilderGrammar:
         with pytest.raises(RuntimeError, match="not connected"):
             async for _ in db.stream_read(self._dotted_query()):
                 pass  # pragma: no cover
+
+
+class TestATrailingNewlineIsRefused:
+    """``$`` matches before a final newline, so an anchored ``match`` let one through."""
+
+    def test_a_field_name(self) -> None:
+        from dataknobs_data.backends.sql_base import validate_field_name
+
+        with pytest.raises(ValueError, match="Invalid field name"):
+            validate_field_name("embedding\n")
+
+    def test_a_field_path_segment(self) -> None:
+        from dataknobs_data.backends.sql_base import validate_field_path
+
+        with pytest.raises(ValueError, match="Invalid field name segment"):
+            validate_field_path("metadata.work_order_id\n")

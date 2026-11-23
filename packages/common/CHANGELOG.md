@@ -582,8 +582,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   readers — not only in `except` handlers, since a helper taking the
   exception as a parameter reads it just the same. A read is a load of
   `__cause__` or `__context__`, a string naming either (`getattr(exc,
-  "__cause__")`), or a `traceback` formatter, which renders the whole chain.
-  Reading only `type(x.__cause__)` is not flagged. An allow-list entry matching nothing is
+  "__cause__")`), or a `traceback` formatter, which renders the whole chain —
+  through the module under any alias it is imported as. Reading only `type(x.__cause__)` is not flagged. An allow-list entry matching nothing is
   an error. `assert_no_broad_except_in_error_text` now reads through a raise
   wrapped in a marking call, so marking a raise does not hide it from that
   guard.

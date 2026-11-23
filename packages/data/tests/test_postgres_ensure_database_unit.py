@@ -99,6 +99,7 @@ class TestValidateDatabaseName:
             ("my.db", "dots"),
             ("", "empty string — fails ^[a-zA-Z_] anchor"),
             ("my/db", "slashes"),
+            ("mydb\n", "trailing newline — ``$`` matches before one"),
         ],
     )
     def test_invalid_names(self, name: str, reason: str) -> None:

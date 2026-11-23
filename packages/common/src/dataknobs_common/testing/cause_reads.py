@@ -145,6 +145,16 @@ def _scan_file(path: Path) -> list[CauseReadFinding]:
         lineno = getattr(node, "lineno", 0)
         findings.append(CauseReadFinding(path, lineno, owners.get(node, "<module>"), read))
 
+    # The names the traceback module is bound to here, aliases included,
+    # so ``import traceback as tb`` cannot hide ``tb.format_exception``.
+    traceback_names = {"traceback"} | {
+        alias.asname
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name == "traceback" and alias.asname
+    }
+
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Attribute)
@@ -159,7 +169,7 @@ def _scan_file(path: Path) -> list[CauseReadFinding]:
             isinstance(node, ast.Attribute)
             and node.attr in _CHAIN_FORMATTERS
             and isinstance(node.value, ast.Name)
-            and node.value.id == "traceback"
+            and node.value.id in traceback_names
         ):
             flag(node, f"traceback.{node.attr}")
         elif isinstance(node, ast.ImportFrom) and node.module == "traceback":

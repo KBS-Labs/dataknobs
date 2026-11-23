@@ -337,15 +337,34 @@ def _is_written_by_dataknobs(exc: BaseException) -> bool:
 #: What a configuration document can write: the values YAML and JSON parse to.
 _DOCUMENT_SCALARS = (str, int, float, bool, type(None))
 
+#: How deep a document value may nest before it is named by type instead.
+#: Generous for anything a config author writes; it stops a value that
+#: contains itself from recursing until the interpreter gives up.
+_DOCUMENT_DEPTH = 32
 
-def _is_document_value(value: object) -> bool:
-    """Whether ``value`` is something a configuration document could have written."""
-    if isinstance(value, _DOCUMENT_SCALARS):
+#: The most of a document value's ``repr`` a refusal shows.
+_SHOWN_LENGTH = 200
+
+
+def _is_document_value(value: object, depth: int = 0) -> bool:
+    """Whether ``value`` is something a configuration document could have written.
+
+    The types are checked exactly, not with ``isinstance``: a subclass of
+    ``str`` or ``dict`` can carry a ``__repr__`` of its own, and a live
+    mapping such as ``os.environ`` is a mapping of strings without being
+    one an author wrote.
+    """
+    if depth > _DOCUMENT_DEPTH:
+        return False
+    kind = type(value)
+    if kind in _DOCUMENT_SCALARS:
         return True
-    if isinstance(value, list | tuple):
-        return all(_is_document_value(item) for item in value)
-    if isinstance(value, Mapping):
-        return all(isinstance(key, str) and _is_document_value(item) for key, item in value.items())
+    if kind in (list, tuple) and isinstance(value, list | tuple):
+        return all(_is_document_value(item, depth + 1) for item in value)
+    if kind is dict and isinstance(value, dict):
+        return all(
+            type(key) is str and _is_document_value(item, depth + 1) for key, item in value.items()
+        )
     return False
 
 
@@ -353,11 +372,17 @@ def _given(value: object) -> str:
     """``value`` as a refusal dataknobs marks may show it.
 
     Its ``repr`` when it is a document value -- what the config's author
-    wrote -- and otherwise only its type, because a caller can hand a live
+    wrote, cut short past a couple of hundred characters -- and otherwise
+    only its type, because a caller can hand a live
     object where a config was expected, and a live handle's ``repr`` can
     carry the connection URL it was opened with.
     """
-    return repr(value) if _is_document_value(value) else f"a {type(value).__name__}"
+    if not _is_document_value(value):
+        return f"a {type(value).__name__}"
+    shown = repr(value)
+    if len(shown) <= _SHOWN_LENGTH:
+        return shown
+    return f"{shown[:_SHOWN_LENGTH]}... ({len(shown)} characters)"
 
 
 def _given_value(value: object) -> object:

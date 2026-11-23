@@ -77,6 +77,48 @@ class TestPostgresConfigValidation:
         with pytest.raises(ConfigurationError):
             AsyncPostgresDatabase({"schema": "bad name with spaces"})
 
+    def test_a_misplaced_dsn_is_not_shown(self) -> None:
+        """The refusal names what is wrong with the value, not the value.
+
+        Its message is shown to callers whole, and a connection URL put
+        under an identifier key by mistake would otherwise travel with it.
+        """
+        from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            AsyncPostgresDatabase({"schema": "postgresql://u:secret@h/db"})
+
+        msg = str(exc_info.value)
+        assert "secret" not in msg
+        assert "postgresql" not in msg
+        assert "26 characters" in msg
+        assert "':' at position 10" in msg
+
+    def test_a_leading_digit_is_named(self) -> None:
+        from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            AsyncPostgresDatabase({"schema": "9lives"})
+
+        assert "'9' at position 0" in str(exc_info.value)
+
+    def test_a_trailing_newline_is_refused(self) -> None:
+        """``$`` matches before a final newline, so ``match`` let one through."""
+        from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            AsyncPostgresDatabase({"schema": "records\n"})
+
+        assert "'\\n' at position 7" in str(exc_info.value)
+
+    def test_an_empty_identifier_is_named(self) -> None:
+        from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            AsyncPostgresDatabase({"schema": ""})
+
+        assert "is empty" in str(exc_info.value)
+
 
 @requires_package("asyncpg")
 class TestPgVectorStoreConfigValidation:

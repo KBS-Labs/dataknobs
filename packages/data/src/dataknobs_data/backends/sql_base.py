@@ -143,7 +143,7 @@ def validate_field_name(field: str) -> None:
     applying this check to one rejects every nested field; use
     :func:`validate_field_path` there.
     """
-    if not _FIELD_NAME_RE.match(field):
+    if not _FIELD_NAME_RE.fullmatch(field):
         raise ValueError(
             f"Invalid field name: {field!r}. Field names must match [A-Za-z_][A-Za-z0-9_]*."
         )
@@ -166,7 +166,7 @@ def validate_field_path(field: str) -> None:
     grammar calls this function; nothing re-spells it.
     """
     for part in field.split("."):
-        if not _FIELD_NAME_RE.match(part):
+        if not _FIELD_NAME_RE.fullmatch(part):
             raise ValueError(
                 f"Invalid field name segment {part!r} in {field!r}. "
                 f"Field segments must match [A-Za-z_][A-Za-z0-9_]*."

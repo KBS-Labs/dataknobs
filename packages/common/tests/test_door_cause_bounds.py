@@ -163,6 +163,13 @@ class _Engine:
         return f"Engine({DSN})"
 
 
+class _LeakyDict(dict[str, Any]):
+    """A ``dict`` subclass whose repr is not what was written."""
+
+    def __repr__(self) -> str:
+        return f"LeakyDict({DSN})"
+
+
 #: Resolved by dotted path in the test below.
 ENGINE = _Engine()
 
@@ -223,6 +230,35 @@ class TestALiveObjectIsNamedByType:
         with pytest.raises(ValidationError) as caught:
             _checked_threshold(_Engine())  # type: ignore[arg-type]
         _assert_named_by_type(caught.value)
+
+    def test_a_subclass_of_a_document_type_is_named_by_type(self) -> None:
+        with pytest.raises(ValidationError) as caught:
+            rules_from_config([_LeakyDict(name="inflect")])
+        assert DSN not in str(caught.value)
+        assert DSN not in repr(caught.value.context)
+        assert "_LeakyDict" in str(caught.value)
+
+    def test_a_live_mapping_of_strings_is_named_by_type(self) -> None:
+        import os
+
+        from dataknobs_common.exceptions import _given, _given_value
+
+        assert _given(os.environ) == f"a {type(os.environ).__name__}"
+        assert _given_value(os.environ) == type(os.environ).__name__
+
+    def test_a_value_that_contains_itself_is_refused_not_crashed(self) -> None:
+        specs: list[Any] = []
+        specs.append(specs)
+        with pytest.raises(ValidationError) as caught:
+            rules_from_config(specs)
+        assert "given a list" in str(caught.value)
+
+    def test_a_long_document_value_is_cut_short(self) -> None:
+        from dataknobs_common.exceptions import _given
+
+        shown = _given("x" * 10_000)
+        assert len(shown) < 300
+        assert shown.startswith("'xxx")
 
     def test_a_document_value_is_still_shown(self) -> None:
         with pytest.raises(ValidationError) as caught:
