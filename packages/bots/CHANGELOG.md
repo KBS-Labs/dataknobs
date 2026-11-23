@@ -64,6 +64,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A backend this install cannot build is reported with its reason.**
+  `create_memory_from_config`, `create_knowledge_base_from_config` and
+  `create_source_from_config` reported a backend declared unavailable as
+  `"Unknown <type>: ..."`, dropping the registry's "is not available here:
+  <reason>". They now raise the registry's `PluginUnavailableError`, which is
+  still the `ValueError` they document, and also a `NotFoundError`. Through
+  the API it is a 404 with the message shown and the context withheld, the
+  `NotFoundError` row's policy; `DEFAULT_ERROR_POLICY` gives it a row of its
+  own, as it does every common type.
+
 - **A backend's own words no longer reach a caller of the subsystem
   helpers.** `create_memory_from_config`, `create_knowledge_base_from_config`
   and `create_source_from_config` unwrapped any `ValueError` or

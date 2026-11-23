@@ -400,6 +400,7 @@ def create_widget(config: dict[str, Any]) -> Widget:
 | When creating through the registry fails with | The helper raises |
 |---|---|
 | the registry's miss for the key | `unknown(error)`, or the `NotFoundError` when `unknown` is omitted |
+| a key declared unavailable (`declare_unavailable`) | the registry's `PluginUnavailableError("Plugin '<key>' is not available here: <reason>")` — both a `NotFoundError` and a `ValueError` |
 | a `PluginConfigError` | that error, as built |
 | a factory error a registry raised, or dataknobs wrote, and that has not changed since | that error, as itself |
 | a factory's `ValueError` or `ValidationError` | `FactoryValueError("Failed to create widget '<key>' (ValueError)")` — both a `ValueError` and a `ValidationError` |
@@ -408,8 +409,10 @@ def create_widget(config: dict[str, Any]) -> Widget:
 
 In every bounded case the factory's error is on `__cause__`, for a log.
 `unknown` is called only for this registry's own miss, never for a factory's
-`NotFoundError` or a miss in another registry a factory looked something up
-in. `create_surfacing_async` is the twin over `create_async`.
+`NotFoundError`, a miss in another registry a factory looked something up
+in, or a key declared unavailable: that name is spelled correctly, and the
+registry's reason says what to install. `create_surfacing_async` is the twin
+over `create_async`.
 
 A helper that writes its own message around the failure rather than raising
 it asks `surfaced_cause(exc)` instead: the cause when its words may be shown,

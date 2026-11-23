@@ -362,6 +362,9 @@ _EXPECTED_POLICY: dict[str, tuple[int, bool, bool]] = {
     "RateLimitError": (429, True, True),
     # Message only: the context enumerates a registry keyspace.
     "NotFoundError": (404, True, False),
+    # Message only, as its parent: the reason is the registry owner's text, and
+    # the context lists the registry's keyspace.
+    "PluginUnavailableError": (404, True, False),
     # Message only: the type's documented example puts a SQL query in context.
     "TimeoutError": (504, True, False),
     "ConfigurationError": (500, False, False),

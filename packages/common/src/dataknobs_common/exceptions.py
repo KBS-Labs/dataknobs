@@ -604,6 +604,44 @@ class FactoryValueError(ValidationError, ValueError):
     """
 
 
+class PluginUnavailableError(NotFoundError, ValueError):
+    """A plugin a registry knows of but cannot create here.
+
+    Raised by :meth:`~dataknobs_common.registry.PluginRegistry.create` (and
+    its async twin) for a key declared with
+    :meth:`~dataknobs_common.registry.PluginRegistry.declare_unavailable`:
+    a backend behind an optional dependency that is not installed. The
+    message is ``"<kind> '<key>' is not available here: <reason>"``, with the
+    reason the declaration gave, because reporting the key as unknown sends
+    its reader looking for a typo in a name that is spelled correctly.
+
+    **Both a** :class:`NotFoundError` **and a** ``ValueError``:
+
+    - a ``NotFoundError``, because that is what a registry raises for a key
+      it cannot create, so an ``except NotFoundError`` around ``create`` keeps
+      catching it;
+    - a ``ValueError``, because a helper in front of a registry -- a
+      ``create_memory_from_config`` -- promises that a configuration problem
+      arrives as one, and naming a backend this install cannot build is a
+      configuration problem.
+
+    A helper passes it through as itself rather than calling its ``unknown``
+    hook. A registry whose ``not_found_exception`` is not ``NotFoundError``
+    raises that type instead, with the same message.
+
+    ``context`` carries ``key``, ``registry``, ``available`` and
+    ``unavailable`` (the reason).
+
+    Example:
+        ```python
+        try:
+            memory = await create_memory_from_config({"type": "vector"})
+        except PluginUnavailableError as e:
+            report_to_author(str(e))  # "... is not available here: needs faiss"
+        ```
+    """
+
+
 class ConcurrencyError(DataknobsError):
     """Raised when concurrent operation conflicts occur.
 
@@ -888,6 +926,7 @@ __all__ = [
     "OperationError",
     "PluginConfigError",
     "FactoryValueError",
+    "PluginUnavailableError",
     "ConcurrencyError",
     "SerializationError",
     "TimeoutError",

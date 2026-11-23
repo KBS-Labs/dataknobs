@@ -212,6 +212,24 @@ class FactoryValueError(ValidationError, ValueError):
 
 Caught by `except ValueError` and by `except ValidationError`.
 
+#### `PluginUnavailableError`
+
+Raised by `PluginRegistry.create` and `create_async` for a key declared with
+`declare_unavailable`: a plugin the registry knows of but cannot create here,
+usually because its optional dependency is not installed. The message is
+`"<kind> '<key>' is not available here: <reason>"`, and `context` carries
+`key`, `registry`, `available` and `unavailable` (the reason).
+`create_surfacing` passes it through as itself rather than calling its
+`unknown` hook. A registry whose `not_found_exception` is not `NotFoundError`
+raises that type instead.
+
+```python
+class PluginUnavailableError(NotFoundError, ValueError):
+    """A plugin a registry knows of but cannot create here."""
+```
+
+Caught by `except NotFoundError` and by `except ValueError`.
+
 #### `ConfigurationError`
 
 Raised for configuration issues.

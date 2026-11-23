@@ -46,6 +46,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ConfigBindingResolver` no longer hands back a coroutine as the resolved
+  resource.** A factory that is a plain `async def`, or whose `create` or
+  `build` is one, returned a coroutine, and both `resolve` and
+  `resolve_async` returned it unawaited and cached it. `resolve_async` now
+  awaits whatever the factory returned. `resolve`, which cannot await,
+  raises a `BindingResolverError` naming the factory's type and the
+  resource and saying to call `resolve_async()`; nothing is cached, and the
+  coroutine is closed so no `RuntimeWarning` follows. `AsyncCallableFactory`'s
+  own "requires async context" text now reaches the caller instead of
+  `(RuntimeError)`.
+
+- **`resolve` builds a class through its `from_config`, as `resolve_async`
+  does.** The two paths chose a constructor separately: `resolve_async`
+  preferred `from_config_async`, while `resolve` called `cls(**config)` even
+  for a class with `from_config`. Both now follow one precedence --
+  `from_config_async` and `create_async` when the caller can await, then
+  `from_config`, `create`, `build` or the factory itself -- which is the
+  order `PluginRegistry` and `ObjectBuilder` use. A class registered directly
+  on the resolver whose `from_config` behaves differently from its
+  constructor is now built through `from_config` on both paths.
+
 - **`ConfigBindingResolver` keeps a factory's words out of its error.**
   `resolve` and `resolve_async` raised
   `BindingResolverError(f"Failed to create {type}[{name}]: {e}")`, so a

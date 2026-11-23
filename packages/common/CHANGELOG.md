@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A registry bounds its own error once a factory has added words to it.**
+  An error a `PluginRegistry` raised -- a nested lookup that missed, a nested
+  factory's bounded failure -- passes through an outer factory as itself,
+  because the registry wrote its text. A factory that caught one, appended the
+  connection URL it tried and re-raised the same instance got that URL past
+  `create`, `create_async`, `get` and `get_async`, since the registry
+  recognised its error by a mark on the instance rather than by its words. It
+  now passes one through only while its message and `context` are what the
+  registry wrote; an amended one is bounded like any factory error,
+  `"Failed to create plugin '<outer key>' (<type>)"`, with the amended error
+  on `__cause__`. An error `naming_refusals` prefixed still passes through,
+  prefix included.
+
+- **A backend declared unavailable is reported with its reason through the
+  helpers.** `create_surfacing` called its `unknown` hook for every miss, so a
+  helper turned `"Plugin 'vector' is not available here: needs the 'faiss'
+  extra"` into `"Unknown memory type: vector"`, and the reader went looking
+  for a typo in a name spelled correctly. The registry's own text now reaches
+  the caller, as a `PluginUnavailableError`, and `unknown` is called only for
+  a key the registry has never heard of. The miss's `context` carries the
+  reason as `unavailable`.
+
+- **Registering a plugin clears the unavailable marks of its aliases.**
+  `declare_unavailable(key, aliases=...)` marks every spelling, and
+  `register(key, ...)` cleared only the canonical key's mark, so an alias went
+  on refusing, "not available here", a plugin that was registered.
+  `register` now drops every mark that answers through the key, as
+  `unregister` already did; the alias becomes an ordinary unknown key.
+
 - **A factory's own words stay bounded past the doors that write around a
   registry.** `tokenizer_from_config` and `rules_from_config` caught a
   registry's bounded failure and interpolated the factory's error from
@@ -546,6 +575,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.sources` still binds the name, so no existing import breaks.
 
 ### Added
+
+- **`PluginUnavailableError`, for a plugin a registry knows of but cannot
+  create here.** Raised by `PluginRegistry.create` and `create_async` for a
+  key declared with `declare_unavailable`, whose message says it is not
+  available here and why. It is both a `NotFoundError`, which a registry
+  raises for a key it cannot create, and a `ValueError`, which the helpers in
+  front of registries promise for a configuration problem, so an `except` of
+  either kind keeps catching it. A registry with its own
+  `not_found_exception` keeps raising that type.
 
 - **`surfaced_cause`, `create_surfacing` and `create_surfacing_async`: the one
   answer to "may a caller see this factory's error?".** A `PluginRegistry`
@@ -1697,15 +1735,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 372,
-  the thirty-two beyond them being the operation family, the near-spelling
+  the resolution cascade — 134 names, taking the package's `__all__` to 373,
+  the thirty-three beyond them being the operation family, the near-spelling
   rung, the surface-form catalogue, the index-source family, the edge rule's
   three functions, `narrowest`, the tokenizer family (`Tokenizer`,
   `TOKENIZERS`, `tokenizer_from_config`), `aclosing_iter`, `PluginConfig`,
   `naming_refusals`, `fingerprint_value`, `freeze_structure`,
   `thaw_structure`, `FrozenMapping`, `ConfigFieldError`, `PluginConfigError`,
-  `FactoryValueError`, `surfaced_cause`, `create_surfacing` and
-  `create_surfacing_async`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond them,
+  `FactoryValueError`, `PluginUnavailableError`, `surfaced_cause`,
+  `create_surfacing` and `create_surfacing_async`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond them,
   which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to

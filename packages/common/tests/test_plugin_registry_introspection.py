@@ -835,3 +835,53 @@ class TestUnregisteringAKeyOtherSpellingsDependOn:
 
         assert registry.list_known_keys() == []
         assert registry.get_metadata("real") == {}
+
+
+class TestRegisteringAKeyOtherSpellingsDependOn:
+    """Registering the canonical key clears the marks that answer through it.
+
+    ``unregister`` already drops every unavailable alias whose
+    ``describes_key`` is the key, because the two states are exclusive and a
+    mark cannot outlive what explains it. ``register`` cleared the canonical
+    key's own mark only, so an alias went on refusing a plugin that was by
+    then registered, with a reason that was no longer true.
+    """
+
+    def _declared(self) -> PluginRegistry[Any]:
+        registry = PluginRegistry[Any]("t")
+        registry.declare_unavailable(
+            "postgres",
+            metadata={"requires_install": "pip install x[postgres]"},
+            reason="psycopg2 is not installed",
+            aliases=("pg", "postgresql"),
+        )
+        return registry
+
+    def test_its_aliases_stop_reporting_the_stale_reason(self) -> None:
+        registry = self._declared()
+
+        registry.register("postgres", _Plugin)
+
+        assert registry.is_registered("postgres") is True
+        assert registry.unavailable_reason("pg") is None
+        assert registry.unavailable_reason("postgresql") is None
+        assert registry.list_known_keys() == ["postgres"]
+
+    def test_an_alias_lookup_is_an_ordinary_miss_not_the_stale_refusal(self) -> None:
+        registry = self._declared()
+        registry.register("postgres", _Plugin)
+
+        with pytest.raises(NotFoundError) as caught:
+            registry.create(key="pg")
+
+        assert "not available here" not in str(caught.value)
+        assert str(caught.value) == "Plugin 'pg' not registered"
+
+    def test_registering_an_alias_on_its_own_clears_only_that_alias(self) -> None:
+        registry = self._declared()
+
+        registry.register("pg", _Plugin)
+
+        assert registry.unavailable_reason("pg") is None
+        assert registry.unavailable_reason("postgres") == "psycopg2 is not installed"
+        assert registry.unavailable_reason("postgresql") == "psycopg2 is not installed"

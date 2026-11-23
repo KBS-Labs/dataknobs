@@ -635,6 +635,18 @@ resolver.register_factory("databases", AsyncCallableFactory(create_database))
 db = await resolver.resolve_async("databases", "conversations")
 ```
 
+A plain `async def` function, or a factory whose `create` or `build` is
+`async def`, works through `resolve_async` too: whatever the factory returns
+is awaited when it is awaitable. `resolve` cannot await, so it refuses such a
+factory with a `BindingResolverError` naming its type and saying to call
+`resolve_async()`, and caches nothing.
+
+**How a factory is called.** Both methods follow one precedence. `resolve_async`
+first tries `from_config_async(config)` and `create_async(**config)`; then both
+try `from_config(config)`, `create(**config)`, `build(**config)`, and finally
+`factory(**config)`. A class with `from_config` is built through it on both
+paths, as `ObjectBuilder` and `PluginRegistry` build it.
+
 ## Usage Patterns
 
 ### Pattern 1: Direct Environment Config
@@ -848,8 +860,8 @@ llm_providers:
 | `unregister_factory(type)` | Remove factory |
 | `has_factory(type)` | Check if factory registered |
 | `get_registered_types()` | List registered types |
-| `resolve(type, name, use_cache, **overrides)` | Resolve to instance |
-| `resolve_async(type, name, use_cache, **overrides)` | Async resolution |
+| `resolve(type, name, use_cache, **overrides)` | Resolve to instance; refuses an async factory |
+| `resolve_async(type, name, use_cache, **overrides)` | Async resolution; awaits what the factory returns |
 | `get_cached(type, name)` | Get cached instance |
 | `is_cached(type, name)` | Check if cached |
 | `clear_cache(type)` | Clear cache |
