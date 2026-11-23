@@ -40,6 +40,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, NamedTuple
 
+from dataknobs_common.exceptions import _written_by_dataknobs
 from dataknobs_common.registry import PluginRegistry
 
 
@@ -532,13 +533,15 @@ def select_backend(
         declared = registry.get_metadata(backend_type, follow_alias=True)
         hint = declared.get("requires_install") if declared else None
         if hint:
-            raise ValueError(
-                f"Backend '{backend_type}' is known but not available here. Install with: {hint}"
+            raise _written_by_dataknobs(
+                ValueError(
+                    f"Backend '{backend_type}' is known but not available here. Install with: {hint}"
+                )
             )
         if unknown_message is None:
-            raise ValueError(
-                f"Unknown backend type: {backend_type}. Available backends: {rendered}"
+            raise _written_by_dataknobs(
+                ValueError(f"Unknown backend type: {backend_type}. Available backends: {rendered}")
             )
-        raise ValueError(unknown_message(backend_type, rendered))
+        raise _written_by_dataknobs(ValueError(unknown_message(backend_type, rendered)))
 
     return backend_class, backend_type, remaining

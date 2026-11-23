@@ -32,7 +32,7 @@ from dataknobs_common import (
 )
 from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.callbacks import is_async_callable, run_callback
-from dataknobs_common.exceptions import ConfigurationError, ValidationError
+from dataknobs_common.exceptions import ConfigurationError, ValidationError, _written_by_dataknobs
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from .database_utils import ensure_record_id, process_search_results, sort_in_memory
@@ -434,10 +434,12 @@ def extract_schema_from_config(
             {"fields": schema_config}, origin=origin, context=context, keys=keys
         )
     prefix = f"{origin}: " if origin else ""
-    raise ValidationError(
-        f"{prefix}a `schema:` is a mapping (`{{fields: ...}}`) or a list of "
-        f"`{{name: <column>, type: <type>}}` rows, got {type(schema_config).__name__}",
-        context={**(context or {}), "got": type(schema_config).__name__},
+    raise _written_by_dataknobs(
+        ValidationError(
+            f"{prefix}a `schema:` is a mapping (`{{fields: ...}}`) or a list of "
+            f"`{{name: <column>, type: <type>}}` rows, got {type(schema_config).__name__}",
+            context={**(context or {}), "got": type(schema_config).__name__},
+        )
     )
 
 
