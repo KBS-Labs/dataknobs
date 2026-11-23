@@ -374,6 +374,7 @@ values while its message can be a database driver's.
 | `InvalidTransitionError` | 409 | yes | yes |
 | `RateLimitError` | 429 | yes | yes |
 | `NotFoundError` | 404 | yes | no — the context lists a registry's keys |
+| `PluginUnavailableError` | 404 | yes | no — the context lists a registry's keys |
 | `TimeoutError` | 504 | yes | no — the context can carry a query |
 | `ConfigurationError` | 500 | no — masked, see below | no |
 | `DottedPathError` | 500 | no — masked | no |

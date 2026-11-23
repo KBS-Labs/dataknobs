@@ -1704,6 +1704,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A backend whose module fails to import is reported by the module's name,
+  not the import error's text.** `register_backend` used `str(exc)` of a
+  loader's `ImportError` as the backend's unavailable reason, which a
+  registry shows to whoever asks for that backend -- through an HTTP API, as
+  a 404's message. That text can carry the absolute path of the package that
+  failed to load, or a native loader's output. The reason is now
+  `"<module> could not be imported. Install with: <hint>"`, and the full
+  text is logged at DEBUG.
+
 - **The refusals a config author depends on are marked as dataknobs' text.**
   The helpers in front of a registry now show a factory's words only when
   dataknobs wrote them, so the refusals raised inside a registry factory are

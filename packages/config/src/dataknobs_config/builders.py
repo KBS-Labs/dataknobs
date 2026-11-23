@@ -17,19 +17,26 @@ from .exceptions import ConfigError
 _FACTORY_METHODS = ("create", "create_async", "build")
 
 
-def _is_consumer_class(obj: Any) -> bool:
-    """Whether ``obj`` is a class to build through ``from_config``.
+def _is_consumer_class(obj: Any, constructor: str = "from_config") -> bool:
+    """Whether ``obj`` is a class to build through ``constructor``.
 
-    A class exposing the consumer protocol (``from_config``) and none of the
+    A class exposing the consumer protocol (``from_config``, or
+    ``from_config_async`` for a caller that can await) and none of the
     factory protocol is the thing ``factory:`` builds, not a factory to
     instantiate first. Calling it with no arguments would construct it from
     an empty config: a throwaway instance at best, and a refusal of the
     empty config -- naming fields the real config does supply -- whenever
     its config has required fields.
+
+    Only a class qualifies. ``ConfigurableBase`` gives every subclass a
+    ``from_config`` classmethod, so an *instance* of a factory deriving from
+    it answers ``hasattr`` too; its ``create`` is what builds the resource.
+    ``ConfigBindingResolver`` asks the same question, so the two cannot
+    disagree about which surface a factory is called through.
     """
     return (
         inspect.isclass(obj)
-        and hasattr(obj, "from_config")
+        and hasattr(obj, constructor)
         and not any(hasattr(obj, method) for method in _FACTORY_METHODS)
     )
 

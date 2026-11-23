@@ -249,8 +249,18 @@ def register_backend(
             backend_class = load()
         except ImportError as exc:
             # The declared driver is present but something else the module
-            # needs is not. Reported verbatim -- it names the real gap.
-            reason = str(exc)
+            # needs is not. The reason is shown to whoever asks for this
+            # backend -- through an HTTP API, a 404's message -- and an
+            # ImportError's own text can carry the absolute path of the
+            # package that failed to load, or a native loader's output. So it
+            # names the module, which is the real gap, and the full text goes
+            # to the log for the operator.
+            module = exc.name or "a module it needs"
+            reason = f"{module} could not be imported"
+            hint = metadata.get("requires_install")
+            if hint:
+                reason = f"{reason}. Install with: {hint}"
+            logger.debug("Backend '%s' failed to import: %s", key, exc)
 
     if reason is not None:
         # `load` goes with the declaration, not just the registration. A

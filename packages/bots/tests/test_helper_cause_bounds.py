@@ -28,6 +28,7 @@ from dataknobs_common.exceptions import (
     DottedPathError,
     FactoryValueError,
     NotFoundError,
+    PluginUnavailableError,
     ResourceError,
     TimeoutError,
     ValidationError,
@@ -126,6 +127,47 @@ class TestABackendsOwnWordsStayBounded:
 
         assert DSN not in str(caught.value)
         assert "Unknown" not in str(caught.value)
+
+
+@pytest.fixture
+def unavailable() -> Iterator[Callable[[str], str]]:
+    declared: list[PluginRegistry[Any]] = []
+
+    def declare(subsystem: str) -> str:
+        registry = _REGISTRIES[subsystem]
+        registry.declare_unavailable("test_absent", reason="needs the 'faiss' extra")
+        declared.append(registry)
+        return "test_absent"
+
+    yield declare
+    for registry in declared:
+        registry.unregister("test_absent")
+
+
+@pytest.mark.parametrize("subsystem", sorted(_REGISTRIES))
+class TestAKnownButUnavailableBackend:
+    """A backend this install cannot build is reported with its reason, not as a typo."""
+
+    async def test_the_reason_reaches_the_author(self, subsystem: str, unavailable: Any) -> None:
+        key = unavailable(subsystem)
+
+        with pytest.raises(PluginUnavailableError) as caught:
+            await _build(subsystem, key)
+
+        assert "Unknown" not in str(caught.value)
+        assert str(caught.value).endswith(
+            "'test_absent' is not available here: needs the 'faiss' extra"
+        )
+
+    async def test_it_is_still_the_value_error_the_helpers_promise(
+        self, subsystem: str, unavailable: Any
+    ) -> None:
+        key = unavailable(subsystem)
+
+        with pytest.raises(ValueError) as caught:
+            await _build(subsystem, key)
+
+        assert isinstance(caught.value, NotFoundError)
 
 
 # ---------------------------------------------------------------------------

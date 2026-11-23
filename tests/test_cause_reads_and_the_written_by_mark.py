@@ -122,6 +122,11 @@ MARK_SITES: dict[tuple[str, str], int] = {
     ("dataknobs_data/backends/config.py", "PostgresDatabaseConfig.__post_init__"): 1,
     ("dataknobs_data/backends/config.py", "S3DatabaseConfigBase.__post_init__"): 1,
     ("dataknobs_data/backends/postgres_mixins.py", "validate_pg_identifier"): 2,
+    # The binding resolver's refusal of an async factory on its sync path,
+    # naming the factory's type and the resource; and the async-only factory's
+    # own "use resolve_async()" text.
+    ("dataknobs_config/binding_resolver.py", "_refuse_awaitable"): 1,
+    ("dataknobs_config/binding_resolver.py", "AsyncCallableFactory.create"): 1,
     # An unknown LLM provider name.
     ("dataknobs_llm/llm/providers/__init__.py", "LLMProviderFactory.create"): 1,
     # The composite intent classifier's refusals of its child specs.

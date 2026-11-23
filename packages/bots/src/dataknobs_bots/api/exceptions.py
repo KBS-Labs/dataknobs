@@ -126,6 +126,9 @@ from dataknobs_common.exceptions import (
     PluginConfigError as CommonPluginConfigError,
 )
 from dataknobs_common.exceptions import (
+    PluginUnavailableError as CommonPluginUnavailableError,
+)
+from dataknobs_common.exceptions import (
     RateLimitError as CommonRateLimitError,
 )
 from dataknobs_common.exceptions import (
@@ -591,14 +594,14 @@ class ErrorPolicy(NamedTuple):
 
 
 #: The default type -> policy mapping, resolved by MRO walk (see
-#: :func:`resolve_error_policy`). Seventeen entries govern more than fifty
+#: :func:`resolve_error_policy`). Eighteen entries govern more than fifty
 #: reachable classes: every ``DataknobsError`` subclass the other packages
 #: define resolves to its nearest listed ancestor, so ``RecordNotFoundError``
 #: returns 404 without appearing here. An exact-type table would cover the
-#: seventeen and silently 500 the rest -- which is the behaviour this handler
+#: eighteen and silently 500 the rest -- which is the behaviour this handler
 #: replaces.
 #:
-#: Sixteen come from ``dataknobs_common.exceptions``; the seventeenth,
+#: Seventeen come from ``dataknobs_common.exceptions``; the eighteenth,
 #: ``InvalidTransitionError``, is from ``dataknobs_common.transitions``. Any
 #: count here is checked against the shipped mapping by the parity test, so
 #: the two cannot drift.
@@ -675,6 +678,20 @@ DEFAULT_ERROR_POLICY: Mapping[type[DataknobsError], ErrorPolicy] = MappingProxyT
         # `available_keys`, the registry's entire keyspace -- a "did you mean" for
         # a library caller and an inventory listing for an HTTP one.
         CommonNotFoundError: ErrorPolicy(404, True, False),
+        # A plugin a registry knows of but cannot build in this install -- a
+        # tenant's memory or knowledge-base section naming a backend whose
+        # optional dependency is missing. message: "<kind> '<key>' is not
+        # available here: <reason>". The reason is whatever the code that
+        # declared the key unavailable wrote, never the caller's config:
+        # dataknobs' own backends name the missing module and how to install
+        # it, and keep an import error's text -- which can carry an install
+        # path -- for the log. A deployment declaring its own backends
+        # unavailable owns the reasons it writes. context: `available`, the
+        # registry's keyspace, for the same reason as its parent's row.
+        #
+        # Without this row it would resolve to `NotFoundError`'s, which is the
+        # same; the row is here because every common type is given one.
+        CommonPluginUnavailableError: ErrorPolicy(404, True, False),
         # message: that something timed out, and usually after how long. context:
         # the timeout value -- but this type's own documented example puts the SQL
         # query there too, so a raiser following it disclosed the query.

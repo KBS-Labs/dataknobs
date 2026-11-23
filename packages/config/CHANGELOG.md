@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reimplementing how they are assigned. Passing it with `use_env=False` raises
   `ValueError` rather than building a source nothing would read.
 
+- **`ConfigBindingResolver.register_factory` is typed for every shape the
+  resolver builds through.** It was annotated `ResourceFactory |
+  Callable[..., Any]`, so registering an object with only `build`,
+  `create_async`, `from_config` or `from_config_async` -- each of which the
+  resolver calls -- was a type error at the call site. The parameter is now
+  `RegisteredFactory`, a union of `ResourceFactory`, `AsyncResourceFactory`,
+  three new protocols (`BuildingResourceFactory`, `ConfigConsumerFactory`,
+  `AsyncConfigConsumerFactory`) and `Callable[..., Any]`, all in
+  `dataknobs_config.binding_resolver`. Something with none of those surfaces
+  is still a type error.
+
 ### Changed
 
 - **BREAKING: `examples.widgets.WidgetConfig` is no longer hashable**, as no
@@ -45,6 +56,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, so a call passing anything else was already a no-op and is now an error.
 
 ### Fixed
+
+- **`ConfigBindingResolver` no longer hands back a coroutine as the resolved
+  resource.** A factory that is a plain `async def`, or whose `create` or
+  `build` is one, returned a coroutine, and both `resolve` and
+  `resolve_async` returned it unawaited and cached it. `resolve_async` now
+  awaits whatever the factory returned. `resolve`, which cannot await,
+  raises a `BindingResolverError` naming the factory's type and the
+  resource and saying to call `resolve_async()`; nothing is cached. A
+  coroutine is closed so no `RuntimeWarning` follows, and a `Task` or `Future`
+  is cancelled. `AsyncCallableFactory`'s own "requires async context" text
+  now reaches the caller instead of `(RuntimeError)`.
+
+- **Both resolver paths choose how to call a factory the same way.** They
+  chose separately: `resolve_async` called `from_config_async` on anything
+  that had one, factory objects included, while `resolve` called
+  `cls(**config)` even for a class with `from_config`. Both now follow one
+  precedence. A *consumer class* -- a class with `from_config` and none of
+  `create`, `create_async` or `build`, the test `ObjectBuilder` already
+  applies -- is built through `from_config_async` (when the caller can
+  await) or `from_config`. Anything else is called through `create_async`
+  (when the caller can await), `create`, `build`, or as a callable, and
+  last, an object that is not a class and has none of those -- a registered
+  singleton, a module -- through `from_config_async` or `from_config`. That
+  is `ObjectBuilder`'s order for a `factory:`. So a class with both
+  `from_config` and `create` is a factory and goes through `create`, and a
+  factory object whose class inherits `ConfigurableBase`, and with it a
+  `from_config` classmethod, is still called through its `create`. A
+  consumer class registered directly on the resolver whose `from_config`
+  behaves differently from its constructor is now built through
+  `from_config` on the sync path too.
 
 - **`ConfigBindingResolver` keeps a factory's words out of its error.**
   `resolve` and `resolve_async` raised

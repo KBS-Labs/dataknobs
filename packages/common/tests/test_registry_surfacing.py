@@ -23,6 +23,7 @@ from dataknobs_common import (
     OperationError,
     PluginConfigError,
     PluginRegistry,
+    PluginUnavailableError,
     RateLimitError,
     ResourceError,
     SerializationError,
@@ -156,6 +157,18 @@ class TestTheMarkVouchesForWordsNotForAnInstance:
 
     def test_an_unchanged_marked_error_is_ours(self) -> None:
         error = _written_by_dataknobs(ValidationError("ours", context={"field": "x"}))
+        assert _is_written_by_dataknobs(error)
+
+    def test_an_error_given_a_note_after_marking_is_no_longer_ours(self) -> None:
+        """A note travels with the error into every traceback and log line."""
+        error = _written_by_dataknobs(ValueError("ours"))
+        error.add_note(f"tried {DSN}")
+        assert not _is_written_by_dataknobs(error)
+
+    def test_a_note_present_when_marked_is_part_of_what_is_vouched_for(self) -> None:
+        error = ValueError("ours")
+        error.add_note("see the configuration guide")
+        _written_by_dataknobs(error)
         assert _is_written_by_dataknobs(error)
 
     def test_a_context_that_cannot_be_copied_is_never_vouched_for(self) -> None:
@@ -341,7 +354,7 @@ class TestWhatDataknobsWroteIsShown:
     async def test_a_nested_registrys_error_amended_by_a_factory_is_bounded(
         self, lane: str
     ) -> None:
-        """The outer registry passes it through; the helper must not trust it."""
+        """The outer registry bounds it, naming its own key; the helper shows that."""
         inner = _registry(pg=_raising(ValueError(DSN)))
 
         def composite(config: Any, **_: Any) -> Any:
@@ -356,7 +369,26 @@ class TestWhatDataknobsWroteIsShown:
             await _create(lane, outer, {"type": "composite"})
 
         _assert_no_dsn(caught.value)
-        assert caught.value.context == {"registry": "widgets", "cause_type": "OperationError"}
+        assert str(caught.value) == "Failed to create plugin 'composite' (OperationError)"
+        assert caught.value.context == {"key": "composite", "registry": "widgets"}
+
+    @pytest.mark.parametrize("family", [NotFoundError, OperationError])
+    async def test_an_error_a_registrys_populator_raised_is_bounded(
+        self, lane: str, family: type
+    ) -> None:
+        """A first-access populator's error leaves ``create`` unwrapped, so the helper bounds it."""
+
+        def populate(registry: PluginRegistry[Any]) -> None:
+            raise family(f"could not list backends at {DSN}")
+
+        registry: PluginRegistry[Any] = PluginRegistry(
+            "widgets", config_key="type", on_first_access=populate
+        )
+        with pytest.raises(family) as caught:
+            await _create(lane, registry, {"type": "pg"})
+
+        _assert_no_dsn(caught.value)
+        assert str(caught.value) == f"Failed to create widget ({family.__name__})"
 
     async def test_a_nested_registrys_bounded_error_keeps_its_own_key(self, lane: str) -> None:
         """Its words name the inner key, so the outer subject is not put in front of them."""
@@ -454,3 +486,78 @@ class TestNotFound:
 
         assert calls == []
         assert "missing-gadget" in str(caught.value)
+
+
+@pytest.mark.parametrize("lane", LANES)
+class TestAKnownButUnavailableKey:
+    """The registry's "not available here: <reason>" reaches the caller.
+
+    A helper's ``unknown`` hook words a typo: "Unknown widget type ...
+    Available types: ...". A key declared unavailable is spelled correctly,
+    and its reason says what to install, so the hook is not called for it.
+    """
+
+    def _declared(self) -> PluginRegistry[Any]:
+        registry = _registry(pg=_raising(ValueError(DSN)))
+        registry.declare_unavailable("vec", reason="needs the 'faiss' extra")
+        return registry
+
+    async def test_the_registrys_reason_reaches_the_caller(self, lane: str) -> None:
+        calls: list[NotFoundError] = []
+
+        def unknown(error: NotFoundError) -> ValueError:
+            calls.append(error)
+            return ValueError("Unknown widget type")
+
+        with pytest.raises(PluginUnavailableError) as caught:
+            await _create(lane, self._declared(), {"type": "vec"}, unknown=unknown)
+
+        assert calls == []
+        assert str(caught.value) == "Plugin 'vec' is not available here: needs the 'faiss' extra"
+        assert caught.value.context["unavailable"] == "needs the 'faiss' extra"
+
+    async def test_it_is_caught_by_both_contracts(self, lane: str) -> None:
+        """A helper's ``except ValueError`` and a registry's ``except NotFoundError`` both hold."""
+        registry = self._declared()
+        for unknown in (_unknown(registry), None):
+            with pytest.raises(ValueError) as as_value:
+                await _create(lane, registry, {"type": "vec"}, unknown=unknown)
+            assert isinstance(as_value.value, NotFoundError)
+            assert "not available here" in str(as_value.value)
+
+    async def test_a_truly_unknown_key_still_gets_the_helpers_text(self, lane: str) -> None:
+        registry = self._declared()
+        with pytest.raises(ValueError) as caught:
+            await _create(lane, registry, {"type": "nope"}, unknown=_unknown(registry))
+
+        assert not isinstance(caught.value, NotFoundError)
+        assert str(caught.value) == "Unknown widget type: nope. Available types: pg"
+
+
+class TestTheRegistryRaisesItsOwnUnavailableType:
+    def test_a_default_registry_raises_plugin_unavailable_error(self) -> None:
+        registry: PluginRegistry[Any] = PluginRegistry("widgets")
+        registry.declare_unavailable("vec", reason="needs faiss", aliases=("vector",))
+
+        for key in ("vec", "vector"):
+            with pytest.raises(PluginUnavailableError) as caught:
+                registry.create(key=key)
+            assert caught.value.context == {
+                "key": key,
+                "registry": "widgets",
+                "available": [],
+                "unavailable": "needs faiss",
+            }
+            assert _is_written_by_dataknobs(caught.value)
+
+    def test_a_registry_with_its_own_not_found_type_keeps_it(self) -> None:
+        registry: PluginRegistry[Any] = PluginRegistry(
+            "widgets", not_found_kind="widget", not_found_exception=ValueError
+        )
+        registry.declare_unavailable("vec", reason="needs faiss")
+
+        with pytest.raises(ValueError) as caught:
+            registry.create(key="vec")
+
+        assert type(caught.value) is ValueError
+        assert str(caught.value) == "widget 'vec' is not available here: needs faiss"

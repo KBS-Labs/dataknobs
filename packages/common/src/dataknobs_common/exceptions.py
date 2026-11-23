@@ -269,8 +269,15 @@ def _value_free_refusal_behind(exc: BaseException) -> tuple[str, dict[str, Any]]
 _WRITTEN_BY_DATAKNOBS = "_dataknobs_written_by_dataknobs"
 
 
-def _written_by_snapshot(exc: BaseException) -> tuple[str, dict[str, Any] | None] | None:
-    """What ``exc`` says now: its message and a deep copy of its ``context``.
+def _written_by_snapshot(
+    exc: BaseException,
+) -> tuple[str, dict[str, Any] | None, tuple[object, ...]] | None:
+    """What ``exc`` says now: its message, a deep copy of its ``context``, and its notes.
+
+    The notes are part of it because ``add_note`` is the other way a handler
+    puts words on an error it re-raises: they print with it in every
+    traceback and log line, so a connection URL added that way travels as
+    surely as one appended to the message.
 
     ``None`` when the ``context`` cannot be copied, so such an error is never
     marked -- which bounds it, the safe direction.
@@ -278,9 +285,10 @@ def _written_by_snapshot(exc: BaseException) -> tuple[str, dict[str, Any] | None
     context = getattr(exc, "context", None)
     try:
         copied = copy.deepcopy(dict(context)) if isinstance(context, Mapping) else None
+        notes = tuple(getattr(exc, "__notes__", ()))
     except Exception:
         return None
-    return str(exc), copied
+    return str(exc), copied, notes
 
 
 def _written_by_dataknobs(exc: _E) -> _E:
@@ -302,7 +310,8 @@ def _written_by_dataknobs(exc: _E) -> _E:
     in place of the instance: a surfaced error is raised again *as itself*,
     so the only safe answer to "its words changed since" is "then it is no
     longer only ours". An error a handler amends after marking (appending to
-    ``args``, changing ``context``) reads as unmarked and is bounded.
+    ``args``, changing ``context``, adding a note) reads as unmarked and is
+    bounded.
     :func:`naming_refusals` is the one amender that marks again, and only an
     error that was marked when it arrived.
 
@@ -604,6 +613,44 @@ class FactoryValueError(ValidationError, ValueError):
     """
 
 
+class PluginUnavailableError(NotFoundError, ValueError):
+    """A plugin a registry knows of but cannot create here.
+
+    Raised by :meth:`~dataknobs_common.registry.PluginRegistry.create` (and
+    its async twin) for a key declared with
+    :meth:`~dataknobs_common.registry.PluginRegistry.declare_unavailable`:
+    a backend behind an optional dependency that is not installed. The
+    message is ``"<kind> '<key>' is not available here: <reason>"``, with the
+    reason the declaration gave, because reporting the key as unknown sends
+    its reader looking for a typo in a name that is spelled correctly.
+
+    **Both a** :class:`NotFoundError` **and a** ``ValueError``:
+
+    - a ``NotFoundError``, because that is what a registry raises for a key
+      it cannot create, so an ``except NotFoundError`` around ``create`` keeps
+      catching it;
+    - a ``ValueError``, because a helper in front of a registry -- a
+      ``create_memory_from_config`` -- promises that a configuration problem
+      arrives as one, and naming a backend this install cannot build is a
+      configuration problem.
+
+    A helper passes it through as itself rather than calling its ``unknown``
+    hook. A registry whose ``not_found_exception`` is not ``NotFoundError``
+    raises that type instead, with the same message.
+
+    ``context`` carries ``key``, ``registry``, ``available`` and
+    ``unavailable`` (the reason).
+
+    Example:
+        ```python
+        try:
+            memory = await create_memory_from_config({"type": "vector"})
+        except PluginUnavailableError as e:
+            report_to_author(str(e))  # "... is not available here: needs faiss"
+        ```
+    """
+
+
 class ConcurrencyError(DataknobsError):
     """Raised when concurrent operation conflicts occur.
 
@@ -888,6 +935,7 @@ __all__ = [
     "OperationError",
     "PluginConfigError",
     "FactoryValueError",
+    "PluginUnavailableError",
     "ConcurrencyError",
     "SerializationError",
     "TimeoutError",
