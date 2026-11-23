@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, Self
 
 from dataknobs_common.entity_resolution import async_signal_backends
 from dataknobs_common.events import Event, EventType, create_event_bus
-from dataknobs_common.exceptions import ValidationError, naming_refusals
+from dataknobs_common.exceptions import ValidationError, _naming_refusals_as_dataknobs
 from dataknobs_common.lifecycle import close_if_owned
 from dataknobs_common.hierarchy import AsyncEnumerableHierarchy
 from dataknobs_common.ontology import (
@@ -1288,7 +1288,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
             # A backend refuses its configuration without knowing it was
             # opened for a vocabulary, so its message names a table and
             # nothing a reader of the ontology document would recognise.
-            with naming_refusals(
+            with _naming_refusals_as_dataknobs(
                 f"ontology {ontology_id!r}, binding {source_id!r}",
                 context={"ontology": ontology_id, "binding": source_id},
             ):

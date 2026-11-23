@@ -21,8 +21,8 @@ from dataknobs_common import (
     OperationError,
     PluginConfigError,
     PluginRegistry,
-    naming_refusals,
 )
+from dataknobs_common.exceptions import _naming_refusals_as_dataknobs
 from dataknobs_common.structured_config import StructuredConfig
 
 DSN = "postgres://admin:hunter2@db.internal:5432/prod"
@@ -135,7 +135,11 @@ class TestAnUnamendedRegistryErrorPassesThrough:
     async def test_a_config_refusal_prefixed_by_naming_refusals_passes_through(
         self, lane: str
     ) -> None:
-        """``naming_refusals`` edits in place and re-marks, so the words stay dataknobs'."""
+        """Dataknobs' own ``naming_refusals`` edits in place and re-marks, so the words stay its own.
+
+        The public one never vouches for its caller's origin: see
+        ``test_registry_vouched_words_and_unavailable_gets.py``.
+        """
 
         class Section(StructuredConfig):
             _UNKNOWN_KEYS = "raise"
@@ -145,7 +149,7 @@ class TestAnUnamendedRegistryErrorPassesThrough:
         inner.register("closed", lambda config, **_: Section.from_dict({"pth": "x"}))
 
         def body() -> Any:
-            with naming_refusals("source 'cases'"):
+            with _naming_refusals_as_dataknobs("source 'cases'"):
                 return inner.create(key="closed")
 
         outer = _outer(lane, body)

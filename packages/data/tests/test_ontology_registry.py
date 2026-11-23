@@ -21,7 +21,12 @@ import pytest
 
 from dataknobs_common.capabilities import Capability
 from dataknobs_common.events import Event, EventType, InMemoryEventBus, event_bus_backends
-from dataknobs_common.exceptions import ConfigFieldError, OperationError, ValidationError
+from dataknobs_common.exceptions import (
+    ConfigFieldError,
+    OperationError,
+    ValidationError,
+    _is_written_by_dataknobs,
+)
 from dataknobs_common.ontology import (
     AUTHORED_SOURCE_ID,
     RESOLVER_SECTION_KEYS,
@@ -1715,6 +1720,47 @@ async def test_a_binding_naming_two_tables_opens_a_handle_for_each(tmp_path: Pat
 # --------------------------------------------------------------------------
 # What a refusal names
 # --------------------------------------------------------------------------
+
+
+async def test_a_backends_refusal_names_the_binding_and_stays_dataknobs_text() -> None:
+    """A backend refuses its config without knowing an ontology opened it.
+
+    The registry names the ontology and binding in front of the refusal, and a
+    refusal dataknobs wrote stays marked as its own once named, so a helper in
+    front of a registry still shows it. The origin is the document's own ids,
+    which is what lets this caller vouch for it where a consumer's
+    ``naming_refusals`` cannot. No server is needed: a native table with no
+    declared columns is refused at construction.
+    """
+    document = _document(
+        sources=[
+            {
+                "id": "products",
+                "kind": "record",
+                "database": {"backend": "postgres", "layout": "native", "id_column": "sku"},
+                "entity_projection": {
+                    "table": "products",
+                    "id": "sku",
+                    "name": "title",
+                    "type": {"const": "Product"},
+                },
+                "schema": [
+                    {"name": "sku", "type": "string"},
+                    {"name": "title", "type": "string"},
+                ],
+            }
+        ]
+    )
+    registry = OntologyRegistry()
+    try:
+        with pytest.raises(ValidationError) as excinfo:
+            await registry.load(document)
+    finally:
+        await registry.close()
+
+    assert str(excinfo.value).startswith(f"ontology {document['id']!r}, binding 'products': ")
+    assert excinfo.value.context["binding"] == "products"
+    assert _is_written_by_dataknobs(excinfo.value)
 
 
 async def test_reload_names_the_condition_rather_than_reporting_it_unloaded() -> None:

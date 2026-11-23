@@ -42,8 +42,10 @@ ALLOWED_CAUSE_READS = {
     # The doors' question: a refusal with nothing behind it, else surfaced_cause.
     "dataknobs_common/registry.py::_shown_failure",
     # The walk for a value-free config refusal. Reads marks and returns
-    # only the words a mark recorded, never an instance's text.
-    "dataknobs_common/exceptions.py::_value_free_refusal_behind",
+    # only text a mark vouches for: the outermost written-by link above the
+    # refusal while it still says what it said when marked, else the words
+    # the refusal's own mark recorded -- never an unvouched instance's text.
+    "dataknobs_common/exceptions.py::_carried_refusal_words",
     # The guard's own vocabulary: the attribute names it looks for, as strings.
     "dataknobs_common/testing/cause_reads.py::<module>",
     # Appends the cause to a server-side log line. The response body is built
@@ -64,8 +66,11 @@ def test_nothing_reads_a_cause_but_the_reviewed_readers() -> None:
 #: claim that its text names only what a config's author wrote or what
 #: dataknobs knows, and it needs reading before it joins this list.
 MARK_SITES: dict[tuple[str, str], int] = {
-    # The one amender that marks again, and only an error marked on entry.
-    ("dataknobs_common/exceptions.py", "naming_refusals"): 1,
+    # The one amender that marks again, and only an error marked on entry:
+    # the private core, when its in-tree caller asks it to vouch for an
+    # origin naming only what a config's author wrote (a source, a binding).
+    # The public `naming_refusals` never vouches.
+    ("dataknobs_common/exceptions.py", "_naming_refusals"): 1,
     # Every error a registry raises: names, keys and types, all its own.
     ("dataknobs_common/registry.py", "_ours"): 1,
     # A helper's own "Unknown <subject> type" text, built from names.

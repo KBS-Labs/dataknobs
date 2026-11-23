@@ -19,9 +19,9 @@ from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
 from dataknobs_common.exceptions import (
     NotFoundError,
     _is_written_by_dataknobs,
+    _naming_refusals_as_dataknobs,
     _value_free_words,
     _written_by_dataknobs,
-    naming_refusals,
 )
 from dataknobs_common.imports import resolve_optional_callable
 from dataknobs_common.registry import PluginFactory, PluginRegistry, create_surfacing_async
@@ -560,7 +560,7 @@ async def _create_database_source(
         # The backend refuses its configuration -- the declaration as it reads
         # it, a native table's key column -- without knowing a source opened
         # it; a bot config can declare several, so name which one it was.
-        with naming_refusals(origin, context={"source": config.name}):
+        with _naming_refusals_as_dataknobs(origin, context={"source": config.name}):
             # Off the loop: resolving a backend name imports its implementation
             # from disk, and a file backend's config normalizes its path.
             db = await asyncio.to_thread(async_database_factory.create, **db_config)

@@ -214,14 +214,16 @@ Caught by `except ValueError` and by `except ValidationError`.
 
 #### `PluginUnavailableError`
 
-Raised by `PluginRegistry.create` and `create_async` for a key declared with
-`declare_unavailable`: a plugin the registry knows of but cannot create here,
-usually because its optional dependency is not installed. The message is
-`"<kind> '<key>' is not available here: <reason>"`, and `context` carries
-`key`, `registry`, `available` and `unavailable` (the reason).
+Raised by `PluginRegistry.create`, `create_async`, `get` and `get_async` for
+a key declared with `declare_unavailable`: a plugin the registry knows of but
+cannot create here, usually because its optional dependency is not installed.
+The message is `"<kind> '<key>' is not available here: <reason>"`, and
+`context` carries `key`, `registry`, `available` and `unavailable` (the
+reason). `get` raises it even when the registry has a `default_factory`,
+rather than building the default in place of the plugin it was named.
 `create_surfacing` passes it through as itself rather than calling its
-`unknown` hook. A registry whose `not_found_exception` is not `NotFoundError`
-raises that type instead.
+`unknown` hook. On `create`, a registry whose `not_found_exception` is not
+`NotFoundError` raises that type instead; `get` always raises this one.
 
 ```python
 class PluginUnavailableError(NotFoundError, ValueError):
@@ -379,6 +381,12 @@ It is amended rather than rebuilt, so a subclass such as `DottedPathError`
 keeps its type and its attributes (`ref`, `reason`), and a handler a caller
 already has for it still catches it. Nested blocks prefix outermost first.
 Any other exception passes through untouched.
+
+The origin is the caller's text, so it is never vouched for as dataknobs'
+own. Raised to a caller directly, the amended error reads as above. Behind a
+`PluginRegistry`, the refusal's own words arrive without the origin, bounded
+under the outer key, because an origin can hold what the caller tried — a
+connection URL included.
 
 **Example:**
 ```python

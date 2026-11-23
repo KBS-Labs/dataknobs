@@ -313,7 +313,19 @@ The mark records the refusal's words as `from_dict` wrote them, and those are
 what the registry carries. A factory that amends the refusal before raising it
 — prefixing an origin with `naming_refusals`, or adding to its `context` —
 adds nothing of its own: the amended refusal is still on `__cause__`, for the
-logs.
+logs. The origin is the factory's text, and it can hold the connection URL the
+factory tried, so `naming_refusals` never vouches for it.
+
+The one exception is text dataknobs itself wrote above the refusal. An
+in-tree factory that names the refusal it re-raises, in an error dataknobs
+marks as its own and raises `from` the refusal, has that error's words
+carried instead, with its `context` merged over the refusal's. That is how a
+bot's grounded `database` source reports which source refused a backend key:
+
+```text
+PluginConfigError: Failed to create plugin 'database': Source 'cases':
+  MemoryDatabaseConfig does not accept 'nonsense_key'. ...
+```
 
 A refusal is reported wherever it is on the `__cause__` chain, including one
 about config the factory built for itself rather than the caller's. Its text

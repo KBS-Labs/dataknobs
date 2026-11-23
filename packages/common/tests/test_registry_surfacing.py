@@ -31,10 +31,13 @@ from dataknobs_common import (
     ValidationError,
     create_surfacing,
     create_surfacing_async,
-    naming_refusals,
     surfaced_cause,
 )
-from dataknobs_common.exceptions import _is_written_by_dataknobs, _written_by_dataknobs
+from dataknobs_common.exceptions import (
+    _is_written_by_dataknobs,
+    _naming_refusals_as_dataknobs,
+    _written_by_dataknobs,
+)
 from dataknobs_common.structured_config import StructuredConfig
 
 DSN = "postgres://admin:hunter2@db.internal:5432/prod"
@@ -184,23 +187,25 @@ class TestTheMarkVouchesForWordsNotForAnInstance:
         error = _written_by_dataknobs(ValidationError("ours", context={"x": _Ambiguous()}))
         assert not _is_written_by_dataknobs(error)
 
-    def test_naming_refusals_survives_a_context_whose_comparison_raises(self) -> None:
+    def test_dataknobs_own_naming_refusals_survives_a_context_whose_comparison_raises(self) -> None:
         with pytest.raises(ValidationError) as caught:
-            with naming_refusals("source 'cases'"):
+            with _naming_refusals_as_dataknobs("source 'cases'"):
                 raise _written_by_dataknobs(ValidationError("ours", context={"x": _Ambiguous()}))
         assert str(caught.value) == "source 'cases': ours"
         assert not _is_written_by_dataknobs(caught.value)
 
-    def test_naming_refusals_keeps_a_marked_refusal_ours_with_its_origin(self) -> None:
+    def test_dataknobs_own_naming_refusals_keeps_a_marked_refusal_ours_with_its_origin(
+        self,
+    ) -> None:
         with pytest.raises(ValidationError) as caught:
-            with naming_refusals("source 'cases'", context={"source": "cases"}):
+            with _naming_refusals_as_dataknobs("source 'cases'", context={"source": "cases"}):
                 raise _written_by_dataknobs(ValidationError("unknown field type 'money'"))
         assert str(caught.value) == "source 'cases': unknown field type 'money'"
         assert _is_written_by_dataknobs(caught.value)
 
-    def test_naming_refusals_leaves_an_unmarked_refusal_unmarked(self) -> None:
+    def test_dataknobs_own_naming_refusals_leaves_an_unmarked_refusal_unmarked(self) -> None:
         with pytest.raises(ValidationError) as caught:
-            with naming_refusals("source 'cases'"):
+            with _naming_refusals_as_dataknobs("source 'cases'"):
                 raise ValidationError(f"cannot reach {DSN}")
         assert not _is_written_by_dataknobs(caught.value)
 
