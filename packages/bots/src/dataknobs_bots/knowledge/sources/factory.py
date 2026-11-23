@@ -17,14 +17,14 @@ from typing import TYPE_CHECKING, Any
 
 from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
 from dataknobs_common.exceptions import (
-    DataknobsError,
     NotFoundError,
-    OperationError,
-    PluginConfigError,
+    _is_written_by_dataknobs,
+    _value_free_words,
+    _written_by_dataknobs,
     naming_refusals,
 )
 from dataknobs_common.imports import resolve_optional_callable
-from dataknobs_common.registry import PluginFactory, PluginRegistry
+from dataknobs_common.registry import PluginFactory, PluginRegistry, create_surfacing_async
 from dataknobs_data.sources.base import GroundedSource
 
 if TYPE_CHECKING:
@@ -61,11 +61,28 @@ async def create_source_from_config(
     Raises:
         ValueError: If the source type is unknown, required dependencies
             are missing, or an option is one the source and its backend
-            both refuse -- a refusal by this package's own checks.
+            both refuse -- a refusal by this package's own checks. A
+            ``database`` source's backend refusing a setting in dataknobs'
+            words (an unknown backend, S3 with no ``bucket``) names the
+            source. A backend's ``ValueError`` in its own words arrives as
+            ``Source '<name>': its database could not be opened
+            (<type>)``, with the original on ``__cause__``.
         ValidationError: If a ``database`` source's ``schema`` declares
             something the shared schema reader refuses (an unknown type, a
-            key a field does not take, a repeated or unnamed field). The
-            message names the source.
+            key a field does not take, a repeated or unnamed field), or its
+            backend refuses its layout (a native table's undeclared
+            ``id_column``, an unknown ``layout:``). The message names the
+            source.
+        ConfigurationError: If a ``database`` source's backend refuses its
+            configuration as such (a setting refused under ``layout:
+            native``, an invalid Postgres identifier), naming the source.
+        FactoryValueError: If a registered source factory of your own
+            raises a ``ValueError`` or ``ValidationError`` in its own words;
+            bounded to the source type and the error's type, the original on
+            ``__cause__``. Its ``ResourceError``, ``TimeoutError``,
+            ``ConcurrencyError``, ``SerializationError`` or
+            ``ConfigurationError`` arrives as a bounded error of that family,
+            anything else as a bounded ``OperationError``.
 
     Supported source types:
 
@@ -103,43 +120,28 @@ async def create_source_from_config(
                 level: {type: integer}
                 description: {type: text}
     """
+
     # A falsy ``source_type`` (e.g. ``type:`` declared null in YAML) would
     # otherwise reach the registry with ``key=None`` — and since
     # ``source_backends`` has no ``config_key``, that raises an opaque
     # "key is required" error. Surface the documented unknown-type message.
-    if not config.source_type:
-        raise ValueError(
+    def unknown(_: NotFoundError | None = None) -> ValueError:
+        return ValueError(
             f"Unknown grounded source type: {config.source_type!r}. "
             f"Supported types: {', '.join(sorted(source_backends.list_keys()))}"
         )
 
-    try:
-        return await source_backends.create_async(
-            key=config.source_type,
-            config=config,
-            knowledge_base=knowledge_base,
-        )
-    except NotFoundError as exc:
-        raise ValueError(
-            f"Unknown grounded source type: {config.source_type!r}. "
-            f"Supported types: {', '.join(sorted(source_backends.list_keys()))}"
-        ) from exc
-    except PluginConfigError:
-        # A config refusal the registry carried: the refusal's own words plus
-        # the plugin ``key``. Raised as built -- the unwrap below would hand
-        # back the bare refusal and lose the key.
-        raise
-    except OperationError as exc:
-        # The registry wraps a builder-raised exception in OperationError.
-        # Surface the original cause unchanged — both config-problem
-        # ``ValueError``s (e.g. missing knowledge_base) and the dataknobs
-        # error hierarchy (``ResourceError``, ``ConfigurationError``, …) so
-        # the builder's native error type reaches the caller. A wrapper with
-        # no informative cause propagates as-is.
-        cause = exc.__cause__
-        if isinstance(cause, ValueError | DataknobsError):
-            raise cause from cause.__cause__
-        raise
+    if not config.source_type:
+        raise _written_by_dataknobs(unknown())
+
+    return await create_surfacing_async(
+        source_backends,
+        subject="grounded source",
+        unknown=unknown,
+        key=config.source_type,
+        config=config,
+        knowledge_base=knowledge_base,
+    )
 
 
 def _create_vector_kb_source(
@@ -152,11 +154,13 @@ def _create_vector_kb_source(
     from .vector import VectorKnowledgeSource
 
     if knowledge_base is None:
-        raise ValueError(
-            f"Source {config.name!r} has type 'vector_kb' but no "
-            f"knowledge_base was provided. Either configure a "
-            f"knowledge_base in the bot config or use a different "
-            f"source type."
+        raise _written_by_dataknobs(
+            ValueError(
+                f"Source {config.name!r} has type 'vector_kb' but no "
+                f"knowledge_base was provided. Either configure a "
+                f"knowledge_base in the bot config or use a different "
+                f"source type."
+            )
         )
 
     # Resolve optional identity callables from dotted import paths.
@@ -561,9 +565,25 @@ async def _create_database_source(
             # from disk, and a file backend's config normalizes its path.
             db = await asyncio.to_thread(async_database_factory.create, **db_config)
     except ValueError as exc:
-        # The factory names the config class and the offending key; a bot
-        # config can declare several sources, so name which one it was.
-        raise ValueError(f"Source {config.name!r}: {exc}") from exc
+        # A bot config can declare several sources, so name which one it was.
+        # The factory's words are repeated only when dataknobs wrote them: an
+        # unknown or uninstalled backend, or a key the backend's config class
+        # refuses (that refusal's words as ``from_dict`` wrote them). A
+        # backend's own text can carry the connection URL it was handed, so
+        # it is named by type and kept on ``__cause__``.
+        if _is_written_by_dataknobs(exc):
+            raise _written_by_dataknobs(ValueError(f"Source {config.name!r}: {exc}")) from exc
+        refusal = _value_free_words(exc)
+        if refusal is not None:
+            raise _written_by_dataknobs(
+                ValueError(f"Source {config.name!r}: {refusal[0]}")
+            ) from exc
+        # Names only the source and the error's type, so it is ours.
+        raise _written_by_dataknobs(
+            ValueError(
+                f"Source {config.name!r}: its database could not be opened ({type(exc).__name__})"
+            )
+        ) from exc
 
     # A backend that needs connecting raises on every query until it is.
     # ``DatabaseSource`` no longer absorbs that -- it lets the failure

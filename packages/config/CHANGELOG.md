@@ -46,6 +46,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ConfigBindingResolver` keeps a factory's words out of its error.**
+  `resolve` and `resolve_async` raised
+  `BindingResolverError(f"Failed to create {type}[{name}]: {e}")`, so a
+  database factory refusing with its connection URL put it in the message.
+  The message is now `Failed to create <type>[<name>] (<error type>)`, with
+  the factory's error on `__cause__`. A refusal dataknobs wrote, which names
+  only what the config's author wrote (an unknown provider name, say), keeps
+  its words: `Failed to create <type>[<name>]: <refusal>`.
+- **A factory with no `create()`, `build()` or `__call__` is refused before
+  the call.** The refusal is `Factory <TypeName> has no create(), build(), or
+  __call__ method`, raised with no cause. It used to be raised inside the
+  call, re-wrapped as `Failed to create <type>[<name>]: Factory <repr> ...`
+  with that refusal as its cause, and it named the factory by its `repr`,
+  which a factory object's author writes and which can carry what it holds.
+
 - **A config consumer named by `factory:` is built from the config.** Resolving
   `factory:` called the class with no arguments to learn whether it was a
   factory to instantiate, and read a `TypeError` as *no*. A

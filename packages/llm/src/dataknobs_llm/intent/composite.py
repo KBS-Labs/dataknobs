@@ -27,6 +27,8 @@ from collections import Counter
 from collections.abc import Sequence
 from typing import Any, Literal
 
+from dataknobs_common.exceptions import _written_by_dataknobs
+
 from dataknobs_llm.intent.protocol import (
     IntentClassifier,
     IntentMatchResult,
@@ -42,8 +44,10 @@ class CompositeIntentClassifier(IntentClassifier):
         strategy: Literal["first_match", "vote"] = "first_match",
     ) -> None:
         if not classifiers:
-            raise ValueError(
-                "CompositeIntentClassifier requires at least one inner classifier",
+            raise _written_by_dataknobs(
+                ValueError(
+                    "CompositeIntentClassifier requires at least one inner classifier",
+                )
             )
         self._classifiers = list(classifiers)
         self._strategy = strategy

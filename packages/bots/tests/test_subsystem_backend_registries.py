@@ -55,7 +55,7 @@ from dataknobs_bots.memory import (
 )
 from dataknobs_bots.memory.summary import SummaryMemory
 from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
-from dataknobs_common.exceptions import ConfigFieldError, PluginConfigError
+from dataknobs_common.exceptions import ConfigFieldError, FactoryValueError, PluginConfigError
 from dataknobs_common.structured_config import StructuredConfig
 from dataknobs_common.testing import (
     assert_structured_config_consumer,
@@ -262,10 +262,15 @@ class TestBackendErrorTypePreserved:
 
         register_memory_backend("failing", _failing)
         try:
-            with pytest.raises(ResourceError, match="connection refused"):
+            with pytest.raises(ResourceError) as caught:
                 await create_memory_from_config({"type": "failing"})
         finally:
             memory_backends.unregister("failing")
+
+        # The family survives, so an HTTP boundary still answers 503; the
+        # backend's words do not, since they can carry its connection URL.
+        assert str(caught.value) == "Failed to create memory backend 'failing' (ResourceError)"
+        assert str(caught.value.__cause__) == "backend connection refused"
 
 
 @dataclass(frozen=True)
@@ -333,7 +338,12 @@ class TestAConfigRefusalKeepsItsWordsThroughTheSubsystemFactories:
     @pytest.mark.parametrize("subsystem", sorted(_SUBSYSTEMS))
     @pytest.mark.asyncio
     async def test_a_backends_own_config_field_error_is_not_carried(self, subsystem: str) -> None:
-        """The unwrap still hands back the factory's error, as before this type existed."""
+        """A factory's own ``ConfigFieldError`` is bounded, not carried and not handed back.
+
+        Its words are the factory's, not a refusal ``from_dict`` wrote, so the
+        helper names the plugin and the type and keeps the original on
+        ``__cause__``. It is still a ``ValueError``, as the helpers promise.
+        """
         registry, build = _SUBSYSTEMS[subsystem]
 
         def _own(config: Any, **_: Any) -> Any:
@@ -341,12 +351,16 @@ class TestAConfigRefusalKeepsItsWordsThroughTheSubsystemFactories:
 
         registry.register("closed", _own)
         try:
-            with pytest.raises(ConfigFieldError) as caught:
+            with pytest.raises(FactoryValueError) as caught:
                 await build({})
         finally:
             registry.unregister("closed")
 
         assert not isinstance(caught.value, PluginConfigError)
+        assert isinstance(caught.value, ValueError)
+        assert "the factory's own words" not in str(caught.value)
+        assert str(caught.value).endswith("'closed' (ConfigFieldError)")
+        assert type(caught.value.__cause__) is ConfigFieldError
 
 
 # ===========================================================================

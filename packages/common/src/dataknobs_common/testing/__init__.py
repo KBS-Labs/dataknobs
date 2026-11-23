@@ -95,6 +95,10 @@ from dataknobs_common.testing.dataclass_sweep import (
     Supplied,
     UnbuildableError,
 )
+from dataknobs_common.testing.cause_reads import (
+    CauseReadFinding,
+    assert_no_cause_read,
+)
 from dataknobs_common.testing.dotted_imports import (
     CANONICAL_MODULE,
     AdHocImportFinding,
@@ -156,6 +160,7 @@ __all__ = [
     "DK_SYNC_BRIDGE_THREAD",
     "AdHocImportFinding",
     "BroadExceptFinding",
+    "CauseReadFinding",
     "DataclassSweep",
     "FixedClock",
     "Supplied",
@@ -169,6 +174,7 @@ __all__ = [
     "GUARDED_ERROR_NAMES",
     "assert_no_ad_hoc_dotted_import",
     "assert_no_broad_except_in_error_text",
+    "assert_no_cause_read",
     "assert_no_leaked_bridge_threads",
     "assert_polymorphic_bindings_resolve",
     "assert_structured_config_consumer",

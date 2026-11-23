@@ -78,6 +78,7 @@ from dataknobs_common.ontology.sources import (
     SourceDescription,
 )
 from dataknobs_common.ontology.values import AsyncOntology, Ontology, OntologyParts, StrCodec
+from dataknobs_common.registry import _shown_failure
 from dataknobs_common.ontology.variants import apply_variants
 from dataknobs_common.text import rules_from_config
 
@@ -2703,24 +2704,21 @@ def _rung_fault(exc: Exception) -> str:
     keeps the rest on ``__cause__``. That reasoning is right and this does not
     defeat it.
 
-    What it does is read one exception type back out: a ``ValidationError``
-    from a rung factory describes a **document**, and it is the one that says
-    which handle was missing or which value was written where a handle
-    belongs. Losing it would leave a document author holding "failed to create
-    plugin" for a fault they can fix in one line.
-
-    **The claim is about intent, not about provenance.** Every rung factory in
-    this distribution raises ``ValidationError`` only for a document fault, so
-    for those the unwrapping is exact. A consumer's own factory is theirs, and
-    one raising ``ValidationError`` over a connection it could not open would
-    have that text read back out here. The trade is deliberate: the alternative
-    withholds the diagnosis from every document fault to bound a message no
-    in-tree factory writes, and a consumer who wants the bound keeps their own
-    failures under a type that is not this one.
+    What it reads back out is decided by **who wrote the text, not by its
+    type**. A rung factory's refusal of a **document** -- a missing handle, a
+    value written where a handle belongs, a tokenizer or variant rule the
+    document names wrong -- is text dataknobs wrote, marked where it is
+    raised, and it is shown whole: losing it would leave a document author
+    holding "failed to create plugin" for a fault they can fix in one line. A
+    consumer's own rung factory is theirs, and its text is shown only when a
+    registry or dataknobs wrote it; anything else stays the registry's
+    bounded "Failed to create plugin '<kind>' (<type>)", with the original on
+    ``__cause__``. A ``ValidationError`` is no exception: a consumer factory
+    can raise one with the connection it could not open in its text.
     """
-    cause = exc.__cause__
-    if isinstance(exc, OperationError) and isinstance(cause, ValidationError):
-        return str(cause)
+    if isinstance(exc, OperationError):
+        shown = _shown_failure(exc)
+        return str(shown if shown is not None else exc)
     return str(exc)
 
 

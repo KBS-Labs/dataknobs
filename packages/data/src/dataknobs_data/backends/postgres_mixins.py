@@ -13,7 +13,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.exceptions import ConfigurationError, _written_by_dataknobs
 from dataknobs_utils.sql_utils import quote_ident
 
 from ..records import Record
@@ -42,7 +42,7 @@ def validate_database_name(name: str) -> None:
     Raises:
         ConfigurationError: If the name contains invalid characters.
     """
-    if not _VALID_DB_NAME_RE.match(name):
+    if not _VALID_DB_NAME_RE.fullmatch(name):
         raise ConfigurationError(
             f"Invalid database name {name!r}: must start with a letter or "
             "underscore and contain only alphanumeric characters and underscores"
@@ -70,17 +70,45 @@ def validate_pg_identifier(value: Any, key: str) -> str:
             match the unquoted-identifier pattern.
     """
     if not isinstance(value, str):
-        raise ConfigurationError(
-            f"Postgres '{key}' must be a string identifier, got "
-            f"{type(value).__name__}.  If you intended to pass a "
-            "non-identifier payload, use a different config key."
+        raise _written_by_dataknobs(
+            ConfigurationError(
+                f"Postgres '{key}' must be a string identifier, got "
+                f"{type(value).__name__}.  If you intended to pass a "
+                "non-identifier payload, use a different config key."
+            )
         )
-    if not _VALID_DB_NAME_RE.match(value):
-        raise ConfigurationError(
-            f"Invalid Postgres '{key}' identifier: {value!r}.  Must "
-            f"match {_VALID_DB_NAME_RE.pattern}."
+    if not _VALID_DB_NAME_RE.fullmatch(value):
+        raise _written_by_dataknobs(
+            ConfigurationError(
+                f"Invalid Postgres '{key}' identifier: {_identifier_fault(value)}.  "
+                f"Must match {_VALID_DB_NAME_RE.pattern}."
+            )
         )
     return value
+
+
+def _identifier_fault(value: str) -> str:
+    """What is wrong with ``value`` as an identifier, without showing it.
+
+    The refusal is shown to callers whole, and a connection URL put under
+    an identifier key by mistake would otherwise travel with it; its
+    length and the first character the pattern refuses locate the mistake
+    as well. That one character, and the length, are all of the value it
+    shows.
+    """
+    if not value:
+        return "the value is empty"
+    position = next(
+        (
+            index
+            for index, char in enumerate(value)
+            if not (char == "_" or (char.isascii() and char.isalpha()))
+            and not (index and char.isascii() and char.isdigit())
+        ),
+        len(value),
+    )
+    shown = value[position] if position < len(value) else ""
+    return f"{len(value)} characters, {shown!r} at position {position} is not allowed"
 
 
 class PostgresBaseConfig(VectorConfigMixin):

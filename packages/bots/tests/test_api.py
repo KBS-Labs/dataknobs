@@ -351,6 +351,9 @@ _EXPECTED_POLICY: dict[str, tuple[int, bool, bool]] = {
     # A ConfigFieldError raised through a registry; the refusal's text and
     # context plus the plugin key and registry name, never a factory's words.
     "PluginConfigError": (422, True, True),
+    # A bounded stand-in for a factory's own ValueError: names the plugin and
+    # the error's type, never the factory's words.
+    "FactoryValueError": (422, True, True),
     "ConsentRequiredError": (403, True, True),
     "ConcurrencyError": (409, True, True),
     # Overrides an inherited 500 rather than declaring a base's status; lives
@@ -1135,6 +1138,8 @@ class TestErrorPolicyTable:
             14: "fourteen",
             15: "fifteen",
             16: "sixteen",
+            17: "seventeen",
+            18: "eighteen",
         }[count]
 
         assert f"{spelled.capitalize()} entries govern" in source, (
@@ -1284,6 +1289,43 @@ class TestDataknobsErrorHandling:
         assert "did you mean 'max_messages'?" in body["message"]
         assert body["detail"]["unknown"] == ["max_mesages"]
         assert body["detail"]["key"] == "closed"
+
+    @pytest.mark.parametrize("raised", ["ValueError", "ValidationError"])
+    async def test_a_memory_backends_own_words_never_reach_the_response(self, raised):
+        """A backend refusing in its own words, with its DSN in them, through the factory.
+
+        ``create_memory_from_config`` used to hand the backend's exception back
+        as itself, so a ``ValidationError`` rendered as a 422 *with* the DSN in
+        the body. Either now arrives as a bounded ``FactoryValueError``, still
+        a 422, naming the key and the type; the DSN goes to the log only.
+        """
+        from dataknobs_bots.memory import create_memory_from_config, memory_backends
+
+        dsn = "postgres://admin:hunter2@db.internal:5432/prod"
+        error_type = getattr(common_exceptions, raised, None) or ValueError
+
+        def leaky(config, **kwargs):
+            raise error_type(f"cannot reach the conversation store at {dsn}")
+
+        memory_backends.register("leaky", leaky)
+        try:
+            with pytest.raises(common_exceptions.DataknobsError) as caught:
+                await create_memory_from_config({"type": "leaky"})
+        finally:
+            memory_backends.unregister("leaky")
+
+        response = await _response_for(caught.value)
+
+        assert dsn not in response.text
+        body = response.json()
+        assert response.status_code == 422
+        assert body["error"] == "FactoryValueError"
+        assert body["message"] == f"Failed to create memory backend 'leaky' ({raised})"
+        assert body["detail"] == {
+            "key": "leaky",
+            "registry": "memory_backends",
+            "cause_type": raised,
+        }
 
     async def test_the_configuration_diagnostic_reaches_the_log_by_default(self, caplog):
         """The case the gap was reported for, and why it is masked by default.

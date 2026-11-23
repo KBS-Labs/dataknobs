@@ -192,6 +192,7 @@ from dataknobs_common.exceptions import (
     DottedPathTypeError,
     NotFoundError,
     OperationError,
+    FactoryValueError,
     PluginConfigError,
     RateLimitError,
     ResourceError,
@@ -392,6 +393,9 @@ from dataknobs_common.registry import (
     PluginFactory,
     PluginRegistry,
     Registry,
+    create_surfacing,
+    create_surfacing_async,
+    surfaced_cause,
 )
 from dataknobs_common.resolver import (
     AsyncCachedResolver,
@@ -506,6 +510,7 @@ __all__ = [
     "ConsentRequiredError",
     "OperationError",
     "PluginConfigError",
+    "FactoryValueError",
     "ConcurrencyError",
     "SerializationError",
     "TimeoutError",
@@ -668,6 +673,9 @@ __all__ = [
     "PluginFactory",
     "PluginRegistry",
     "Registry",
+    "create_surfacing",
+    "create_surfacing_async",
+    "surfaced_cause",
     # Resource resolvers
     "ResourceResolver",
     "AsyncResourceResolver",

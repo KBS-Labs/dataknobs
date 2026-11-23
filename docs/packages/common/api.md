@@ -196,6 +196,22 @@ except PluginConfigError as e:
 
 See [Errors from a factory](plugin-registry.md#errors-from-a-factory).
 
+#### `FactoryValueError`
+
+The bounded stand-in for a `ValueError` or `ValidationError` a factory raised
+in its own words,
+raised by `create_surfacing` and `create_surfacing_async`. The factory's text
+may carry what it was handed, so it is not shown: the message is
+`"Failed to create <subject> '<key>' (<type>)"`, `context` carries `key`,
+`registry` and `cause_type`, and the factory's error is on `__cause__`.
+
+```python
+class FactoryValueError(ValidationError, ValueError):
+    """A bounded stand-in for a factory's own ``ValueError``."""
+```
+
+Caught by `except ValueError` and by `except ValidationError`.
+
 #### `ConfigurationError`
 
 Raised for configuration issues.
@@ -909,6 +925,37 @@ handler_cls = handlers.get_factory("custom")
 - `name` (property) — Registry name
 - `cached_instances` (property) — Direct access to instance cache dict
 - Supports `len()`, `in` operator, and `repr()`
+
+#### Helpers in front of a registry
+
+```python
+def surfaced_cause(exc: BaseException) -> BaseException | None: ...
+
+def create_surfacing(
+    registry: PluginRegistry[T],
+    *,
+    subject: str,
+    unknown: Callable[[NotFoundError], BaseException] | None = None,
+    key: str | None = None,
+    config: PluginConfig | None = None,
+    **kwargs: Any,
+) -> T: ...
+
+async def create_surfacing_async(...) -> T: ...  # same parameters, over create_async
+```
+
+`surfaced_cause` returns a registry error's `__cause__` when a registry or
+another part of dataknobs wrote it and its words have not changed since, else
+`None`.
+`create_surfacing` is the shared body of a helper over a registry: the
+registry's miss becomes `unknown(error)`, a `PluginConfigError` is raised as
+built, a surfaced cause is raised as itself, and any other factory error is
+bounded — a `ValueError` or `ValidationError` as `FactoryValueError`, a `ResourceError`,
+`TimeoutError`, `ConcurrencyError`, `SerializationError` or
+`ConfigurationError` as a bounded error of its family, anything else as the
+registry's bounded `OperationError`.
+
+See [Wrapping a registry in a helper](plugin-registry.md#wrapping-a-registry-in-a-helper).
 
 ---
 

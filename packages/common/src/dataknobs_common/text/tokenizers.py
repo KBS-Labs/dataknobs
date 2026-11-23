@@ -46,9 +46,15 @@ from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from typing import Any, TypeAlias
 
-from dataknobs_common.exceptions import OperationError, ValidationError
-from dataknobs_common.registry import PluginRegistry
-from dataknobs_common.text.scan import token_spans, word_spans
+from dataknobs_common.exceptions import (
+    OperationError,
+    ValidationError,
+    _given,
+    _given_value,
+    _written_by_dataknobs,
+)
+from dataknobs_common.registry import PluginRegistry, _shown_failure
+from dataknobs_common.text.scan import _APOSTROPHE_MODES, token_spans, word_spans
 
 __all__ = ["TOKENIZERS", "Tokenizer", "tokenizer_from_config"]
 
@@ -59,20 +65,26 @@ Tokenizer: TypeAlias = Callable[[str], Sequence[tuple[int, int]]]
 
 def _default_factory(config: Mapping[str, Any]) -> Tokenizer:
     if config:
-        raise ValueError(f"takes no parameters; given {sorted(config)}")
+        raise _written_by_dataknobs(ValueError(f"takes no parameters; given {sorted(config)}"))
     return token_spans
 
 
 def _words_factory(config: Mapping[str, Any]) -> Tokenizer:
     unknown = sorted(set(config) - {"apostrophes"})
     if unknown:
-        raise ValueError(f"takes only 'apostrophes'; given {unknown}")
+        raise _written_by_dataknobs(ValueError(f"takes only 'apostrophes'; given {unknown}"))
     apostrophes = config.get("apostrophes", "keep")
     if apostrophes == "keep":
         return word_spans
     # word_spans refuses an unknown mode, so check it now rather than on the
-    # first string the tokenizer is handed.
-    word_spans("", apostrophes=apostrophes)
+    # first string the tokenizer is handed -- here, where the refusal is
+    # marked as dataknobs' text and so reaches the author through a registry.
+    if apostrophes not in _APOSTROPHE_MODES:
+        raise _written_by_dataknobs(
+            ValueError(
+                f"apostrophes must be one of {list(_APOSTROPHE_MODES)}; given {apostrophes!r}"
+            )
+        )
     return partial(word_spans, apostrophes=apostrophes)
 
 
@@ -120,27 +132,44 @@ def tokenizer_from_config(
     config = {"name": spec} if isinstance(spec, str) else spec
     name = config.get("name") if isinstance(config, Mapping) else None
     if not isinstance(name, str) or not name:
-        raise ValidationError(
-            f"tokenizer must be a tokenizer name, a mapping with a 'name' naming "
-            f"one, or a callable; given {spec!r}",
-            context={"spec": spec},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"tokenizer must be a tokenizer name, a mapping with a 'name' naming "
+                f"one, or a callable; given {_given(spec)}",
+                context={"spec": _given_value(spec)},
+            )
         )
     if not TOKENIZERS.is_registered(name):
-        raise ValidationError(
-            f"unknown tokenizer {name!r}. Registered tokenizers: {sorted(TOKENIZERS.list_keys())}",
-            context={"tokenizer": name},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"unknown tokenizer {name!r}. Registered tokenizers: "
+                f"{sorted(TOKENIZERS.list_keys())}",
+                context={"tokenizer": name},
+            )
         )
     try:
         tokenizer = TOKENIZERS.create(config=dict(config))
     except OperationError as error:
-        reason = error.__cause__ if error.__cause__ is not None else error
-        raise ValidationError(
-            f"tokenizer {name!r} {reason}", context={"tokenizer": name}
+        # A consumer factory's text may carry what it was handed, so unless
+        # dataknobs wrote it, it is named by type and kept on ``__cause__``.
+        reason = _shown_failure(error)
+        if reason is None:
+            # Names only the tokenizer and the error's type, so it is ours.
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"tokenizer {name!r} could not be built ({type(error.__cause__).__name__})",
+                    context={"tokenizer": name},
+                )
+            ) from error
+        raise _written_by_dataknobs(
+            ValidationError(f"tokenizer {name!r} {reason}", context={"tokenizer": name})
         ) from error
     if not callable(tokenizer):
-        raise ValidationError(
-            f"tokenizer {name!r}'s factory returned {tokenizer!r}, which is not "
-            f"callable; a factory returns a tokenizer",
-            context={"tokenizer": name},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"tokenizer {name!r}'s factory returned a {type(tokenizer).__name__}, "
+                f"which is not callable; a factory returns a tokenizer",
+                context={"tokenizer": name},
+            )
         )
     return tokenizer

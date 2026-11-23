@@ -368,6 +368,7 @@ values while its message can be a database driver's.
 | `ValidationError` | 422 | yes | yes |
 | `ConfigFieldError` | 422 | yes | yes |
 | `PluginConfigError` | 422 | yes | yes |
+| `FactoryValueError` | 422 | yes | yes |
 | `ConsentRequiredError` | 403 | yes | yes |
 | `ConcurrencyError` | 409 | yes | yes |
 | `InvalidTransitionError` | 409 | yes | yes |
@@ -431,6 +432,17 @@ registry raises when a tenant's knowledge-base, memory or source section does
 not fit its class, and it carries the same refusal. So a deployment that
 tightens `ConfigFieldError` — to withhold `detail`, say — writes the same row
 for `PluginConfigError`.
+
+`FactoryValueError` is what a tenant meets when a memory, knowledge-base or
+source backend refuses its section in its own words rather than through its
+config class, with a `ValueError` or a `ValidationError`. Those words can carry
+what the backend was handed — a connection URL, a credential — so the message
+is bounded to `Failed to create memory backend 'acme_store' (ValueError)` and
+the backend's text goes only to the log, on `__cause__`. DataKnobs' own refusals ("Summary memory requires an LLM
+provider", "Unknown backend type: …") are not bounded: they arrive under their
+own type with their words. A backend that fails to *connect* keeps its family
+the same way — a `ResourceError` is still a 503 and a `TimeoutError` a 504 —
+with a bounded message.
 
 **Adding a row means reading what that type's raise sites put in `context`, not
 only what its message says.** They are separate arguments precisely because the

@@ -40,6 +40,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, NamedTuple
 
+from dataknobs_common.exceptions import _written_by_dataknobs
 from dataknobs_common.registry import PluginRegistry
 
 
@@ -462,11 +463,13 @@ def build_backend(
     from_config = getattr(backend_class, "from_config", None)
     if from_config is None:
         registered = getattr(backend_class, "__name__", type(backend_class).__name__)
-        raise ValueError(
-            f"The {kind} backend registered as '{backend_type}' cannot be built "
-            f"from a config: {registered} has no 'from_config' classmethod. "
-            "Register a backend class rather than a bare callable, or build it "
-            "through the registry's own create()."
+        raise _written_by_dataknobs(
+            ValueError(
+                f"The {kind} backend registered as '{backend_type}' cannot be built "
+                f"from a config: {registered} has no 'from_config' classmethod. "
+                "Register a backend class rather than a bare callable, or build it "
+                "through the registry's own create()."
+            )
         )
     return from_config(options)
 
@@ -532,13 +535,15 @@ def select_backend(
         declared = registry.get_metadata(backend_type, follow_alias=True)
         hint = declared.get("requires_install") if declared else None
         if hint:
-            raise ValueError(
-                f"Backend '{backend_type}' is known but not available here. Install with: {hint}"
+            raise _written_by_dataknobs(
+                ValueError(
+                    f"Backend '{backend_type}' is known but not available here. Install with: {hint}"
+                )
             )
         if unknown_message is None:
-            raise ValueError(
-                f"Unknown backend type: {backend_type}. Available backends: {rendered}"
+            raise _written_by_dataknobs(
+                ValueError(f"Unknown backend type: {backend_type}. Available backends: {rendered}")
             )
-        raise ValueError(unknown_message(backend_type, rendered))
+        raise _written_by_dataknobs(ValueError(unknown_message(backend_type, rendered)))
 
     return backend_class, backend_type, remaining

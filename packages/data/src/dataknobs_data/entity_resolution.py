@@ -46,7 +46,7 @@ from dataknobs_common.entity_resolution.values import (
     MatchEvidence,
     Scoring,
 )
-from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.exceptions import ValidationError, _written_by_dataknobs
 from dataknobs_common.ontology import ONTOLOGY_ID_KEY, AsyncOntology
 
 from dataknobs_data.vector import SemanticIndex
@@ -203,13 +203,15 @@ class SemanticSignal:
         # space -- a complete answer, and one this rung cannot localize.
         declared = index.source.declares()
         if ontology.id not in declared:
-            raise ValidationError(
-                f"this index does not hold ontology {ontology.id!r}'s ids: its source "
-                f"declares {sorted(declared) or 'no named set at all'}. A rung answers "
-                f"in the resolver's ontology's id space and localizes on the way out, "
-                f"so an index over another vocabulary -- or over a bare table, whose "
-                f"ids are local -- has nothing this rung can convert",
-                context={"ontology_id": ontology.id, "declares": sorted(declared)},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"this index does not hold ontology {ontology.id!r}'s ids: its source "
+                    f"declares {sorted(declared) or 'no named set at all'}. A rung answers "
+                    f"in the resolver's ontology's id space and localizes on the way out, "
+                    f"so an index over another vocabulary -- or over a bare table, whose "
+                    f"ids are local -- has nothing this rung can convert",
+                    context={"ontology_id": ontology.id, "declares": sorted(declared)},
+                )
             )
 
     @property
@@ -485,15 +487,17 @@ def _make_semantic(config: dict[str, Any]) -> AsyncMatchSignal[str]:
     required: tuple[tuple[str, type], ...] = (("index", SemanticIndex), ("ontology", AsyncOntology))
     missing = sorted(handle for handle, _ in required if config.get(handle) is None)
     if missing:
-        raise ValidationError(
-            f"rung kind {_KEY!r} needs {missing} and the configuration supplied "
-            f"neither a value nor a handle for it. A document cannot write a live "
-            f"index or a loaded vocabulary, so these arrive from the door that holds "
-            f"both. Loading through OntologyRegistry? The handle it forwards is the "
-            f"index your own document declares, so declare one: add an `index:` "
-            f"section beside the `resolver:` section. Calling async_build_resolver "
-            f"directly? Pass `handles={{'index': ..., 'ontology': ...}}`",
-            context={"kind": _KEY, "missing": missing},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"rung kind {_KEY!r} needs {missing} and the configuration supplied "
+                f"neither a value nor a handle for it. A document cannot write a live "
+                f"index or a loaded vocabulary, so these arrive from the door that holds "
+                f"both. Loading through OntologyRegistry? The handle it forwards is the "
+                f"index your own document declares, so declare one: add an `index:` "
+                f"section beside the `resolver:` section. Calling async_build_resolver "
+                f"directly? Pass `handles={{'index': ..., 'ontology': ...}}`",
+                context={"kind": _KEY, "missing": missing},
+            )
         )
     wrong = sorted(
         f"{handle}={type(config[handle]).__name__}"
@@ -501,13 +505,15 @@ def _make_semantic(config: dict[str, Any]) -> AsyncMatchSignal[str]:
         if not isinstance(config[handle], expected)
     )
     if wrong:
-        raise ValidationError(
-            f"rung kind {_KEY!r} was given {wrong} where a live handle belongs. These "
-            f"two keys are not a document's to write -- a YAML file cannot hold an "
-            f"index or a vocabulary -- so a value here is a document naming a key the "
-            f"door was going to supply. Drop it from the `resolver:` section and let "
-            f"OntologyRegistry forward the real one, or pass it through `handles=`",
-            context={"kind": _KEY, "wrong": wrong},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"rung kind {_KEY!r} was given {wrong} where a live handle belongs. These "
+                f"two keys are not a document's to write -- a YAML file cannot hold an "
+                f"index or a vocabulary -- so a value here is a document naming a key the "
+                f"door was going to supply. Drop it from the `resolver:` section and let "
+                f"OntologyRegistry forward the real one, or pass it through `handles=`",
+                context={"kind": _KEY, "wrong": wrong},
+            )
         )
     return SemanticSignal(
         config["index"],

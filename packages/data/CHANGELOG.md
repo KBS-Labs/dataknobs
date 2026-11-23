@@ -1704,6 +1704,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The refusals a config author depends on are marked as dataknobs' text.**
+  The helpers in front of a registry now show a factory's words only when
+  dataknobs wrote them, so the refusals raised inside a registry factory are
+  marked to keep reaching the author word for word:
+  - `select_backend`'s unknown- and uninstalled-backend refusals, and
+    `build_backend`'s refusal of a registered object with no `from_config`;
+  - the shared `schema:` reader's (`extract_schema_from_config`,
+    `DatabaseSchema.from_dict`, `read_field_declarations`);
+  - a backend's refusals of its own config while it is built: the native
+    layout's columns, `id_column` and `scope:`, an unknown `layout:`, a
+    setting refused under `layout: native`, a Postgres identifier, a
+    Postgres `schema:` holding fields, Elasticsearch's positive-integer
+    settings and S3's missing `bucket`. Through `create_source_from_config`
+    these name the source again, rather than arriving as a bounded failure;
+  - the semantic rung's refusals of its handles, raised when an ontology
+    document's resolver is built.
+
+  Messages and types are unchanged, except that a value in one of these
+  refusals that a configuration document could not have written (a live
+  object handed in where config was expected) is now named by its type
+  rather than its `repr`, in the message and in `context`. A subclass of a
+  plain type counts as a live object, and a long value is cut short. The
+  Postgres identifier refusal no longer repeats the identifier: it gives its
+  length and the first character the pattern refuses, so a connection URL
+  put under `schema:` or `table:` by mistake is not shown to callers.
+
+- **A Postgres identifier, a database name or a SQL field name ending in a
+  newline is refused.** The validators matched an anchored pattern with
+  `re.match`, whose `$` also matches before a final newline, so `"records\n"`
+  passed. They now require the whole value to match.
+
 - **A sync S3 `update` stamps `created_at` and `updated_at` from one read of
   the clock.** For a stored object with no `created_at`, the two stamps came
   from two reads and differed by microseconds; they are now the same instant,

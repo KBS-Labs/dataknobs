@@ -358,6 +358,76 @@ def make_backend() -> PluginFactory[Backend]:
     ...
 ```
 
+## Wrapping a registry in a helper
+
+A package usually puts a function in front of its registry —
+`create_memory_from_config(config)` rather than
+`memory_backends.create(config=config)` — to turn the registry's miss into
+"Unknown memory type: … Available types: …" and to keep the exception types
+its callers already catch. The tempting body reads the registry's bounded
+error back off `__cause__`:
+
+```python
+# Don't: this reopens what the registry closed.
+except OperationError as exc:
+    if isinstance(exc.__cause__, ValueError):
+        raise exc.__cause__ from None
+```
+
+The type cannot tell a diagnostic you wrote from a driver's text. "Summary
+memory requires an LLM provider" and `ValueError("could not connect to
+postgres://admin:pw@db/prod")` are the same type, so the unwrap hands the
+second to your caller — and, behind an HTTP boundary that shows validation
+messages, to theirs.
+
+`create_surfacing` is that body, written once:
+
+```python
+from dataknobs_common import create_surfacing
+
+def create_widget(config: dict[str, Any]) -> Widget:
+    return create_surfacing(
+        widget_backends,
+        subject="widget",
+        unknown=lambda e: ValueError(
+            f"Unknown widget type: {e.context['key']}. "
+            f"Available types: {', '.join(sorted(widget_backends.list_keys()))}"
+        ),
+        config=config,
+    )
+```
+
+| When creating through the registry fails with | The helper raises |
+|---|---|
+| the registry's miss for the key | `unknown(error)`, or the `NotFoundError` when `unknown` is omitted |
+| a `PluginConfigError` | that error, as built |
+| a factory error a registry raised, or dataknobs wrote, and that has not changed since | that error, as itself |
+| a factory's `ValueError` or `ValidationError` | `FactoryValueError("Failed to create widget '<key>' (ValueError)")` — both a `ValueError` and a `ValidationError` |
+| a factory's `ResourceError`, `TimeoutError`, `ConcurrencyError`, `SerializationError` or `ConfigurationError` | a bounded error of the same family |
+| anything else a factory raised | the registry's bounded `OperationError` |
+
+In every bounded case the factory's error is on `__cause__`, for a log.
+`unknown` is called only for this registry's own miss, never for a factory's
+`NotFoundError` or a miss in another registry a factory looked something up
+in. `create_surfacing_async` is the twin over `create_async`.
+
+A helper that writes its own message around the failure rather than raising
+it asks `surfaced_cause(exc)` instead: the cause when its words may be shown,
+else `None`, in which case name the cause by `type(exc.__cause__).__name__`.
+
+**Your own factories' words are bounded.** What `surfaced_cause` recognises
+is a registry's error and the refusals dataknobs itself raises, marked where
+they are raised. A `ValueError` or `ValidationError` your factory raises
+reaches your caller as `FactoryValueError` naming the key, which is the safe direction: whatever
+your factory says goes to the log, not to whoever is on the other side of
+your API.
+
+`assert_no_cause_read` in `dataknobs_common.testing` keeps the unwrap from
+coming back: it fails on any read of `__cause__` or `__context__` under the
+roots you give it outside an allow-list of reviewed readers, including one
+spelled `getattr(exc, "__cause__")` and a `traceback` formatter, which renders
+the whole chain.
+
 ## Lazy Initialization
 
 The `on_first_access` callback runs once before the first public method call. This is useful for deferring imports and registrations:
