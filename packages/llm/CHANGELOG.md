@@ -94,6 +94,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`create_intent_classifier` keeps a classifier factory's own words out of
+  its errors.** It, and its async twin, unwrapped any `ValueError` off the
+  registry's bounded error, so a consumer classifier factory refusing with
+  the URL of the service it warms up against put that URL in the caller's
+  message. A configuration problem still arrives as `ValueError`, as the
+  shim has always promised: dataknobs' own refusals (an unknown name, a
+  composite child spec that is not a mapping or names no `classifier:`, an
+  empty composite) arrive word for word, and a consumer factory's
+  `ValueError` arrives as a bounded `FactoryValueError` naming the
+  classifier. Any other failure is bounded too, a `ResourceError` or
+  `TimeoutError` keeping its family. The factory's error is on `__cause__`.
+  `LLMProviderFactory.create`'s unknown-provider refusal is marked as
+  dataknobs' text, so it reaches a knowledge-base author through the bots
+  helpers unchanged.
+
 - **Grounding finds a whole word by the scanning rungs' boundary rule, not
   `\b`.** The enum, exact, boolean-keyword, array and number checks matched
   with `\b...\b`, which disagreed with word boundaries twice. Python's `\w`

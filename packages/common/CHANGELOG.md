@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A factory's own words stay bounded past the doors that write around a
+  registry.** `tokenizer_from_config` and `rules_from_config` caught a
+  registry's bounded failure and interpolated the factory's error from
+  `__cause__` into their own `ValidationError`, so a consumer tokenizer or
+  variant-rule factory refusing with a connection URL put it in front of a
+  document's author. The ontology loader's rung builder read back any
+  `ValidationError` a rung factory raised, with the same effect for a consumer
+  rung. Each now repeats a factory's words only when dataknobs wrote them and
+  names anything else by its type — `tokenizer 'x' could not be built
+  (ValidationError)`, `Failed to create plugin '<kind>' (ValidationError)` —
+  with the original on `__cause__`. Every refusal a built-in tokenizer,
+  variant rule or rung writes still reaches the author word for word: a
+  parameter typo such as `{name: words, apostrophe: keep}` reads exactly as
+  before. A factory returning something not callable is named by its type
+  rather than its `repr`.
+
 - **`token_spans` keeps a combining mark in the word it is written on.** It
   decided a token character by `str.isalnum`, which is False for every
   combining mark, so `दुनिया` was three tokens with its vowel signs in none,
@@ -526,6 +542,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.sources` still binds the name, so no existing import breaks.
 
 ### Added
+
+- **`surfaced_cause`, `create_surfacing` and `create_surfacing_async`: the one
+  answer to "may a caller see this factory's error?".** A `PluginRegistry`
+  bounds a factory's failure and keeps the factory's error on `__cause__`. A
+  helper in front of a registry that reads `__cause__` back by type undoes
+  that, because a `ValueError` dataknobs wrote and one a driver raised with a
+  DSN in it are the same type. `surfaced_cause(exc)` decides by who wrote the
+  text instead: it returns the cause when a registry raised it or dataknobs
+  did and its words have not changed since, else `None`.
+  `create_surfacing(registry, *, subject, unknown=None, key=None, config=None,
+  **kwargs)` is the shared body of such a helper: the registry's miss becomes
+  the helper's own `unknown(error)` text, a `PluginConfigError` is raised as
+  built, an error dataknobs wrote arrives as itself, and anything else a
+  factory raised is bounded to `"Failed to create <subject> '<key>' (<type>)"`
+  — a `ValueError` as `FactoryValueError`; a `ResourceError`,
+  `TimeoutError`, `ConcurrencyError`, `SerializationError` or
+  `ConfigurationError` as a bounded error of the same family; anything else
+  as the registry's bounded `OperationError`. `create_surfacing_async` is its
+  twin over `create_async`. The plugin-registry guide's *Wrapping a registry
+  in a helper* section shows the pattern.
+
+- **`FactoryValueError(ValidationError, ValueError)`.** The bounded stand-in
+  for a `ValueError` a factory raised in its own words. Caught by
+  `except ValueError`, which is what the helpers built on `create_surfacing`
+  promised before, and by `except ValidationError`. `context` carries `key`,
+  `registry` and `cause_type`.
+
+- **`assert_no_cause_read` in `dataknobs_common.testing`.** A source scan that
+  fails on every load of `__cause__` outside an allow-list of reviewed
+  readers — not only in `except` handlers, since a helper taking the
+  exception as a parameter reads it just the same. Reading only
+  `type(x.__cause__)` is not flagged. An allow-list entry matching nothing is
+  an error. `assert_no_broad_except_in_error_text` now reads through a raise
+  wrapped in a marking call, so marking a raise does not hide it from that
+  guard.
 
 - **`word_spans` and the `words` tokenizer: the default tokens with an in-word
   apostrophe kept.** `word_spans(text)` joins the tokens `token_spans` returns
@@ -1636,14 +1687,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 368,
-  the twenty-eight beyond them being the operation family, the near-spelling
+  the resolution cascade — 134 names, taking the package's `__all__` to 372,
+  the thirty-two beyond them being the operation family, the near-spelling
   rung, the surface-form catalogue, the index-source family, the edge rule's
   three functions, `narrowest`, the tokenizer family (`Tokenizer`,
   `TOKENIZERS`, `tokenizer_from_config`), `aclosing_iter`, `PluginConfig`,
   `naming_refusals`, `fingerprint_value`, `freeze_structure`,
-  `thaw_structure`, `FrozenMapping`, `ConfigFieldError` and
-  `PluginConfigError`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond them,
+  `thaw_structure`, `FrozenMapping`, `ConfigFieldError`, `PluginConfigError`,
+  `FactoryValueError`, `surfaced_cause`, `create_surfacing` and
+  `create_surfacing_async`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond them,
   which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to

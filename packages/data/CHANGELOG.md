@@ -1704,6 +1704,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The refusals a config author depends on are marked as dataknobs' text.**
+  `select_backend`'s unknown- and uninstalled-backend refusals, the shared
+  `schema:` reader's (`extract_schema_from_config`,
+  `DatabaseSchema.from_dict`, `read_field_declarations`), and the semantic
+  rung's refusals of its handles are raised inside registry factories when a
+  bot's knowledge base or grounded source is built. The helpers in front of
+  those registries now show a factory's words only when dataknobs wrote them,
+  so these keep reaching the author word for word. No message or type
+  changes here.
+
 - **A sync S3 `update` stamps `created_at` and `updated_at` from one read of
   the clock.** For a stored object with no `created_at`, the two stamps came
   from two reads and differed by microseconds; they are now the same instant,

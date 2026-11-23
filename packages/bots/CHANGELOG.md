@@ -64,6 +64,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A backend's own words no longer reach a caller of the subsystem
+  helpers.** `create_memory_from_config`, `create_knowledge_base_from_config`
+  and `create_source_from_config` unwrapped any `ValueError` or
+  `DataknobsError` off the registry's bounded error and raised it as itself,
+  so a memory, knowledge-base or source backend refusing with its connection
+  URL put it in the caller's message — and, for a `ValidationError`, in the
+  body of a 422 from the bots API. The helpers now build on
+  `dataknobs_common.registry.create_surfacing`:
+  - dataknobs' own refusals arrive as before, word for word: summary memory
+    with no LLM, a composite with no strategies or an unknown child, an
+    unknown vector backend or embedding provider, a `vector_kb` source with
+    no knowledge base, a `database` source's unknown backend or unreadable
+    `schema:`, an unresolvable `dedup_key:`;
+  - a `ValueError` a backend raised in its own words becomes a
+    `FactoryValueError` — still a `ValueError`, rendered as a 422 — reading
+    `Failed to create memory backend '<key>' (ValueError)`;
+  - a backend's `ResourceError`, `TimeoutError`, `ConcurrencyError`,
+    `SerializationError` or `ConfigurationError` keeps its family with a
+    bounded message, so the API still answers 503, 504 or 409;
+  - anything else, a backend's own `ValidationError` included, is the
+    registry's bounded `OperationError`, a masked 500.
+
+  The backend's error is on `__cause__`, which the API's log line carries.
+  `DEFAULT_ERROR_POLICY` gains a `FactoryValueError` row (422, message and
+  `detail` shown, both bounded).
+
 - **An unknown path or a wrong method answers in the standard error body.**
   `register_exception_handlers` registered its `HTTPException` handler under
   FastAPI's class, but the router raises Starlette's, of which FastAPI's is a
