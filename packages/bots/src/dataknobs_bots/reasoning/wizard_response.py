@@ -1821,9 +1821,21 @@ class WizardResponder:
                 **forwarded,
             )
         except Exception as e:
-            from dataknobs_common.exceptions import ConfigurationError
+            from dataknobs_common.exceptions import ConfigurationError, PluginConfigError
 
             stage_name = stage.get("name", "?")
+            if isinstance(e, PluginConfigError):
+                # The stage's ``reasoning_config`` did not fit the strategy's
+                # config class. The registry raises this type only for a
+                # refusal ``StructuredConfig`` wrote, whose text names keys
+                # and never a value -- it bounds a strategy's own error,
+                # this type included -- so the words are kept. Its message
+                # already names the strategy ("Failed to create plugin
+                # '<name>': ..."), so only the stage is prefixed.
+                raise ConfigurationError(
+                    f"Wizard stage '{stage_name}': {e}",
+                    context={**e.context, "stage": stage_name, "strategy": name},
+                ) from e
             hint = _maybe_strict_signature_hint(e, forwarded)
             # Bounded message: this constructs a strategy named by consumer
             # config, so `e` is whatever that constructor raised -- a strategy

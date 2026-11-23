@@ -75,6 +75,8 @@ from dataknobs_common.exceptions import (
     DataknobsError,
     NotFoundError,
     OperationError,
+    PluginConfigError,
+    _value_free_refusal_behind,
 )
 
 if TYPE_CHECKING:
@@ -129,6 +131,11 @@ def _ours(exc: _Raised) -> _Raised:
     wrapped, which keeps the types an outer caller catches to those two.
     A raise that forgets the mark is bounded like a factory's error, which
     loses detail and leaks nothing.
+
+    A config refusal ``StructuredConfig`` wrote carries a different mark
+    (:func:`~dataknobs_common.exceptions._value_free`): its text may be
+    *carried* on a :class:`~dataknobs_common.exceptions.PluginConfigError`,
+    which says nothing about the refusal passing through as itself.
     """
     setattr(exc, _RAISED_BY_A_REGISTRY, True)
     return exc
@@ -2182,17 +2189,48 @@ class PluginRegistry(Generic[T]):
         itself; anything else becomes a bounded error naming the key, the
         registry and the original type, with the original on ``__cause__``.
         Only the two families pass through, so the outer call raises no type
-        it did not raise before. The factory's text and ``context`` stay out, because a factory builds
-        a backend from deployment config and either can carry the connection
-        URL it was handed.
+        it did not raise before. The factory's text and ``context`` stay out,
+        because a factory builds a backend from deployment config and either
+        can carry the connection URL it was handed.
 
         A ``NotFoundError`` keeps its family, so a caller catching it still
         does; everything else becomes an ``OperationError``.
+
+        **A config refusal keeps its words.** When ``exc`` is, or was raised
+        ``from``, a :class:`~dataknobs_common.exceptions.ConfigFieldError`
+        that ``StructuredConfig`` wrote, the bounded error is a
+        :class:`~dataknobs_common.exceptions.PluginConfigError` carrying the
+        refusal's message and ``context``, which name no value. It is still
+        an ``OperationError``. What decides is the refusal's mark, never its
+        type, so a factory's own ``ConfigFieldError`` is bounded like any
+        other error. What is carried is the refusal's words as the mark
+        recorded them, so a factory that amended the refusal before raising
+        it (with :func:`~dataknobs_common.exceptions.naming_refusals`, say)
+        adds none of its own text.
+
+        A ``NotFoundError`` never carries a refusal: one raised ``from`` a
+        refusal stays a bounded ``NotFoundError``, so a caller catching that
+        family keeps catching it.
+
+        The refusal is reported wherever it is on the ``__cause__`` chain,
+        including a refusal of config the factory built for itself rather
+        than the caller's. Its text still names no value, but it is then
+        reported as the caller's config error.
         """
         if isinstance(exc, (NotFoundError, OperationError)) and getattr(
             exc, _RAISED_BY_A_REGISTRY, False
         ):
             raise exc
+        if not isinstance(exc, NotFoundError):
+            words = _value_free_refusal_behind(exc)
+            if words is not None:
+                message, context = words
+                raise _ours(
+                    PluginConfigError(
+                        f"Failed to create plugin '{key}': {message}",
+                        context={**context, "key": key, "registry": self._name},
+                    )
+                ) from exc
         family = NotFoundError if isinstance(exc, NotFoundError) else OperationError
         raise _ours(
             family(

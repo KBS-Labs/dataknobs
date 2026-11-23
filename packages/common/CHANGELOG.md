@@ -43,7 +43,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - the original is on `__cause__`;
   - a `NotFoundError` or `OperationError` a registry raised, such as a
     nested registry's miss inside a composite factory, still passes through
-    as itself.
+    as itself;
+  - a `ConfigFieldError` that `StructuredConfig` wrote (a missing field, an
+    unknown or misspelt key, a key that is not a string), or an error other
+    than a `NotFoundError` that a factory raised `from` one, becomes a
+    `PluginConfigError` that keeps the refusal's words:
+    `"Failed to create plugin '<key>': <refusal>"`, with the refusal's
+    `context` plus `key` and `registry`. It is both a `ConfigFieldError` and
+    an `OperationError`. The registry recognises the refusal by a mark only
+    `StructuredConfig` sets, so a factory's own `ConfigFieldError` is bounded
+    like any other error. The mark records the refusal's words as written,
+    and those are what is carried: a factory that amends the refusal before
+    raising it, with `naming_refusals` or by hand, adds nothing of its own.
 
   `except NotFoundError` and `except OperationError` catch what they caught
   before. **A caller catching a narrower class raised inside a factory**, for
@@ -2353,8 +2364,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documents `ValidationError` meets that contract with no translation. Its
   message names only the class, its fields and the keys the caller wrote,
   never a value, and its `context` carries `config_class` with `missing` or
-  `unknown` and `accepted`. A required field written `None` is still supplied,
-  not missing. On a class with `_UNKNOWN_KEYS = "raise"`, a key that is not a
+  `unknown` and `accepted`. Built through a `PluginRegistry`, the refusal
+  reaches the caller as a `PluginConfigError` carrying the same message and
+  `context` (see the `PluginRegistry` entry under Fixed). A required field
+  written `None` is still supplied, not missing. On a class with `_UNKNOWN_KEYS = "raise"`, a key that is not a
   string (YAML's reading of an unquoted `yes:`, `on:` or `null:`) raises the
   same type, naming the key, instead of a `TypeError` from sorting the keys.
 

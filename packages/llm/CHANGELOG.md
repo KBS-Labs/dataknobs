@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A classifier config that does not fit its class names the classifier.**
+  `create_intent_classifier` and `create_intent_classifier_async` raise the
+  `PluginConfigError` a `PluginRegistry` builds for a refusal
+  `StructuredConfig` wrote -- `"Failed to create plugin '<name>': <refusal>"`,
+  with `key` in its `context` -- rather than unwrapping it to the bare
+  refusal. It is still a `ValueError`, so an existing handler keeps catching
+  it.
+
 - **`LLMConfig.response_schema`: a JSON Schema the reply must satisfy.**
   `response_format="json"` asks for some JSON, and a model in JSON mode can
   answer in another shape: asked for a table as `{"columns", "rows"}`,

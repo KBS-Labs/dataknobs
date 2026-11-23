@@ -91,6 +91,7 @@ except DataknobsError as e:
 - `ResourceError` - Resource acquisition/management failures
 - `NotFoundError` - Item lookup failures
 - `OperationError` - General operation failures
+- `PluginConfigError` - A `ConfigFieldError` raised while a `PluginRegistry` built a plugin (also an `OperationError`)
 - `ConcurrencyError` - Concurrent operation conflicts
 - `SerializationError` - Serialization/deserialization failures
 - `TimeoutError` - Operation timeout errors

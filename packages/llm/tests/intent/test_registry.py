@@ -22,11 +22,14 @@ Pins the public registry surface after the
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, ClassVar
 
 import pytest
 
+from dataknobs_common.exceptions import PluginConfigError
 from dataknobs_common.registry import BackendRegistry, PluginRegistry
+from dataknobs_common.structured_config import StructuredConfig
 from dataknobs_llm.intent import (
     CompositeIntentClassifier,
     IntentClassifier,
@@ -255,3 +258,43 @@ class TestIntentClassifierAsyncShim:
                 {"classifiers": [{"classifier": "does_not_exist"}]},
             )
         assert "does_not_exist" in str(excinfo.value)
+
+
+@dataclass(frozen=True)
+class _ClosedClassifierConfig(StructuredConfig):
+    """A classifier config that refuses a key it does not read."""
+
+    _UNKNOWN_KEYS: ClassVar[str] = "raise"
+    threshold: float = 0.5
+
+
+def _reads_a_closed_config(config: dict[str, Any], **_: Any) -> IntentClassifier:
+    _ClosedClassifierConfig.from_dict(config)
+    raise AssertionError("unreachable: the config above is refused")
+
+
+class TestAConfigRefusalKeepsItsWords:
+    """A refusal ``StructuredConfig`` wrote arrives as the registry built it.
+
+    The shims unwrap a ``ValueError`` cause out of the registry's
+    ``OperationError``. A ``PluginConfigError`` is both, so the unwrap would
+    discard it and hand back the bare refusal, losing the classifier name.
+    """
+
+    @pytest.mark.parametrize("flavour", ["sync", "async"])
+    async def test_the_refusal_arrives_as_a_plugin_config_error(self, flavour: str) -> None:
+        intent_classifier_backends.register("closed", _reads_a_closed_config)
+        try:
+            with pytest.raises(PluginConfigError) as caught:
+                if flavour == "sync":
+                    create_intent_classifier("closed", {"treshold": 0.9})
+                else:
+                    await create_intent_classifier_async("closed", {"treshold": 0.9})
+        finally:
+            intent_classifier_backends.unregister("closed")
+
+        assert str(caught.value).startswith(
+            "Failed to create plugin 'closed': _ClosedClassifierConfig does not accept 'treshold'"
+        )
+        assert caught.value.context["key"] == "closed"
+        assert isinstance(caught.value, ValueError)

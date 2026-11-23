@@ -26,7 +26,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from dataknobs_common.exceptions import OperationError
+from dataknobs_common.exceptions import OperationError, PluginConfigError
 from dataknobs_common.registry import PluginRegistry
 from dataknobs_llm.intent.composite import CompositeIntentClassifier
 from dataknobs_llm.intent.keyword import KeywordIntentClassifier
@@ -95,6 +95,11 @@ def create_intent_classifier(
             key=name,
             config=dict(config) if config else {},
         )
+    except PluginConfigError:
+        # A config refusal the registry carried, naming the classifier. It
+        # is already a ``ValueError``; the unwrap below would hand back the
+        # bare refusal and lose the name.
+        raise
     except OperationError as exc:
         if isinstance(exc.__cause__, ValueError):
             raise exc.__cause__ from None
@@ -138,6 +143,11 @@ async def create_intent_classifier_async(
             key=name,
             config=dict(config) if config else {},
         )
+    except PluginConfigError:
+        # A config refusal the registry carried, naming the classifier. It
+        # is already a ``ValueError``; the unwrap below would hand back the
+        # bare refusal and lose the name.
+        raise
     except OperationError as exc:
         if isinstance(exc.__cause__, ValueError):
             raise exc.__cause__ from None

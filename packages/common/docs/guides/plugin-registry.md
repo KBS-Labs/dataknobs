@@ -276,12 +276,50 @@ the connection URL it was handed.
 | a `NotFoundError`, or a subclass | `NotFoundError("Failed to create plugin '<key>' (<type>)")` |
 | anything else, `OperationError` and its subclasses included | `OperationError("Failed to create plugin '<key>' (<type>)")` |
 | a `NotFoundError` or `OperationError` a registry raised | that error, unchanged |
+| a `ConfigFieldError` that `StructuredConfig` wrote, or an error other than a `NotFoundError` raised `from` one | `PluginConfigError("Failed to create plugin '<key>': <refusal>")` |
 
 So a caller catching either base catches what it caught before. One catching
 a *subclass* raised inside the factory finds it on `__cause__`. The type is
 not enough to exempt an error from the bound, because it says nothing about
 who wrote the text: `OperationError` is a public base a factory raises with
 its own words.
+
+**A config refusal keeps its words.** A `ConfigFieldError` that
+`StructuredConfig.from_dict` raised names the config class, its fields and the
+keys the config wrote, and never a value, so the registry carries it: the
+caller gets a `PluginConfigError` whose message ends with the refusal's and
+whose `context` is the refusal's plus `key` and `registry`. It is an
+`OperationError` as well as a `ConfigFieldError`, so `except OperationError`
+catches it as before.
+
+```python
+sources = PluginRegistry("sources", config_key="type", strip_config_key=True)
+sources.register("file", FileSource)   # a StructuredConfigConsumer
+
+sources.create(config={"type": "file", "pth": "data.csv"})
+# PluginConfigError: Failed to create plugin 'file': FileSourceConfig does not
+#   accept 'pth' (did you mean 'path'?). Accepted keys: path, sheet.
+```
+
+What decides is a mark only `StructuredConfig` sets, never the type: a
+factory raising its own `ConfigFieldError` is bounded like any other error.
+The registry also follows `raise ... from`, so a factory that raises its own
+error from a refusal reports the refusal's words and not its own. It does not
+follow an error raised merely while handling a refusal, which may be one the
+factory recovered from. A `NotFoundError` raised `from` a refusal stays a
+bounded `NotFoundError`, so a caller catching that family keeps catching it.
+
+The mark records the refusal's words as `from_dict` wrote them, and those are
+what the registry carries. A factory that amends the refusal before raising it
+— prefixing an origin with `naming_refusals`, or adding to its `context` —
+adds nothing of its own: the amended refusal is still on `__cause__`, for the
+logs.
+
+A refusal is reported wherever it is on the `__cause__` chain, including one
+about config the factory built for itself rather than the caller's. Its text
+still names no value, but it reads as the caller's config error, so a factory
+that reads settings of its own with `from_dict` should catch that refusal and
+raise its own error rather than raise `from` it.
 
 A `NotFoundError` or `OperationError` a *registry* raised is text this module
 wrote, so it passes through an outer factory as itself. A registry whose

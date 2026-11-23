@@ -120,6 +120,9 @@ from dataknobs_common.exceptions import (
     OperationError as CommonOperationError,
 )
 from dataknobs_common.exceptions import (
+    PluginConfigError as CommonPluginConfigError,
+)
+from dataknobs_common.exceptions import (
     RateLimitError as CommonRateLimitError,
 )
 from dataknobs_common.exceptions import (
@@ -200,7 +203,7 @@ def _jsonable(value: Any, _depth: int = 0) -> Any:
     actually holds when it fails do the opposite: a SQLAlchemy ``Engine``
     renders as ``Engine(postgresql://user:pw@host/db)`` and a psycopg2
     connection quotes its DSN, both deliberately, because a repr is a
-    debugging aid — written for a log, not for a response body. Five rows in
+    debugging aid — written for a log, not for a response body. Seven rows in
     the default policy disclose ``context``.
 
     The allow-list keeps the cases where withholding would cost a real
@@ -585,14 +588,14 @@ class ErrorPolicy(NamedTuple):
 
 
 #: The default type -> policy mapping, resolved by MRO walk (see
-#: :func:`resolve_error_policy`). Fifteen entries govern more than fifty
+#: :func:`resolve_error_policy`). Sixteen entries govern more than fifty
 #: reachable classes: every ``DataknobsError`` subclass the other packages
 #: define resolves to its nearest listed ancestor, so ``RecordNotFoundError``
 #: returns 404 without appearing here. An exact-type table would cover the
-#: fifteen and silently 500 the rest -- which is the behaviour this handler
+#: sixteen and silently 500 the rest -- which is the behaviour this handler
 #: replaces.
 #:
-#: Fourteen come from ``dataknobs_common.exceptions``; the fifteenth,
+#: Fifteen come from ``dataknobs_common.exceptions``; the sixteenth,
 #: ``InvalidTransitionError``, is from ``dataknobs_common.transitions``. Any
 #: count here is checked against the shipped mapping by the parity test, so
 #: the two cannot drift.
@@ -619,6 +622,20 @@ DEFAULT_ERROR_POLICY: Mapping[type[DataknobsError], ErrorPolicy] = MappingProxyT
         # its documented schema), or `non_string_keys`. Reached on a route when
         # a caller's own config (a tenant's bot config) does not fit its class.
         CommonConfigFieldError: ErrorPolicy(422, True, True),
+        # The same refusal, raised while a registry built a plugin from the
+        # caller's config -- a tenant's knowledge-base, memory or grounded
+        # source section. message: "Failed to create plugin '<key>': " and the
+        # refusal's text. context: the refusal's, plus `key` (the plugin the
+        # config named) and `registry`. A factory's own error never takes this
+        # type: the registry recognises a refusal by a mark only
+        # `StructuredConfig` sets, and bounds everything else.
+        #
+        # Without this row it would still resolve to the `ConfigFieldError`
+        # row above, which comes first in its MRO; the row is here because
+        # every common type is given one. It also means an override of
+        # `ConfigFieldError` does not reach this type: a deployment tightening
+        # one should tighten both.
+        CommonPluginConfigError: ErrorPolicy(422, True, True),
         # context: `scope`, which the caller must act on, and `user_id`. That id is
         # the caller's own, so returning it to them discloses nothing new -- unless
         # a route attempts access on behalf of a third party, where it would.

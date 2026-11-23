@@ -1,17 +1,29 @@
 """Tests for PluginRegistry class."""
 
+import ast
 import asyncio
 import inspect
+import threading
 import typing
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, ClassVar, Dict, Protocol, runtime_checkable
 
 import pytest
 
-from dataknobs_common import NotFoundError, OperationError, PluginRegistry
+from dataknobs_common import (
+    ConfigFieldError,
+    NotFoundError,
+    OperationError,
+    PluginConfigError,
+    PluginRegistry,
+    ValidationError,
+    naming_refusals,
+)
 from dataknobs_common import registry as registry_module
+from dataknobs_common import structured_config as structured_config_module
 from dataknobs_common.structured_config import StructuredConfig, StructuredConfigConsumer
 from dataknobs_common.testing import assert_twins_agree
 
@@ -1887,6 +1899,389 @@ class _StatefulEmbedder:
     @property
     def vector_field(self) -> str:
         return "embedding"
+
+
+@dataclass(frozen=True)
+class _SheetConfig(StructuredConfig):
+    """A closed config, so both kinds of key refusal are reachable."""
+
+    _UNKNOWN_KEYS: ClassVar[str] = "raise"
+    path: str
+    sheet: str | None = None
+
+
+class _Sheet(StructuredConfigConsumer[_SheetConfig]):
+    """A consumer class registered as itself: the registry calls ``from_config``."""
+
+    CONFIG_CLS = _SheetConfig
+
+
+def _reads_its_config(*args: Any, **kwargs: Any) -> _SheetConfig:
+    """A factory for every lane: ``get`` passes ``(key, config)``, ``create`` ``(config)``."""
+    return _SheetConfig.from_dict(args[-1])
+
+
+async def _call_lane_with(
+    registry: PluginRegistry[Any], lane: str, key: str, config: dict[str, Any]
+) -> Any:
+    """Reach ``key`` through one of the four entry points, handing it ``config``."""
+    result = getattr(registry, lane)(key, config)
+    return await result if inspect.isawaitable(result) else result
+
+
+def _refusal_of(config: Mapping[Any, Any]) -> ConfigFieldError:
+    """The refusal ``from_dict`` raises for ``config``, caught for a test to re-raise."""
+    with pytest.raises(ConfigFieldError) as caught:
+        _SheetConfig.from_dict(config)
+    return caught.value
+
+
+class TestAConfigRefusalReachesItsAuthorThroughARegistry:
+    """A refusal ``StructuredConfig`` wrote keeps its words through a registry.
+
+    ``ConfigFieldError``'s message names no value, so its author may be shown
+    it. The registry bounds what a factory raises, and that bound must not
+    move: what decides is who wrote the text, not its type, because a factory
+    can raise a ``ConfigFieldError`` of its own. So the refusal is recognised
+    by a mark ``structured_config`` sets, and arrives as a
+    ``PluginConfigError`` -- still an ``OperationError``, which is what a
+    caller caught before.
+    """
+
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_a_missing_field_is_named(self, lane: str) -> None:
+        registry = PluginRegistry[Any]("sources")
+        registry.register("file", _reads_its_config)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _call_lane_with(registry, lane, "file", {})
+
+        assert str(caught.value) == (
+            "Failed to create plugin 'file': _SheetConfig requires the field "
+            "'path', which the config does not supply."
+        )
+        assert caught.value.context == {
+            "config_class": "_SheetConfig",
+            "missing": ["path"],
+            "key": "file",
+            "registry": "sources",
+        }
+        assert isinstance(caught.value.__cause__, ConfigFieldError)
+
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_an_unknown_key_is_named_with_its_likely_spelling(self, lane: str) -> None:
+        registry = PluginRegistry[Any]("sources")
+        registry.register("file", _reads_its_config)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _call_lane_with(registry, lane, "file", {"pth": "data.csv"})
+
+        message = str(caught.value)
+        assert message.startswith(
+            "Failed to create plugin 'file': _SheetConfig does not accept 'pth'"
+        )
+        assert "did you mean 'path'?" in message
+        assert "data.csv" not in message
+        assert caught.value.context["unknown"] == ["pth"]
+        assert caught.value.context["accepted"] == ["path", "sheet"]
+
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_a_key_that_is_not_a_string_is_named_with_the_remedy(self, lane: str) -> None:
+        registry = PluginRegistry[Any]("sources")
+        registry.register("file", _reads_its_config)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _call_lane_with(registry, lane, "file", {"path": "p", True: "x"})
+
+        assert "quote the key" in str(caught.value)
+        assert caught.value.context["non_string_keys"] == ["True"]
+
+    @pytest.mark.parametrize("lane", ["create", "create_async"])
+    async def test_a_consumer_class_registered_as_itself_is_covered(self, lane: str) -> None:
+        """No factory of the consumer's own: the registry calls ``from_config``."""
+        registry = PluginRegistry[Any]("sources", config_key="type", strip_config_key=True)
+        registry.register("sheet", _Sheet)
+
+        with pytest.raises(PluginConfigError) as caught:
+            result = getattr(registry, lane)(config={"type": "sheet", "pth": "x"})
+            if inspect.isawaitable(result):
+                await result
+
+        assert "does not accept 'pth' (did you mean 'path'?)" in str(caught.value)
+        assert caught.value.context["key"] == "sheet"
+
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_it_is_still_caught_where_the_bounded_error_was(self, lane: str) -> None:
+        registry = PluginRegistry[Any]("sources")
+        registry.register("file", _reads_its_config)
+
+        for family in (OperationError, ConfigFieldError, ValidationError):
+            with pytest.raises(family):
+                await _call_lane_with(registry, lane, "file", {})
+
+    def test_the_author_facing_bases_come_first_in_the_mro(self) -> None:
+        """A handler choosing disclosure by the first type in the MRO sees a refusal."""
+        mro = PluginConfigError.__mro__
+        assert mro.index(ConfigFieldError) < mro.index(OperationError)
+        assert mro.index(ValidationError) < mro.index(OperationError)
+
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_a_factorys_own_config_field_error_stays_bounded(self, lane: str) -> None:
+        """The case that rules out a rule by type: same type, the factory's words."""
+
+        def factory(*args: Any, **kwargs: Any) -> BaseHandler:
+            raise ConfigFieldError(f"cannot reach {_DSN}", context={"dsn": _DSN})
+
+        registry = PluginRegistry[Any]("sources")
+        registry.register("own", factory)
+
+        with pytest.raises(OperationError) as caught:
+            await _call_lane_with(registry, lane, "own", {})
+
+        assert type(caught.value) is OperationError
+        assert str(caught.value) == "Failed to create plugin 'own' (ConfigFieldError)"
+        assert caught.value.context == {"key": "own", "registry": "sources"}
+
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_a_factorys_error_caused_by_a_refusal_carries_the_refusal_only(
+        self, lane: str
+    ) -> None:
+        """``raise ... from`` a refusal says the refusal caused it; its own words stay out."""
+
+        def factory(*args: Any, **kwargs: Any) -> BaseHandler:
+            try:
+                _SheetConfig.from_dict({"pth": "x"})
+            except ConfigFieldError as refusal:
+                raise RuntimeError(f"could not open {_DSN}") from refusal
+            raise AssertionError("unreachable")
+
+        registry = PluginRegistry[Any]("sources")
+        registry.register("file", factory)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _call_lane_with(registry, lane, "file", {})
+
+        assert _DSN not in str(caught.value)
+        assert "does not accept 'pth'" in str(caught.value)
+        assert isinstance(caught.value.__cause__, RuntimeError)
+
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_a_factorys_own_config_field_error_from_a_refusal_carries_the_refusal(
+        self, lane: str
+    ) -> None:
+        def factory(*args: Any, **kwargs: Any) -> BaseHandler:
+            raise ConfigFieldError(f"bad spec for {_DSN}") from _refusal_of({})
+
+        registry = PluginRegistry[Any]("sources")
+        registry.register("file", factory)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _call_lane_with(registry, lane, "file", {})
+
+        assert _DSN not in str(caught.value)
+        assert "requires the field 'path'" in str(caught.value)
+
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_a_refusal_the_factory_recovered_from_is_not_reported(self, lane: str) -> None:
+        """``__context__`` only says "raised while handling", so it is not followed."""
+
+        def factory(*args: Any, **kwargs: Any) -> BaseHandler:
+            try:
+                _SheetConfig.from_dict({})
+            except ConfigFieldError:
+                raise RuntimeError(f"fallback failed: {_DSN}")  # noqa: B904 -- the implicit context is the subject
+            raise AssertionError("unreachable")
+
+        registry = PluginRegistry[Any]("sources")
+        registry.register("file", factory)
+
+        with pytest.raises(OperationError) as caught:
+            await _call_lane_with(registry, lane, "file", {})
+
+        assert type(caught.value) is OperationError
+        assert str(caught.value) == "Failed to create plugin 'file' (RuntimeError)"
+
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_a_nested_registrys_refusal_reaches_the_outer_caller(self, lane: str) -> None:
+        inner = PluginRegistry[Any]("inner", config_key="type", strip_config_key=True)
+        inner.register("file", _reads_its_config)
+
+        def composite(*args: Any, **kwargs: Any) -> Any:
+            return inner.create(config={"type": "file", **args[-1]})
+
+        registry = PluginRegistry[Any]("outer")
+        registry.register("composite", composite)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _call_lane_with(registry, lane, "composite", {"pth": "x"})
+
+        assert str(caught.value).startswith("Failed to create plugin 'file': _SheetConfig")
+        assert caught.value.context["registry"] == "inner"
+
+    @pytest.mark.parametrize(
+        ("raise_refusal", "names"),
+        [
+            (lambda: _SheetConfig.from_dict({}), {"missing": ["path"]}),
+            (
+                lambda: _SheetConfig.from_dict({"path": "p", "pth": "x"}),
+                {"unknown": ["pth"], "accepted": ["path", "sheet"]},
+            ),
+            (
+                lambda: _SheetConfig.from_dict({"path": "p", None: "x"}),
+                {"non_string_keys": ["None"]},
+            ),
+            (_Sheet.from_components, {"missing": ["path"]}),
+        ],
+        ids=["missing-field", "unknown-key", "non-string-key", "from-components"],
+    )
+    @pytest.mark.parametrize("lane", ["create", "create_async"])
+    async def test_every_refusal_structured_config_raises_is_carried(
+        self, raise_refusal: Any, names: dict[str, list[str]], lane: str
+    ) -> None:
+        """One per construction site, re-raised as is by a factory."""
+
+        def factory(*args: Any, **kwargs: Any) -> Any:
+            return raise_refusal()
+
+        registry = PluginRegistry[Any]("sources")
+        registry.register("file", factory)
+
+        with pytest.raises(PluginConfigError) as caught:
+            result = getattr(registry, lane)("file", {})
+            if inspect.isawaitable(result):
+                await result
+
+        assert caught.value.context == {
+            "config_class": "_SheetConfig",
+            **names,
+            "key": "file",
+            "registry": "sources",
+        }
+
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_a_refusal_the_factory_amended_carries_only_what_from_dict_wrote(
+        self, lane: str
+    ) -> None:
+        """The mark vouches for the words it saw, not for the instance.
+
+        ``naming_refusals`` is public and amends a refusal in place -- its
+        message and its ``context`` -- with whatever the factory hands it.
+        """
+
+        def factory(*args: Any, **kwargs: Any) -> Any:
+            with naming_refusals(f"source at {_DSN}", context={"dsn": _DSN}):
+                return _SheetConfig.from_dict({"pth": "x"})
+
+        registry = PluginRegistry[Any]("sources")
+        registry.register("file", factory)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _call_lane_with(registry, lane, "file", {})
+
+        assert str(caught.value).startswith(
+            "Failed to create plugin 'file': _SheetConfig does not accept 'pth'"
+        )
+        assert _DSN not in str(caught.value)
+        assert "dsn" not in caught.value.context
+        # The factory's amendment is still on the refusal it raised, on __cause__.
+        assert _DSN in str(caught.value.__cause__)
+
+    @pytest.mark.parametrize("lane", _LANES)
+    async def test_a_refusal_whose_context_was_changed_by_hand_carries_the_original(
+        self, lane: str
+    ) -> None:
+        def factory(*args: Any, **kwargs: Any) -> Any:
+            refusal = _refusal_of({})
+            refusal.context["dsn"] = _DSN
+            refusal.context["missing"].append(_DSN)
+            raise refusal
+
+        registry = PluginRegistry[Any]("sources")
+        registry.register("file", factory)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _call_lane_with(registry, lane, "file", {})
+
+        assert caught.value.context == {
+            "config_class": "_SheetConfig",
+            "missing": ["path"],
+            "key": "file",
+            "registry": "sources",
+        }
+
+    def test_what_is_carried_is_not_shared_with_the_refusal(self) -> None:
+        registry = PluginRegistry[Any]("sources")
+        registry.register("file", _reads_its_config)
+
+        with pytest.raises(PluginConfigError) as caught:
+            registry.create("file", {"pth": "x"})
+        caught.value.context["unknown"].append("changed")
+
+        refusal = caught.value.__cause__
+        assert isinstance(refusal, ConfigFieldError)
+        assert refusal.context["unknown"] == ["pth"]
+
+    @pytest.mark.parametrize("lane", ["get", "create"])
+    def test_a_cause_cycle_is_bounded_rather_than_followed_forever(self, lane: str) -> None:
+        """Run on a thread, so a walk that loops fails the test instead of hanging it."""
+
+        def factory(*args: Any, **kwargs: Any) -> Any:
+            first, second = RuntimeError("first"), RuntimeError("second")
+            first.__cause__, second.__cause__ = second, first
+            raise first
+
+        registry = PluginRegistry[Any]("sources")
+        registry.register("loop", factory)
+        raised: list[BaseException] = []
+
+        def call() -> None:
+            try:
+                getattr(registry, lane)("loop", {})
+            except BaseException as e:
+                raised.append(e)
+
+        worker = threading.Thread(target=call, daemon=True)
+        worker.start()
+        worker.join(timeout=5)
+
+        assert not worker.is_alive(), "the cause walk did not end on a cycle"
+        assert len(raised) == 1
+        assert type(raised[0]) is OperationError
+        assert str(raised[0]) == "Failed to create plugin 'loop' (RuntimeError)"
+
+    def test_structured_config_constructs_a_refusal_in_one_place(self) -> None:
+        """The recurrence guard: a new refusal built directly would go unmarked.
+
+        It would lose detail and leak nothing, so no other test would notice
+        a registry bounding it again.
+        """
+        tree = ast.parse(Path(structured_config_module.__file__).read_text())
+        enclosing: dict[ast.AST, str] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for inner in ast.walk(node):
+                    enclosing.setdefault(inner, node.name)
+        # Any name the module binds to the class: an ``import ... as`` alias
+        # counts, and so does a call through a module (``exceptions.X(...)``).
+        names = {"ConfigFieldError"} | {
+            alias.asname
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+            if alias.name == "ConfigFieldError" and alias.asname
+        }
+
+        def constructs(func: ast.expr) -> bool:
+            if isinstance(func, ast.Name):
+                return func.id in names
+            return isinstance(func, ast.Attribute) and func.attr == "ConfigFieldError"
+
+        constructions = [
+            enclosing.get(node, "<module>")
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and constructs(node.func)
+        ]
+        assert constructions == ["_config_field_error"]
 
 
 class TestAValidateTypeProtocolAndItsAsyncTwin:

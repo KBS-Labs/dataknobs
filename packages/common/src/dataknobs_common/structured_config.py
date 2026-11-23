@@ -77,7 +77,7 @@ from typing import (
     get_type_hints,
 )
 
-from dataknobs_common.exceptions import ConfigFieldError, ConfigurationError
+from dataknobs_common.exceptions import ConfigFieldError, ConfigurationError, _value_free
 from dataknobs_common.registry import Registry, _bind_structured_config
 from dataknobs_common.serialization import jsonify
 
@@ -283,6 +283,20 @@ def _required_fields(cls: type) -> tuple[str, ...]:
     )
 
 
+def _config_field_error(message: str, context: dict[str, Any]) -> ConfigFieldError:
+    """Build a refusal this module wrote, marked as naming no value.
+
+    The one place this module constructs a
+    :class:`~dataknobs_common.exceptions.ConfigFieldError`. The mark is what
+    lets a :class:`~dataknobs_common.registry.PluginRegistry` carry the text
+    to its caller rather than bound it as a factory's, so a refusal built
+    anywhere else would lose its words at the first registry -- leaking
+    nothing, and so noticed by nothing. ``message`` and ``context`` must name
+    only the class, its fields and the keys the caller wrote, never a value.
+    """
+    return _value_free(ConfigFieldError(message, context=context))
+
+
 def _missing_fields_error(cls: type, missing: list[str], *, preamble: str = "") -> ConfigFieldError:
     """The refusal for required fields a mapping leaves out, naming every one.
 
@@ -293,9 +307,9 @@ def _missing_fields_error(cls: type, missing: list[str], *, preamble: str = "") 
     """
     names = " and ".join(", ".join(repr(name) for name in missing).rsplit(", ", 1))
     noun = "field" if len(missing) == 1 else "fields"
-    return ConfigFieldError(
+    return _config_field_error(
         f"{preamble}{cls.__name__} requires the {noun} {names}, which the config does not supply.",
-        context={"config_class": cls.__name__, "missing": list(missing)},
+        {"config_class": cls.__name__, "missing": list(missing)},
     )
 
 
@@ -1431,20 +1445,20 @@ class StructuredConfig:
             # unquoted `yes:`, `on:` or `null:`.
             non_string = [repr(key) for key in normalized if not isinstance(key, str)]
             if non_string:
-                raise ConfigFieldError(
+                raise _config_field_error(
                     f"{cls.__name__} reads string keys, and the config carries "
                     f"{len(non_string)} key(s) that are not a string: "
                     f"{', '.join(non_string)}. YAML reads an unquoted `yes:`, `on:` "
                     f"or `null:` as a boolean or null; quote the key.",
-                    context={"config_class": cls.__name__, "non_string_keys": non_string},
+                    {"config_class": cls.__name__, "non_string_keys": non_string},
                 )
             unknown = sorted(
                 key for key in normalized if key not in accepted and key not in _ROUTING_KEYS
             )
             if unknown:
-                raise ConfigFieldError(
+                raise _config_field_error(
                     _unknown_keys_message(cls, unknown, accepted),
-                    context={
+                    {
                         "config_class": cls.__name__,
                         "unknown": unknown,
                         "accepted": sorted(accepted),

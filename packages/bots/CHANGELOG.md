@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A config refusal built through a plugin registry reaches the HTTP caller
+  as a 422 naming the plugin.** `DEFAULT_ERROR_POLICY` gains a row for
+  `dataknobs_common`'s new `PluginConfigError`, disclosing message and context
+  as `ConfigFieldError`'s row does. A config with a misspelt or missing key,
+  built through a `PluginRegistry`, returns 422 with the refusal's text and a
+  `detail` carrying the plugin `key`; a factory's own error is still bounded
+  and masked. A deployment that overrides the `ConfigFieldError` row should
+  write the same row for `PluginConfigError`.
+
+  `create_memory_from_config`, `create_knowledge_base_from_config` and
+  `create_source_from_config` raise that `PluginConfigError` as the registry
+  built it rather than unwrapping it to the bare refusal, so the error names
+  the backend the section selected. It is still a `ConfigFieldError` and a
+  `ValueError`, so an existing handler keeps catching it.
+
+  A wizard stage whose `reasoning_config` does not fit its strategy's config
+  class raises a `ConfigurationError` that keeps the refusal's words --
+  `"Wizard stage '<stage>': Failed to create plugin '<strategy>': <refusal>"`,
+  with the refusal's `context` plus `stage` and `strategy` -- rather than one
+  naming only `(PluginConfigError)`. Any other error a strategy constructor
+  raises is still bounded to its type.
+
 - **A knowledge base or vector memory can let its embedder truncate an
   over-long text.** `RAGKnowledgeBaseConfig` and `VectorMemoryConfig` take
   `embedding_overflow` as a flat key beside `embedding_provider`, typed as

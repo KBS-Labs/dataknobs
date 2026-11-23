@@ -619,7 +619,7 @@ class OntologyRegistry(StructuredConfigConsumer[OntologyConfig]):
                 that leaves out ``id:`` or writes a section this class does not
                 read is refused as a
                 :class:`~dataknobs_common.exceptions.ConfigFieldError`, which
-                is one
+                is one.
             ResourceNotFoundError: When a ``$resource`` names a resource this
                 environment does not define and the effective level is strict
         """
