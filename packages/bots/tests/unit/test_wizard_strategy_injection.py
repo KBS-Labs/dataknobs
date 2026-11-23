@@ -232,14 +232,18 @@ class TestResolveStageStrategy:
         assert caught.value.context["stage"] == "gather"
         assert caught.value.context["strategy"] == "closed_strategy"
 
-    def test_a_strategy_constructors_own_error_stays_bounded(self) -> None:
+    @pytest.mark.parametrize("raised", ["ConfigFieldError", "PluginConfigError"])
+    def test_a_strategy_constructors_own_error_stays_bounded(self, raised: str) -> None:
+        """Including the type the wizard keeps the words of, raised with a secret."""
         from dataknobs_bots.reasoning.registry import get_registry
-        from dataknobs_common.exceptions import ConfigFieldError, ConfigurationError
+        from dataknobs_common import exceptions
+        from dataknobs_common.exceptions import ConfigurationError
 
         secret = "postgres://user:pw@db.internal/prod"
+        error_type = getattr(exceptions, raised)
 
         def factory(config: dict[str, Any], **_: Any) -> SimpleReasoning:
-            raise ConfigFieldError(f"cannot reach {secret}", context={"dsn": secret})
+            raise error_type(f"cannot reach {secret}", context={"dsn": secret})
 
         registry = get_registry()
         registry.register("own_error_strategy", factory)

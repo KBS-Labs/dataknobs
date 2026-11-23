@@ -1825,13 +1825,16 @@ class WizardResponder:
 
             stage_name = stage.get("name", "?")
             if isinstance(e, PluginConfigError):
-                # The stage's ``reasoning_config`` did not fit the strategy's
-                # config class. The registry raises this type only for a
-                # refusal ``StructuredConfig`` wrote, whose text names keys
-                # and never a value -- it bounds a strategy's own error,
-                # this type included -- so the words are kept. Its message
-                # already names the strategy ("Failed to create plugin
-                # '<name>': ..."), so only the stage is prefixed.
+                # A config refusal raised while building the strategy: the
+                # stage's ``reasoning_config``, or a section the strategy
+                # built through another registry, did not fit its class. The
+                # registry raises this type only for a refusal
+                # ``StructuredConfig`` wrote, whose text names keys and never
+                # a value -- it bounds a strategy's own error, this type
+                # included -- so the words are kept. Its message names the
+                # plugin whose config was refused ("Failed to create plugin
+                # '<key>': ..."), and its context that plugin's ``key`` and
+                # ``registry``, so only the stage is prefixed.
                 raise ConfigurationError(
                     f"Wizard stage '{stage_name}': {e}",
                     context={**e.context, "stage": stage_name, "strategy": name},

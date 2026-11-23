@@ -2367,8 +2367,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `unknown` and `accepted`. Built through a `PluginRegistry`, the refusal
   reaches the caller as a `PluginConfigError` carrying the same message and
   `context` (see the `PluginRegistry` entry under Fixed). A required field
-  written `None` is still supplied, not missing. On a class with `_UNKNOWN_KEYS = "raise"`, a key that is not a
-  string (YAML's reading of an unquoted `yes:`, `on:` or `null:`) raises the
+  written `None` is still supplied, not missing. On a class with
+  `_UNKNOWN_KEYS = "raise"`, a key that is not a string (YAML's reading of an unquoted `yes:`, `on:` or `null:`) raises the
   same type, naming the key, instead of a `TypeError` from sorting the keys.
 
   - **Migration:** a caller that catches `TypeError` around `from_dict`,

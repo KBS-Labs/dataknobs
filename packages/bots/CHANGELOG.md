@@ -24,12 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the backend the section selected. It is still a `ConfigFieldError` and a
   `ValueError`, so an existing handler keeps catching it.
 
-  A wizard stage whose `reasoning_config` does not fit its strategy's config
-  class raises a `ConfigurationError` that keeps the refusal's words --
-  `"Wizard stage '<stage>': Failed to create plugin '<strategy>': <refusal>"`,
-  with the refusal's `context` plus `stage` and `strategy` -- rather than one
-  naming only `(PluginConfigError)`. Any other error a strategy constructor
-  raises is still bounded to its type.
+  A config refusal raised while a wizard stage builds its strategy -- the
+  stage's `reasoning_config`, or a section the strategy builds through another
+  registry -- raises a `ConfigurationError` that keeps the refusal's words:
+  `"Wizard stage '<stage>': Failed to create plugin '<key>': <refusal>"`, with
+  the refusal's `context` (its plugin `key` and `registry` included) plus
+  `stage` and `strategy`, rather than one naming only `(PluginConfigError)`.
+  Any other error a strategy constructor raises is still bounded to its type.
 
 - **A knowledge base or vector memory can let its embedder truncate an
   over-long text.** `RAGKnowledgeBaseConfig` and `VectorMemoryConfig` take

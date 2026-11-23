@@ -2043,6 +2043,27 @@ class TestAConfigRefusalReachesItsAuthorThroughARegistry:
         assert caught.value.context == {"key": "own", "registry": "sources"}
 
     @pytest.mark.parametrize("lane", _LANES)
+    async def test_a_factorys_own_plugin_config_error_stays_bounded(self, lane: str) -> None:
+        """The carried type itself, raised with the factory's words, is bounded.
+
+        A caller may trust a ``PluginConfigError`` out of ``create`` only
+        because a factory cannot hand one through.
+        """
+
+        def factory(*args: Any, **kwargs: Any) -> BaseHandler:
+            raise PluginConfigError(f"cannot reach {_DSN}", context={"dsn": _DSN})
+
+        registry = PluginRegistry[Any]("sources")
+        registry.register("own", factory)
+
+        with pytest.raises(OperationError) as caught:
+            await _call_lane_with(registry, lane, "own", {})
+
+        assert type(caught.value) is OperationError
+        assert str(caught.value) == "Failed to create plugin 'own' (PluginConfigError)"
+        assert caught.value.context == {"key": "own", "registry": "sources"}
+
+    @pytest.mark.parametrize("lane", _LANES)
     async def test_a_factorys_error_caused_by_a_refusal_carries_the_refusal_only(
         self, lane: str
     ) -> None:
