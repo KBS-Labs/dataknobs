@@ -93,7 +93,8 @@ def _identifier_fault(value: str) -> str:
     The refusal is shown to callers whole, and a connection URL put under
     an identifier key by mistake would otherwise travel with it; its
     length and the first character the pattern refuses locate the mistake
-    as well.
+    as well. That one character, and the length, are all of the value it
+    shows.
     """
     if not value:
         return "the value is empty"
