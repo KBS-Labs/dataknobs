@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reimplementing how they are assigned. Passing it with `use_env=False` raises
   `ValueError` rather than building a source nothing would read.
 
+- **`ConfigBindingResolver.register_factory` is typed for every shape the
+  resolver builds through.** It was annotated `ResourceFactory |
+  Callable[..., Any]`, so registering an object with only `build`,
+  `create_async`, `from_config` or `from_config_async` -- each of which the
+  resolver calls -- was a type error at the call site. The parameter is now
+  `RegisteredFactory`, a union of `ResourceFactory`, `AsyncResourceFactory`,
+  three new protocols (`BuildingResourceFactory`, `ConfigConsumerFactory`,
+  `AsyncConfigConsumerFactory`) and `Callable[..., Any]`, all in
+  `dataknobs_config.binding_resolver`. Something with none of those surfaces
+  is still a type error.
+
 ### Changed
 
 - **BREAKING: `examples.widgets.WidgetConfig` is no longer hashable**, as no

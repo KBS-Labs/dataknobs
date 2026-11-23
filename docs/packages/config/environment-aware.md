@@ -653,7 +653,9 @@ through `from_config_async(config)` (by `resolve_async`, when it has one) or
 `from_config(config)`. A class with both `from_config` and `create` is a
 factory, and goes through `create`. A factory object whose class
 inherits `ConfigurableBase` therefore still goes through its `create`, even
-though that base gives it a `from_config` classmethod.
+though that base gives it a `from_config` classmethod. `register_factory`'s
+parameter type, `RegisteredFactory` (in `dataknobs_config.binding_resolver`),
+names each of these shapes, so registering any of them type-checks.
 
 ## Usage Patterns
 

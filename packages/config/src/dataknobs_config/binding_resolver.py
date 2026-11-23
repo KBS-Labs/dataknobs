@@ -32,7 +32,8 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, Callable, Protocol, runtime_checkable
+from collections.abc import Awaitable
+from typing import Any, Callable, Protocol, TypeAlias, runtime_checkable
 
 from dataknobs_common.exceptions import _is_written_by_dataknobs, _written_by_dataknobs
 
@@ -122,8 +123,8 @@ def _refuse_awaitable(result: Any, factory: object, resource_type: str, logical_
 class ResourceFactory(Protocol):
     """Protocol for resource factories that can create from config.
 
-    The usual shape. The resolver also accepts ``build(**config)``, a plain
-    callable, and a class or other object with ``from_config`` -- see
+    The usual shape. The resolver also accepts the other shapes
+    :data:`RegisteredFactory` names -- see
     :meth:`ConfigBindingResolver.register_factory`.
     """
 
@@ -157,6 +158,55 @@ class AsyncResourceFactory(Protocol):
             Created resource instance
         """
         ...
+
+
+@runtime_checkable
+class BuildingResourceFactory(Protocol):
+    """A factory whose entry point is ``build(**config)`` rather than ``create``."""
+
+    def build(self, **config: Any) -> Any:
+        """Build a resource instance from configuration."""
+        ...
+
+
+@runtime_checkable
+class ConfigConsumerFactory(Protocol):
+    """Something built from the whole config through ``from_config(config)``.
+
+    A consumer class (a ``StructuredConfigConsumer`` or ``ConfigurableBase``
+    subclass, which answers through its classmethod), or an object that is
+    not a class -- a registered singleton, a module.
+    """
+
+    def from_config(self, config: dict[str, Any], /) -> Any:
+        """Build a resource instance from the whole config."""
+        ...
+
+
+@runtime_checkable
+class AsyncConfigConsumerFactory(Protocol):
+    """Something built from the whole config through ``from_config_async(config)``."""
+
+    def from_config_async(self, config: dict[str, Any], /) -> Awaitable[Any]:
+        """Build a resource instance from the whole config, asynchronously."""
+        ...
+
+
+RegisteredFactory: TypeAlias = (
+    ResourceFactory
+    | AsyncResourceFactory
+    | BuildingResourceFactory
+    | ConfigConsumerFactory
+    | AsyncConfigConsumerFactory
+    | Callable[..., Any]
+)
+"""Every shape :meth:`ConfigBindingResolver.register_factory` accepts.
+
+Which surface a factory is called through, when it has several, is
+:meth:`ConfigBindingResolver._constructor`'s precedence. ``resolve`` cannot
+await, so it refuses a factory reachable only through ``create_async`` or
+``from_config_async``, or one whose result is awaitable.
+"""
 
 
 class ConfigBindingResolver:
@@ -214,7 +264,7 @@ class ConfigBindingResolver:
         """
         self._environment = environment
         self._resolve_env_vars = resolve_env_vars
-        self._factories: dict[str, ResourceFactory | Callable[..., Any]] = {}
+        self._factories: dict[str, RegisteredFactory] = {}
         self._cache: dict[tuple[str, str], Any] = {}
 
     @property
@@ -225,19 +275,19 @@ class ConfigBindingResolver:
     def register_factory(
         self,
         resource_type: str,
-        factory: ResourceFactory | Callable[..., Any],
+        factory: RegisteredFactory,
     ) -> None:
         """Register a factory for a resource type.
 
         Args:
             resource_type: Type of resource (e.g., "databases", "vector_stores")
-            factory: What builds the resource: a factory object with
-                ``create(**config)`` (and optionally ``create_async``) or
+            factory: What builds the resource -- any shape
+                :data:`RegisteredFactory` names: a factory object with
+                ``create(**config)``, ``create_async(**config)`` or
                 ``build(**config)``, a callable taking the config as keyword
                 arguments, or a class or other object with
-                ``from_config(config)`` (and optionally ``from_config_async``)
-                and none of the factory methods. :meth:`_constructor` states
-                the precedence.
+                ``from_config(config)`` or ``from_config_async(config)``.
+                :meth:`_constructor` states the precedence.
         """
         self._factories[resource_type] = factory
         logger.debug(f"Registered factory for resource type: {resource_type}")
@@ -469,7 +519,7 @@ class ConfigBindingResolver:
 
         return resolved
 
-    def _get_factory(self, resource_type: str) -> ResourceFactory | Callable[..., Any]:
+    def _get_factory(self, resource_type: str) -> RegisteredFactory:
         """Get the factory for a resource type.
 
         Args:
@@ -490,9 +540,7 @@ class ConfigBindingResolver:
 
     def _constructor(
         self,
-        # `object`, not the registered type: the resolver accepts surfaces
-        # (`build`, `from_config`) that type does not describe.
-        factory: object,
+        factory: RegisteredFactory,
         *,
         can_await: bool,
     ) -> Callable[[dict[str, Any]], Any]:
