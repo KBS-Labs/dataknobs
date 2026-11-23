@@ -871,6 +871,13 @@ exception as a parameter reads it the same way. `type(exc.__cause__)` as the
 whole of a `type()` call is not flagged: naming the cause's type is how a
 bounded message is written.
 
+The other routes to the same error are flagged alike: `__context__`, which
+holds the factory's error too because a registry raises inside the handler
+that caught it; either attribute named as a string, as in
+`getattr(exc, "__cause__")`; and the `traceback` formatters
+(`traceback.format_exception` and its siblings, by module or imported by name),
+which render the whole chain as text. A logger's `exc_info` is not flagged.
+
 `allowed` entries are `"<path-suffix>::<qualname>"` for one function
 (`Class.method` for a method, `<module>` for module level) or
 `"<path-suffix>"` for a whole file, matched on a path-component boundary.

@@ -34,6 +34,8 @@ import logging
 from collections.abc import Awaitable
 from typing import Any, Callable, Protocol, runtime_checkable
 
+from dataknobs_common.exceptions import _is_written_by_dataknobs
+
 from .environment_aware import resolve_resource_references
 from .environment_config import EnvironmentConfig
 
@@ -61,7 +63,16 @@ class FactoryNotFoundError(BindingResolverError):
 def _creation_failed(
     resource_type: str, logical_name: str, error: Exception
 ) -> BindingResolverError:
-    """The bounded error for a factory that raised: the resource and the error's type."""
+    """The error for a factory that raised: the resource, and what of the error may be shown.
+
+    A refusal dataknobs wrote -- an unknown provider name, say -- names only
+    what the config's author wrote, so its words follow. Anything else is
+    named by its type, because a factory builds from deployment config and
+    its text can carry the connection URL it was handed; the original is on
+    ``__cause__`` either way.
+    """
+    if _is_written_by_dataknobs(error):
+        return BindingResolverError(f"Failed to create {resource_type}[{logical_name}]: {error}")
     return BindingResolverError(
         f"Failed to create {resource_type}[{logical_name}] ({type(error).__name__})"
     )
@@ -278,7 +289,7 @@ class ConfigBindingResolver:
     ) -> Any:
         """Async version of resolve for async factories.
 
-        Construction precedence (see :meth:`_create_instance_async`):
+        Construction precedence (see :meth:`_async_constructor`):
         a registered consumer class's ``from_config_async`` is preferred,
         then a factory's ``create_async``, then the synchronous create
         path.
@@ -440,8 +451,10 @@ class ConfigBindingResolver:
         if callable(factory):
             call = factory
             return lambda config: call(**config)
+        # Named by its type: a factory object's ``repr`` is its author's, and
+        # can carry the connection URL it holds.
         raise BindingResolverError(
-            f"Factory {factory} has no create(), build(), or __call__ method"
+            f"Factory {type(factory).__name__} has no create(), build(), or __call__ method"
         )
 
     def _async_constructor(
@@ -468,38 +481,6 @@ class ConfigBindingResolver:
             return construct(config)
 
         return build
-
-    def _create_instance(
-        self,
-        factory: ResourceFactory | Callable[..., Any],
-        config: dict[str, Any],
-    ) -> Any:
-        """Create an instance using a factory.
-
-        Args:
-            factory: Factory to use
-            config: Configuration for the resource
-
-        Returns:
-            Created instance
-        """
-        return self._constructor(factory)(config)
-
-    async def _create_instance_async(
-        self,
-        factory: ResourceFactory | Callable[..., Any],
-        config: dict[str, Any],
-    ) -> Any:
-        """Create an instance using a factory (async).
-
-        Args:
-            factory: Factory to use
-            config: Configuration for the resource
-
-        Returns:
-            Created instance
-        """
-        return await self._async_constructor(factory)(config)
 
     def get_cached(
         self,

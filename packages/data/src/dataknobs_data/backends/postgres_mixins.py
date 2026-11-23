@@ -13,7 +13,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from dataknobs_common.exceptions import ConfigurationError
+from dataknobs_common.exceptions import ConfigurationError, _written_by_dataknobs
 from dataknobs_utils.sql_utils import quote_ident
 
 from ..records import Record
@@ -70,15 +70,19 @@ def validate_pg_identifier(value: Any, key: str) -> str:
             match the unquoted-identifier pattern.
     """
     if not isinstance(value, str):
-        raise ConfigurationError(
-            f"Postgres '{key}' must be a string identifier, got "
-            f"{type(value).__name__}.  If you intended to pass a "
-            "non-identifier payload, use a different config key."
+        raise _written_by_dataknobs(
+            ConfigurationError(
+                f"Postgres '{key}' must be a string identifier, got "
+                f"{type(value).__name__}.  If you intended to pass a "
+                "non-identifier payload, use a different config key."
+            )
         )
     if not _VALID_DB_NAME_RE.match(value):
-        raise ConfigurationError(
-            f"Invalid Postgres '{key}' identifier: {value!r}.  Must "
-            f"match {_VALID_DB_NAME_RE.pattern}."
+        raise _written_by_dataknobs(
+            ConfigurationError(
+                f"Invalid Postgres '{key}' identifier: {value!r}.  Must "
+                f"match {_VALID_DB_NAME_RE.pattern}."
+            )
         )
     return value
 

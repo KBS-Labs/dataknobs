@@ -435,10 +435,10 @@ for `PluginConfigError`.
 
 `FactoryValueError` is what a tenant meets when a memory, knowledge-base or
 source backend refuses its section in its own words rather than through its
-config class. Those words can carry what the backend was handed — a
-connection URL, a credential — so the message is bounded to `Failed to create
-memory backend 'summary' (ValueError)` and the backend's text goes only to the
-log, on `__cause__`. DataKnobs' own refusals ("Summary memory requires an LLM
+config class, with a `ValueError` or a `ValidationError`. Those words can carry
+what the backend was handed — a connection URL, a credential — so the message
+is bounded to `Failed to create memory backend 'acme_store' (ValueError)` and
+the backend's text goes only to the log, on `__cause__`. DataKnobs' own refusals ("Summary memory requires an LLM
 provider", "Unknown backend type: …") are not bounded: they arrive under their
 own type with their words. A backend that fails to *connect* keeps its family
 the same way — a `ResourceError` is still a 503 and a `TimeoutError` a 504 —

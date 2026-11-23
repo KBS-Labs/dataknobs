@@ -142,8 +142,8 @@ async def create_knowledge_base_from_config(config: dict[str, Any]) -> Knowledge
         ValueError: If the knowledge base type is not supported, or a
             backend reports a configuration problem. dataknobs' own refusals
             (an unknown vector backend or embedding provider) arrive as
-            themselves, with their words. A ``ValueError`` a backend raised
-            with its own words arrives as a bounded
+            themselves, with their words. A ``ValueError`` or ``ValidationError``
+            a backend raised with its own words arrives as a bounded
             :class:`~dataknobs_common.exceptions.FactoryValueError` (still a
             ``ValueError``), because a backend's text can carry the
             connection URL it was handed; the original is on ``__cause__``.

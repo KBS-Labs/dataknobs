@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from dataknobs_common.exceptions import _written_by_dataknobs
 from dataknobs_config.binding_resolver import (
     BindingResolverError,
     ConfigBindingResolver,
@@ -60,17 +61,37 @@ class TestTheResolversMessageIsBounded:
     def test_a_factory_with_no_callable_surface_is_refused_in_the_resolvers_words(
         self, lane: str
     ) -> None:
-        """Refused before the call, so it is the resolver's own text, unwrapped."""
+        """Refused before the call, so it is the resolver's own text, unwrapped.
+
+        The factory is named by its type: a factory object's ``repr`` is its
+        author's, and can carry the connection URL it holds.
+        """
 
         class Inert:
             def __repr__(self) -> str:
-                return "Inert()"
+                return f"Inert({DSN})"
 
         with pytest.raises(BindingResolverError) as caught:
             _resolve(lane, _resolver(Inert()))
 
-        assert str(caught.value) == "Factory Inert() has no create(), build(), or __call__ method"
+        assert str(caught.value) == "Factory Inert has no create(), build(), or __call__ method"
         assert caught.value.__cause__ is None
+
+    def test_a_refusal_dataknobs_wrote_keeps_its_words(self, lane: str) -> None:
+        """An unknown provider name, say: the author needs to read which one."""
+
+        class Refusing:
+            def create(self, **config: Any) -> Any:
+                raise _written_by_dataknobs(ValueError("Unknown provider: olama"))
+
+            async def create_async(self, **config: Any) -> Any:
+                raise _written_by_dataknobs(ValueError("Unknown provider: olama"))
+
+        with pytest.raises(BindingResolverError) as caught:
+            _resolve(lane, _resolver(Refusing()))
+
+        assert str(caught.value) == "Failed to create databases[primary]: Unknown provider: olama"
+        assert isinstance(caught.value.__cause__, ValueError)
 
     def test_an_unregistered_type_is_still_a_factory_not_found_error(self, lane: str) -> None:
         resolver = ConfigBindingResolver(

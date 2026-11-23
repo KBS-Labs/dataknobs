@@ -51,7 +51,13 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Generic, TypeVar
 
-from dataknobs_common.exceptions import OperationError, ValidationError, _written_by_dataknobs
+from dataknobs_common.exceptions import (
+    OperationError,
+    ValidationError,
+    _given,
+    _given_value,
+    _written_by_dataknobs,
+)
 from dataknobs_common.registry import PluginRegistry, _shown_failure
 from dataknobs_common.text.scan import default_normalizer, token_spans
 
@@ -650,8 +656,8 @@ def rules_from_config(specs: Sequence[str | Mapping[str, Any]]) -> tuple[Rule, .
     if isinstance(specs, str | bytes) or not isinstance(specs, Sequence):
         raise _written_by_dataknobs(
             ValidationError(
-                f"variant rules must be a list of rule specs; given {specs!r}",
-                context={"specs": specs},
+                f"variant rules must be a list of rule specs; given {_given(specs)}",
+                context={"specs": _given_value(specs)},
             )
         )
     built: list[Rule] = []
@@ -662,8 +668,8 @@ def rules_from_config(specs: Sequence[str | Mapping[str, Any]]) -> tuple[Rule, .
             raise _written_by_dataknobs(
                 ValidationError(
                     f"variant rule {position} must be a rule name or a mapping with a "
-                    f"'rule' naming one; given {spec!r}",
-                    context={"position": position, "spec": spec},
+                    f"'rule' naming one; given {_given(spec)}",
+                    context={"position": position, "spec": _given_value(spec)},
                 )
             )
         if not VARIANT_RULES.is_registered(name):

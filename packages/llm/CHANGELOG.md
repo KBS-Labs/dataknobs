@@ -103,8 +103,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   composite child spec that is not a mapping or names no `classifier:`, an
   empty composite) arrive word for word, and a consumer factory's
   `ValueError` arrives as a bounded `FactoryValueError` naming the
-  classifier. Any other failure is bounded too, a `ResourceError` or
-  `TimeoutError` keeping its family. The factory's error is on `__cause__`.
+  classifier; so does a `ValidationError`, which is a `ValueError` only in
+  that bounded form. Any other failure is bounded too. The factory's error is
+  on `__cause__`.
+- **A classifier factory's `ResourceError`, `TimeoutError`,
+  `ConcurrencyError`, `SerializationError` or `ConfigurationError` now
+  arrives as that family, bounded.** It used to arrive as an
+  `OperationError`, and none of these is one, so an `except OperationError`
+  around `create_intent_classifier` no longer catches them; catch the family,
+  or `DataknobsError` for all of them. They keep their own HTTP status in an
+  error policy (503, 504, 409, ...) rather than a masked 500.
   `LLMProviderFactory.create`'s unknown-provider refusal is marked as
   dataknobs' text, so it reaches a knowledge-base author through the bots
   helpers unchanged.

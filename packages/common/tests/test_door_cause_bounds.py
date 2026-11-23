@@ -154,3 +154,77 @@ class TestTheRungChain:
         assert message.endswith(
             "could not build: Failed to create plugin 'test_leaky_rung' (ValidationError)"
         )
+
+
+class _Engine:
+    """A live handle whose repr carries its connection URL, as real ones do."""
+
+    def __repr__(self) -> str:
+        return f"Engine({DSN})"
+
+
+#: Resolved by dotted path in the test below.
+ENGINE = _Engine()
+
+
+def _assert_named_by_type(error: BaseException) -> None:
+    assert DSN not in str(error)
+    assert DSN not in repr(getattr(error, "context", {}))
+    assert "_Engine" in str(error)
+
+
+class TestALiveObjectIsNamedByType:
+    """A marked refusal shows what a document can write, and a type for anything else.
+
+    These refusals are shown to a config's author whole, so a value in them
+    has to be one the author wrote. A caller handing a live object in place
+    of a config gets the object's type, never its repr.
+    """
+
+    def test_a_tokenizer_spec(self) -> None:
+        with pytest.raises(ValidationError) as caught:
+            tokenizer_from_config(_Engine())  # type: ignore[arg-type]
+        _assert_named_by_type(caught.value)
+
+    def test_variant_rule_specs(self) -> None:
+        with pytest.raises(ValidationError) as caught:
+            rules_from_config(_Engine())  # type: ignore[arg-type]
+        _assert_named_by_type(caught.value)
+
+    def test_one_variant_rule_spec(self) -> None:
+        with pytest.raises(ValidationError) as caught:
+            rules_from_config([_Engine()])  # type: ignore[list-item]
+        _assert_named_by_type(caught.value)
+
+    def test_a_dotted_path_resolving_to_an_instance(self) -> None:
+        from dataknobs_common.exceptions import DottedPathTypeError
+        from dataknobs_common.imports import resolve_class
+
+        with pytest.raises(DottedPathTypeError) as caught:
+            resolve_class(f"{__name__}:ENGINE", object)
+        _assert_named_by_type(caught.value)
+
+    def test_a_rungs_callable_parameter(self) -> None:
+        from dataknobs_common.entity_resolution.signals import _checked_callable
+
+        with pytest.raises(ValidationError) as caught:
+            _checked_callable(_Engine(), "normalizer")  # type: ignore[arg-type]
+        _assert_named_by_type(caught.value)
+
+    def test_a_rungs_count_and_threshold(self) -> None:
+        from dataknobs_common.entity_resolution.signals import (
+            _checked_count,
+            _checked_threshold,
+        )
+
+        with pytest.raises(ValidationError) as caught:
+            _checked_count(_Engine(), "k", 1, "nothing")
+        _assert_named_by_type(caught.value)
+        with pytest.raises(ValidationError) as caught:
+            _checked_threshold(_Engine())  # type: ignore[arg-type]
+        _assert_named_by_type(caught.value)
+
+    def test_a_document_value_is_still_shown(self) -> None:
+        with pytest.raises(ValidationError) as caught:
+            rules_from_config("inflect")
+        assert "given 'inflect'" in str(caught.value)

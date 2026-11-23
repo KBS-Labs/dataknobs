@@ -76,19 +76,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     with no LLM, a composite with no strategies or an unknown child, an
     unknown vector backend or embedding provider, a `vector_kb` source with
     no knowledge base, a `database` source's unknown backend or unreadable
-    `schema:`, an unresolvable `dedup_key:`;
-  - a `ValueError` a backend raised in its own words becomes a
-    `FactoryValueError` — still a `ValueError`, rendered as a 422 — reading
+    `schema:`, a data backend's refusal of its own config (naming the
+    source), an unresolvable `dedup_key:`;
+  - a `ValueError` or `ValidationError` a backend raised in its own words
+    becomes a `FactoryValueError` — a `ValueError` and a `ValidationError`,
+    rendered as a 422 — reading
     `Failed to create memory backend '<key>' (ValueError)`;
   - a backend's `ResourceError`, `TimeoutError`, `ConcurrencyError`,
     `SerializationError` or `ConfigurationError` keeps its family with a
     bounded message, so the API still answers 503, 504 or 409;
-  - anything else, a backend's own `ValidationError` included, is the
-    registry's bounded `OperationError`, a masked 500.
+  - anything else is the registry's bounded `OperationError`, a masked 500.
 
   The backend's error is on `__cause__`, which the API's log line carries.
   `DEFAULT_ERROR_POLICY` gains a `FactoryValueError` row (422, message and
   `detail` shown, both bounded).
+
+  Three outcomes change for a caller catching by type:
+  - a backend's own `NotFoundError` used to arrive as the helper's
+    `ValueError("Unknown memory type ...")`, misreporting a known type as
+    unknown. It now arrives as a bounded `NotFoundError`, which is not a
+    `ValueError`, and the API renders it as a 404;
+  - a backend's `RateLimitError` (a 429 with `Retry-After`) and
+    `ConsentRequiredError` (a 403) arrive as the bounded `OperationError`, a
+    masked 500, since a construction failure carries no retry or consent
+    contract for the caller;
+  - a backend's `ResourceError` and the other families above are no longer
+    `ValueError`s or their own instances: they are new, bounded instances of
+    the family.
 
 - **An unknown path or a wrong method answers in the standard error body.**
   `register_exception_handlers` registered its `HTTPException` handler under

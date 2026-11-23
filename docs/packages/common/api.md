@@ -198,7 +198,8 @@ See [Errors from a factory](plugin-registry.md#errors-from-a-factory).
 
 #### `FactoryValueError`
 
-The bounded stand-in for a `ValueError` a factory raised in its own words,
+The bounded stand-in for a `ValueError` or `ValidationError` a factory raised
+in its own words,
 raised by `create_surfacing` and `create_surfacing_async`. The factory's text
 may carry what it was handed, so it is not shown: the message is
 `"Failed to create <subject> '<key>' (<type>)"`, `context` carries `key`,
@@ -943,12 +944,13 @@ def create_surfacing(
 async def create_surfacing_async(...) -> T: ...  # same parameters, over create_async
 ```
 
-`surfaced_cause` returns a registry error's `__cause__` when a registry raised
-it or dataknobs wrote it and its words have not changed since, else `None`.
+`surfaced_cause` returns a registry error's `__cause__` when a registry or
+another part of dataknobs wrote it and its words have not changed since, else
+`None`.
 `create_surfacing` is the shared body of a helper over a registry: the
 registry's miss becomes `unknown(error)`, a `PluginConfigError` is raised as
 built, a surfaced cause is raised as itself, and any other factory error is
-bounded — a `ValueError` as `FactoryValueError`, a `ResourceError`,
+bounded — a `ValueError` or `ValidationError` as `FactoryValueError`, a `ResourceError`,
 `TimeoutError`, `ConcurrencyError`, `SerializationError` or
 `ConfigurationError` as a bounded error of its family, anything else as the
 registry's bounded `OperationError`.

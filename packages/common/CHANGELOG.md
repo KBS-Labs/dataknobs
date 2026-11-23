@@ -23,7 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variant rule or rung writes still reaches the author word for word: a
   parameter typo such as `{name: words, apostrophe: keep}` reads exactly as
   before. A factory returning something not callable is named by its type
-  rather than its `repr`.
+  rather than its `repr`, and so is a value in one of these refusals that a
+  configuration document could not have written: a live object handed to
+  `tokenizer_from_config`, `rules_from_config`, a rung's count, threshold or
+  callable parameter, or a dotted path that resolves to an instance where
+  `resolve_class` wanted a class.
 
 - **`token_spans` keeps a combining mark in the word it is written on.** It
   decided a token character by `str.isalnum`, which is False for every
@@ -549,31 +553,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   helper in front of a registry that reads `__cause__` back by type undoes
   that, because a `ValueError` dataknobs wrote and one a driver raised with a
   DSN in it are the same type. `surfaced_cause(exc)` decides by who wrote the
-  text instead: it returns the cause when a registry raised it or dataknobs
-  did and its words have not changed since, else `None`.
+  text instead: it returns the cause when a registry or another part of
+  dataknobs wrote it and its words have not changed since, else `None`. A
+  registry's error a factory amends before re-raising -- appending the
+  connection URL it tried -- is therefore no longer shown as the registry's.
   `create_surfacing(registry, *, subject, unknown=None, key=None, config=None,
   **kwargs)` is the shared body of such a helper: the registry's miss becomes
   the helper's own `unknown(error)` text, a `PluginConfigError` is raised as
   built, an error dataknobs wrote arrives as itself, and anything else a
   factory raised is bounded to `"Failed to create <subject> '<key>' (<type>)"`
-  — a `ValueError` as `FactoryValueError`; a `ResourceError`,
-  `TimeoutError`, `ConcurrencyError`, `SerializationError` or
-  `ConfigurationError` as a bounded error of the same family; anything else
-  as the registry's bounded `OperationError`. `create_surfacing_async` is its
+  — a `ValueError` or `ValidationError` as `FactoryValueError`; a
+  `ResourceError`, `TimeoutError`, `ConcurrencyError`, `SerializationError`
+  or `ConfigurationError` as a bounded error of the same family; anything
+  else as the registry's bounded `OperationError`. A nested registry's
+  bounded failure passed through by an outer one is raised as itself, naming
+  the inner key. `create_surfacing_async` is its
   twin over `create_async`. The plugin-registry guide's *Wrapping a registry
   in a helper* section shows the pattern.
 
 - **`FactoryValueError(ValidationError, ValueError)`.** The bounded stand-in
-  for a `ValueError` a factory raised in its own words. Caught by
+  for a `ValueError` or `ValidationError` a factory raised in its own words. Caught by
   `except ValueError`, which is what the helpers built on `create_surfacing`
   promised before, and by `except ValidationError`. `context` carries `key`,
   `registry` and `cause_type`.
 
 - **`assert_no_cause_read` in `dataknobs_common.testing`.** A source scan that
-  fails on every load of `__cause__` outside an allow-list of reviewed
+  fails on every read of an error's chain outside an allow-list of reviewed
   readers — not only in `except` handlers, since a helper taking the
-  exception as a parameter reads it just the same. Reading only
-  `type(x.__cause__)` is not flagged. An allow-list entry matching nothing is
+  exception as a parameter reads it just the same. A read is a load of
+  `__cause__` or `__context__`, a string naming either (`getattr(exc,
+  "__cause__")`), or a `traceback` formatter, which renders the whole chain.
+  Reading only `type(x.__cause__)` is not flagged. An allow-list entry matching nothing is
   an error. `assert_no_broad_except_in_error_text` now reads through a raise
   wrapped in a marking call, so marking a raise does not hide it from that
   guard.

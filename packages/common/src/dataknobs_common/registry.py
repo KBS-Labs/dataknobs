@@ -82,6 +82,7 @@ from dataknobs_common.exceptions import (
     ResourceError,
     SerializationError,
     TimeoutError as DataknobsTimeoutError,
+    ValidationError,
     _is_written_by_dataknobs,
     _value_free_refusal_behind,
     _written_by_dataknobs,
@@ -144,9 +145,17 @@ def _ours(exc: _Raised) -> _Raised:
     (:func:`~dataknobs_common.exceptions._value_free`): its text may be
     *carried* on a :class:`~dataknobs_common.exceptions.PluginConfigError`,
     which says nothing about the refusal passing through as itself.
+
+    The error is also marked as text dataknobs wrote
+    (:func:`~dataknobs_common.exceptions._written_by_dataknobs`), which
+    records what it said. That is the mark a helper in front of a registry
+    trusts (:func:`surfaced_cause`), so a registry's error a factory amends
+    before re-raising -- appending the connection URL it tried, say -- is no
+    longer shown as the registry's. The boolean above says only who raised
+    the instance.
     """
     setattr(exc, _RAISED_BY_A_REGISTRY, True)
-    return exc
+    return _written_by_dataknobs(exc)
 
 
 def surfaced_cause(exc: BaseException) -> BaseException | None:
@@ -162,8 +171,8 @@ def surfaced_cause(exc: BaseException) -> BaseException | None:
     a driver raised with a DSN in it are the same type.
 
     This answers by who wrote the text instead. It returns ``exc.__cause__``
-    when a registry raised it, or when dataknobs raised it and its words have
-    not changed since; otherwise ``None``, and the caller should keep the
+    when dataknobs wrote it -- a registry raised it, or a dataknobs refusal --
+    and its words have not changed since; otherwise ``None``, and the caller should keep the
     bounded error, or bound its own. It reads one link only, because the
     registry's bound is one link deep: what the cause was itself raised
     ``from`` is the cause's business.
@@ -193,7 +202,7 @@ def surfaced_cause(exc: BaseException) -> BaseException | None:
     cause = exc.__cause__
     if cause is None:
         return None
-    if getattr(cause, _RAISED_BY_A_REGISTRY, False) or _is_written_by_dataknobs(cause):
+    if _is_written_by_dataknobs(cause):
         return cause
     return None
 
@@ -2775,31 +2784,33 @@ _BOUNDED_FAMILIES: tuple[type[DataknobsError], ...] = (
 )
 
 
-def _bounded(exc: OperationError, cause: BaseException, subject: str) -> BaseException:
-    """The error a helper raises for a factory failure it may not show.
+def _bound_family(cause: BaseException) -> type[DataknobsError] | None:
+    """The type a bounded failure for ``cause`` keeps, or ``None`` for none.
 
-    ``exc`` is the registry's bounded error and ``cause`` the factory's. A
-    ``ValueError`` becomes a :class:`FactoryValueError`, one of
-    :data:`_BOUNDED_FAMILIES` a bounded instance of its family, and anything
-    else the registry's own error, unchanged. The text names the subject,
-    the key and the cause's type, never the cause's words.
+    A ``ValueError`` or a :class:`~dataknobs_common.exceptions.ValidationError`
+    -- the dataknobs type for refused config -- is a
+    :class:`FactoryValueError`, which is both; one of
+    :data:`_BOUNDED_FAMILIES` keeps its family.
     """
-    if isinstance(cause, ValueError):
-        family: type[DataknobsError] = FactoryValueError
-    else:
-        found = next((f for f in _BOUNDED_FAMILIES if isinstance(cause, f)), None)
-        if found is None:
-            return exc
-        family = found
-    key = exc.context.get("key")
-    context = {
-        "key": key,
-        "registry": exc.context.get("registry"),
-        "cause_type": type(cause).__name__,
-    }
+    if isinstance(cause, (ValueError, ValidationError)):
+        return FactoryValueError
+    return next((f for f in _BOUNDED_FAMILIES if isinstance(cause, f)), None)
+
+
+def _bounded(
+    family: type[DataknobsError],
+    cause: BaseException,
+    subject: str,
+    key: object,
+    registry: str,
+) -> DataknobsError:
+    """A bounded ``family`` error for ``cause``: the subject, key and type, never its words."""
+    named = f" '{key}'" if key is not None else ""
+    context: dict[str, Any] = {"key": key} if key is not None else {}
+    context.update({"registry": registry, "cause_type": type(cause).__name__})
     return _ours(
         family(
-            f"Failed to create {subject} '{key}' ({type(cause).__name__})",
+            f"Failed to create {subject}{named} ({type(cause).__name__})",
             context=context,
         )
     )
@@ -2815,7 +2826,7 @@ def _is_this_registrys_miss(exc: NotFoundError, registry: "PluginRegistry[Any]")
     through by a factory that looked something up, is not this one's.
     """
     return (
-        bool(getattr(exc, _RAISED_BY_A_REGISTRY, False))
+        _is_written_by_dataknobs(exc)
         and exc.__cause__ is None
         and "available" in exc.context
         and exc.context.get("registry") == registry.name
@@ -2834,24 +2845,41 @@ def _raise_surfaced(
     The one statement of the rule both share; only the ``await`` differs
     between them.
     """
-    if isinstance(exc, NotFoundError):
-        if unknown is not None and _is_this_registrys_miss(exc, registry):
-            raise _written_by_dataknobs(unknown(exc)) from exc
-        raise exc
-    if isinstance(exc, PluginConfigError):
-        # A config refusal the registry carried: its own words plus the key.
+    if (
+        isinstance(exc, NotFoundError)
+        and unknown is not None
+        and _is_this_registrys_miss(exc, registry)
+    ):
+        raise _written_by_dataknobs(unknown(exc)) from exc
+    if not _is_written_by_dataknobs(exc):
+        # A registry's error a factory amended before re-raising it, which the
+        # outer registry passed through as its own: the words are no longer
+        # only the registry's, and neither is the ``context`` its key is read
+        # from, so the bound names only the subject and the type.
+        family = _bound_family(exc) or (
+            NotFoundError if isinstance(exc, NotFoundError) else OperationError
+        )
+        raise _bounded(family, exc, subject, None, registry.name) from exc
+    if (
+        isinstance(exc, (NotFoundError, PluginConfigError))
+        or exc.__cause__ is None
+        or exc.context.get("registry") != registry.name
+    ):
+        # The registry's own text, with nothing of a factory's in it: a miss
+        # or a factory's bounded ``NotFoundError``, a carried config refusal
+        # (its words plus the key), a refusal with nothing behind it (a
+        # ``validate_type`` mismatch), or a nested registry's bounded failure
+        # passed through, which names that registry's key.
         raise exc
     cause = surfaced_cause(exc)
     if cause is not None:
         raise cause from cause.__cause__
-    if exc.__cause__ is None:
-        # The registry's own refusal (a ``validate_type`` mismatch, an
-        # awaitable factory on the sync lane): its text, nothing behind it.
+    kept = _bound_family(exc.__cause__)
+    if kept is None:
         raise exc
-    bounded = _bounded(exc, exc.__cause__, subject)
-    if bounded is exc:
-        raise exc
-    raise bounded from exc.__cause__
+    raise _bounded(
+        kept, exc.__cause__, subject, exc.context.get("key"), registry.name
+    ) from exc.__cause__
 
 
 def create_surfacing(
@@ -2878,13 +2906,15 @@ def create_surfacing(
     - **a config refusal:** the registry's
       :class:`~dataknobs_common.exceptions.PluginConfigError`, as built;
     - **an error a registry raised, or dataknobs wrote** (see
-      :func:`surfaced_cause`): that error, as itself. This is what keeps
+      :func:`surfaced_cause`): that error, as itself, while its words are
+      unchanged. A nested registry's bounded failure that an outer registry
+      passed through is raised as itself too, naming the inner key. This is what keeps
       dataknobs' own diagnostics -- "Summary memory requires an LLM
       provider", a nested helper's "Unknown memory type" -- in front of the
       config's author;
-    - **any other error a factory raised:** bounded. A ``ValueError``
-      becomes a :class:`~dataknobs_common.exceptions.FactoryValueError`
-      (still a ``ValueError``); a ``ResourceError``, ``TimeoutError``,
+    - **any other error a factory raised:** bounded. A ``ValueError`` or a
+      ``ValidationError`` becomes a
+      :class:`~dataknobs_common.exceptions.FactoryValueError` (both); a ``ResourceError``, ``TimeoutError``,
       ``ConcurrencyError``, ``SerializationError`` or ``ConfigurationError``
       a bounded instance of its family; anything else the registry's
       bounded ``OperationError``. The message is

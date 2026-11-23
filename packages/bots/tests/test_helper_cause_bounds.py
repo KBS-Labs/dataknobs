@@ -24,10 +24,10 @@ from dataknobs_bots.knowledge.sources.factory import create_source_from_config, 
 from dataknobs_bots.memory import create_memory_from_config, memory_backends
 from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
 from dataknobs_common.exceptions import (
+    ConfigurationError,
     DottedPathError,
     FactoryValueError,
     NotFoundError,
-    OperationError,
     ResourceError,
     TimeoutError,
     ValidationError,
@@ -92,13 +92,13 @@ class TestABackendsOwnWordsStayBounded:
         assert DSN in str(caught.value.__cause__)
 
     async def test_a_validation_error(self, subsystem: str, registered: Any) -> None:
-        """It rendered as a 422 with the DSN in the body; it is now a masked bounded error."""
+        """It rendered as a 422 with the DSN in the body; it is still a 422, bounded."""
         key = registered(subsystem, ValidationError(f"refused {DSN}", context={"url": DSN}))
 
-        with pytest.raises(OperationError) as caught:
+        with pytest.raises(FactoryValueError) as caught:
             await _build(subsystem, key)
 
-        assert type(caught.value) is OperationError
+        assert caught.value.context["cause_type"] == "ValidationError"
         assert DSN not in str(caught.value)
         assert DSN not in repr(caught.value.context)
 
@@ -223,3 +223,87 @@ class TestDataknobsOwnDiagnosticsKeepTheirWords:
                 knowledge_base=object(),
             )
         assert "'docs': cannot resolve dedup_key='nope.module:fn'" in str(caught.value)
+
+
+_FIELDS = {"fields": {"id": {"type": "string"}, "title": {"type": "string"}}}
+
+
+class TestABackendsConfigRefusalNamesTheSource:
+    """A data backend's refusal of its own config reaches the bot config's author.
+
+    These are dataknobs' words about what the author wrote, raised while the
+    backend is built inside the ``database`` source factory, so they cross the
+    source registry and come back through ``create_source_from_config``.
+    """
+
+    @pytest.mark.parametrize(
+        ("options", "error", "words"),
+        [
+            pytest.param(
+                {
+                    "backend": "postgres",
+                    "layout": "native",
+                    "table": "cases",
+                    "id_column": "case_id",
+                    "schema": _FIELDS,
+                },
+                ValidationError,
+                "id_column 'case_id' is not a declared column",
+                id="native-undeclared-id-column",
+            ),
+            pytest.param(
+                {"backend": "postgres", "layout": "native", "table": "cases", "id_column": "id"},
+                ValidationError,
+                "declares none",
+                id="native-no-columns",
+            ),
+            pytest.param(
+                {"backend": "postgres", "layout": "bogus"},
+                ValidationError,
+                "`layout:` is one of ['jsonb', 'native'], got 'bogus'",
+                id="unknown-layout",
+            ),
+            pytest.param(
+                {"backend": "postgres", "table": "bad name;"},
+                ConfigurationError,
+                "Invalid Postgres 'table' identifier",
+                id="postgres-identifier",
+            ),
+            pytest.param(
+                {
+                    "backend": "sqlite",
+                    "layout": "native",
+                    "id_column": "id",
+                    "schema": _FIELDS,
+                    "journal_mode": "WAL",
+                    "path": "cases.db",
+                },
+                ConfigurationError,
+                "journal_mode: WAL",
+                id="refused-under-native",
+            ),
+            pytest.param(
+                {"backend": "elasticsearch", "max_result_window": 0},
+                ValueError,
+                "Elasticsearch 'max_result_window' must be a positive integer, got 0",
+                id="elasticsearch-positive-integer",
+            ),
+            pytest.param(
+                {"backend": "s3"},
+                ValueError,
+                "S3 backend requires 'bucket' in configuration",
+                id="s3-bucket",
+            ),
+        ],
+    )
+    async def test_the_refusal_reaches_the_author_naming_the_source(
+        self, options: dict[str, Any], error: type[BaseException], words: str
+    ) -> None:
+        with pytest.raises(error) as caught:
+            await create_source_from_config(
+                GroundedSourceConfig(source_type="database", name="cases", options=options)
+            )
+        message = str(caught.value)
+        assert "cases" in message.split(":", 1)[0]
+        assert words in message
+        assert not isinstance(caught.value, FactoryValueError)

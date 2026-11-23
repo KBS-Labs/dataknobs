@@ -68,6 +68,7 @@ from dataknobs_common.exceptions import (
     DottedPathError,
     DottedPathReason,
     DottedPathTypeError,
+    _is_written_by_dataknobs,
     _written_by_dataknobs,
 )
 
@@ -330,6 +331,18 @@ def resolve_callable(ref: str) -> Callable[..., Any]:
     return target
 
 
+def _resolved(target: object) -> str:
+    """What a dotted path resolved to, as a refusal may name it: never a ``repr``.
+
+    The target is whatever the module holds under that name, which can be a
+    live object -- an engine, a client -- whose ``repr`` carries the
+    connection URL it was built with.
+    """
+    if isinstance(target, type):
+        return f"the class {target.__module__}.{target.__qualname__}"
+    return f"a {type(target).__name__}"
+
+
 def resolve_class(ref: str, base: ClassConstraint[_T]) -> type[_T]:
     """Resolve *ref* to a class that subclasses *base*.
 
@@ -388,7 +401,7 @@ def resolve_class(ref: str, base: ClassConstraint[_T]) -> type[_T]:
         raise _written_by_dataknobs(
             DottedPathTypeError(
                 f"{ref!r} must resolve to a subclass of "
-                f"{base.__module__}.{base.__qualname__}; got {target!r}",
+                f"{base.__module__}.{base.__qualname__}; got {_resolved(target)}",
                 ref=ref,
                 expected=constraint,
             )
@@ -434,9 +447,12 @@ def resolve_optional_callable(
     try:
         return resolve_callable(ref)
     except DottedPathError as exc:
+        # Every refusal ``resolve_callable`` raises is one of this module's,
+        # marked; anything else is named by its type.
+        detail = str(exc) if _is_written_by_dataknobs(exc) else f"({type(exc).__name__})"
         raise _written_by_dataknobs(
             DottedPathError(
-                f"{owner!r}: cannot resolve {field_name}={ref!r} — {exc}",
+                f"{owner!r}: cannot resolve {field_name}={ref!r} — {detail}",
                 ref=exc.ref,
                 reason=exc.reason,
                 field_name=field_name,

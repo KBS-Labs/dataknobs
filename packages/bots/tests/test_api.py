@@ -1296,10 +1296,8 @@ class TestDataknobsErrorHandling:
 
         ``create_memory_from_config`` used to hand the backend's exception back
         as itself, so a ``ValidationError`` rendered as a 422 *with* the DSN in
-        the body. A ``ValueError`` now arrives as a bounded
-        ``FactoryValueError`` (still a 422) and a ``ValidationError`` as the
-        registry's bounded ``OperationError`` (a masked 500); either way the
-        DSN goes to the log only.
+        the body. Either now arrives as a bounded ``FactoryValueError``, still
+        a 422, naming the key and the type; the DSN goes to the log only.
         """
         from dataknobs_bots.memory import create_memory_from_config, memory_backends
 
@@ -1320,18 +1318,14 @@ class TestDataknobsErrorHandling:
 
         assert dsn not in response.text
         body = response.json()
-        if raised == "ValueError":
-            assert response.status_code == 422
-            assert body["error"] == "FactoryValueError"
-            assert body["message"] == "Failed to create memory backend 'leaky' (ValueError)"
-            assert body["detail"] == {
-                "key": "leaky",
-                "registry": "memory_backends",
-                "cause_type": "ValueError",
-            }
-        else:
-            assert response.status_code == 500
-            assert body["error"] == "OperationError"
+        assert response.status_code == 422
+        assert body["error"] == "FactoryValueError"
+        assert body["message"] == f"Failed to create memory backend 'leaky' ({raised})"
+        assert body["detail"] == {
+            "key": "leaky",
+            "registry": "memory_backends",
+            "cause_type": raised,
+        }
 
     async def test_the_configuration_diagnostic_reaches_the_log_by_default(self, caplog):
         """The case the gap was reported for, and why it is masked by default.

@@ -61,11 +61,28 @@ async def create_source_from_config(
     Raises:
         ValueError: If the source type is unknown, required dependencies
             are missing, or an option is one the source and its backend
-            both refuse -- a refusal by this package's own checks.
+            both refuse -- a refusal by this package's own checks. A
+            ``database`` source's backend refusing a setting in dataknobs'
+            words (an unknown backend, S3 with no ``bucket``) names the
+            source. A backend's ``ValueError`` in its own words arrives as
+            ``Source '<name>': its database could not be opened
+            (<type>)``, with the original on ``__cause__``.
         ValidationError: If a ``database`` source's ``schema`` declares
             something the shared schema reader refuses (an unknown type, a
-            key a field does not take, a repeated or unnamed field). The
-            message names the source.
+            key a field does not take, a repeated or unnamed field), or its
+            backend refuses its layout (a native table's undeclared
+            ``id_column``, an unknown ``layout:``). The message names the
+            source.
+        ConfigurationError: If a ``database`` source's backend refuses its
+            configuration as such (a setting refused under ``layout:
+            native``, an invalid Postgres identifier), naming the source.
+        FactoryValueError: If a registered source factory of your own
+            raises a ``ValueError`` or ``ValidationError`` in its own words;
+            bounded to the source type and the error's type, the original on
+            ``__cause__``. Its ``ResourceError``, ``TimeoutError``,
+            ``ConcurrencyError``, ``SerializationError`` or
+            ``ConfigurationError`` arrives as a bounded error of that family,
+            anything else as a bounded ``OperationError``.
 
     Supported source types:
 

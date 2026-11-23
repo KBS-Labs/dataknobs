@@ -46,7 +46,13 @@ from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from typing import Any, TypeAlias
 
-from dataknobs_common.exceptions import OperationError, ValidationError, _written_by_dataknobs
+from dataknobs_common.exceptions import (
+    OperationError,
+    ValidationError,
+    _given,
+    _given_value,
+    _written_by_dataknobs,
+)
 from dataknobs_common.registry import PluginRegistry, _shown_failure
 from dataknobs_common.text.scan import _APOSTROPHE_MODES, token_spans, word_spans
 
@@ -129,8 +135,8 @@ def tokenizer_from_config(
         raise _written_by_dataknobs(
             ValidationError(
                 f"tokenizer must be a tokenizer name, a mapping with a 'name' naming "
-                f"one, or a callable; given {spec!r}",
-                context={"spec": spec},
+                f"one, or a callable; given {_given(spec)}",
+                context={"spec": _given_value(spec)},
             )
         )
     if not TOKENIZERS.is_registered(name):

@@ -1705,14 +1705,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **The refusals a config author depends on are marked as dataknobs' text.**
-  `select_backend`'s unknown- and uninstalled-backend refusals, the shared
-  `schema:` reader's (`extract_schema_from_config`,
-  `DatabaseSchema.from_dict`, `read_field_declarations`), and the semantic
-  rung's refusals of its handles are raised inside registry factories when a
-  bot's knowledge base or grounded source is built. The helpers in front of
-  those registries now show a factory's words only when dataknobs wrote them,
-  so these keep reaching the author word for word. No message or type
-  changes here.
+  The helpers in front of a registry now show a factory's words only when
+  dataknobs wrote them, so the refusals raised inside a registry factory are
+  marked to keep reaching the author word for word:
+  - `select_backend`'s unknown- and uninstalled-backend refusals, and
+    `build_backend`'s refusal of a registered object with no `from_config`;
+  - the shared `schema:` reader's (`extract_schema_from_config`,
+    `DatabaseSchema.from_dict`, `read_field_declarations`);
+  - a backend's refusals of its own config while it is built: the native
+    layout's columns, `id_column` and `scope:`, an unknown `layout:`, a
+    setting refused under `layout: native`, a Postgres identifier, a
+    Postgres `schema:` holding fields, Elasticsearch's positive-integer
+    settings and S3's missing `bucket`. Through `create_source_from_config`
+    these name the source again, rather than arriving as a bounded failure;
+  - the semantic rung's refusals of its handles, raised when an ontology
+    document's resolver is built.
+
+  Messages and types are unchanged, except that a value in one of these
+  refusals that a configuration document could not have written (a live
+  object handed in where config was expected) is now named by its type
+  rather than its `repr`, in the message and in `context`.
 
 - **A sync S3 `update` stamps `created_at` and `updated_at` from one read of
   the clock.** For a stored object with no `created_at`, the two stamps came

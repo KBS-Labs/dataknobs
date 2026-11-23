@@ -31,7 +31,13 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal
 
 from dataknobs_common import normalize_postgres_connection_config
-from dataknobs_common.exceptions import ConfigurationError, ValidationError
+from dataknobs_common.exceptions import (
+    ConfigurationError,
+    ValidationError,
+    _given,
+    _given_value,
+    _written_by_dataknobs,
+)
 from dataknobs_common.structured_config import StructuredConfig
 
 from ..database import extract_schema_from_config
@@ -245,9 +251,11 @@ class ColumnLayoutConfig(DatabaseConfig):
     def _refuse_under_native(self, setting: str, why: str, *, key: str) -> None:
         """Refuse ``setting`` when the layout is native; say ``why``."""
         if self.native:
-            raise ConfigurationError(
-                f"{self._BACKEND} {setting} under `layout: native`: {why}",
-                context={"table": getattr(self, "table", None), "key": key},
+            raise _written_by_dataknobs(
+                ConfigurationError(
+                    f"{self._BACKEND} {setting} under `layout: native`: {why}",
+                    context={"table": getattr(self, "table", None), "key": key},
+                )
             )
 
 
@@ -536,10 +544,12 @@ class PostgresDatabaseConfig(ColumnLayoutConfig, VectorBackendConfig):
         if self._names_namespace(self.schema):
             # ``from_dict`` routes such a ``schema`` to ``schema_name``; a
             # config built in code names the field, so say which one.
-            raise ValidationError(
-                f"PostgresDatabaseConfig `schema` declares fields; got "
-                f"{self.schema!r}. Give a SQL namespace as `schema_name`",
-                context={"schema": self.schema},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"PostgresDatabaseConfig `schema` declares fields; got "
+                    f"{_given(self.schema)}. Give a SQL namespace as `schema_name`",
+                    context={"schema": _given_value(self.schema)},
+                )
             )
         super().__post_init__()
         # Validate identifiers early (a non-string ``schema``/``table`` —
@@ -593,14 +603,18 @@ class ElasticsearchDatabaseConfigBase(VectorBackendConfig):
             except (TypeError, ValueError):
                 number = None
             if number is None or number < 1:
-                raise ValueError(
-                    f"Elasticsearch '{name}' must be a positive integer, got {value!r}"
+                raise _written_by_dataknobs(
+                    ValueError(
+                        f"Elasticsearch '{name}' must be a positive integer, got {_given(value)}"
+                    )
                 )
             object.__setattr__(self, name, number)
         if self.search_page_size > self.max_result_window:
-            raise ValueError(
-                f"Elasticsearch 'search_page_size' ({self.search_page_size}) must not exceed "
-                f"'max_result_window' ({self.max_result_window})"
+            raise _written_by_dataknobs(
+                ValueError(
+                    f"Elasticsearch 'search_page_size' ({self.search_page_size}) must not exceed "
+                    f"'max_result_window' ({self.max_result_window})"
+                )
             )
 
 
@@ -740,7 +754,7 @@ class S3DatabaseConfigBase(VectorBackendConfig):
     def __post_init__(self) -> None:
         super().__post_init__()
         if not self.bucket:
-            raise ValueError("S3 backend requires 'bucket' in configuration")
+            raise _written_by_dataknobs(ValueError("S3 backend requires 'bucket' in configuration"))
 
 
 @dataclass(frozen=True)

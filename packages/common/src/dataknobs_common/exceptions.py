@@ -316,11 +316,53 @@ def _written_by_dataknobs(exc: _E) -> _E:
 
 
 def _is_written_by_dataknobs(exc: BaseException) -> bool:
-    """Whether ``exc`` is marked and still says what it said when marked."""
+    """Whether ``exc`` is marked and still says what it said when marked.
+
+    Asked while another error is being handled, so it never raises: a
+    ``context`` whose comparison raises, or answers something that is not a
+    plain truth value, reads as unmarked. So does a ``context`` holding a
+    value compared by identity, since the snapshot holds a copy of it. Both
+    are bounded, the safe direction; a marking site keeps its ``context`` to
+    names, counts and plain containers of them.
+    """
     recorded: object = getattr(exc, _WRITTEN_BY_DATAKNOBS, None)
     if recorded is None:
         return False
-    return bool(recorded == _written_by_snapshot(exc))
+    try:
+        return (recorded == _written_by_snapshot(exc)) is True
+    except Exception:
+        return False
+
+
+#: What a configuration document can write: the values YAML and JSON parse to.
+_DOCUMENT_SCALARS = (str, int, float, bool, type(None))
+
+
+def _is_document_value(value: object) -> bool:
+    """Whether ``value`` is something a configuration document could have written."""
+    if isinstance(value, _DOCUMENT_SCALARS):
+        return True
+    if isinstance(value, list | tuple):
+        return all(_is_document_value(item) for item in value)
+    if isinstance(value, Mapping):
+        return all(isinstance(key, str) and _is_document_value(item) for key, item in value.items())
+    return False
+
+
+def _given(value: object) -> str:
+    """``value`` as a refusal dataknobs marks may show it.
+
+    Its ``repr`` when it is a document value -- what the config's author
+    wrote -- and otherwise only its type, because a caller can hand a live
+    object where a config was expected, and a live handle's ``repr`` can
+    carry the connection URL it was opened with.
+    """
+    return repr(value) if _is_document_value(value) else f"a {type(value).__name__}"
+
+
+def _given_value(value: object) -> object:
+    """``value`` for a marked refusal's ``context``: itself, or its type's name."""
+    return value if _is_document_value(value) else type(value).__name__
 
 
 class ConfigurationError(DataknobsError):
@@ -503,11 +545,11 @@ class PluginConfigError(ConfigFieldError, OperationError):
 
 
 class FactoryValueError(ValidationError, ValueError):
-    """A bounded stand-in for a factory's own ``ValueError``.
+    """A bounded stand-in for a factory's own ``ValueError`` or ``ValidationError``.
 
     Raised by :func:`~dataknobs_common.registry.create_surfacing` (and its
-    async twin) when a factory behind a registry raised a ``ValueError``
-    whose text dataknobs did not write. That text may carry what the factory
+    async twin) when a factory behind a registry raised a ``ValueError`` or
+    a :class:`ValidationError` whose text dataknobs did not write. That text may carry what the factory
     was handed -- a connection URL, a credential -- so it is not shown: the
     message is ``"Failed to create <subject> '<key>' (<type>)"`` and the
     factory's error is on ``__cause__``, for a server-side log.
@@ -517,10 +559,12 @@ class FactoryValueError(ValidationError, ValueError):
     - a ``ValueError``, because the helpers that raise it raised the
       factory's ``ValueError`` itself before, so an ``except ValueError``
       written against them keeps catching it;
-    - a ``ValidationError``, because a factory refusing its config is the
-      config's problem, and a handler choosing a status by type (the bots
-      API's ``DEFAULT_ERROR_POLICY`` renders it as a 422) should treat it as
-      one. The message and ``context`` are bounded, so showing them is safe.
+    - a ``ValidationError``, so a factory's own ``ValidationError`` -- the
+      dataknobs type for refused config -- is still caught as one;
+      and because a factory refusing its config is the config's problem, so
+      a handler choosing a status by type (the bots API's
+      ``DEFAULT_ERROR_POLICY`` renders it as a 422) should treat it as one.
+      The message and ``context`` are bounded, so showing them is safe.
 
     ``context`` carries ``key``, ``registry`` and ``cause_type``.
 

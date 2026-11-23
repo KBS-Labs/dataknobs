@@ -397,14 +397,14 @@ def create_widget(config: dict[str, Any]) -> Widget:
     )
 ```
 
-| The registry raised, for a factory that raised | The helper raises |
+| When creating through the registry fails with | The helper raises |
 |---|---|
-| its own miss for the key | `unknown(error)`, or the `NotFoundError` when `unknown` is omitted |
+| the registry's miss for the key | `unknown(error)`, or the `NotFoundError` when `unknown` is omitted |
 | a `PluginConfigError` | that error, as built |
-| an error a registry raised, or dataknobs wrote and has not changed since | that error, as itself |
-| a `ValueError` | `FactoryValueError("Failed to create widget '<key>' (ValueError)")` — still a `ValueError` |
-| a `ResourceError`, `TimeoutError`, `ConcurrencyError`, `SerializationError` or `ConfigurationError` | a bounded error of the same family |
-| anything else | the registry's bounded `OperationError` |
+| a factory error a registry raised, or dataknobs wrote, and that has not changed since | that error, as itself |
+| a factory's `ValueError` or `ValidationError` | `FactoryValueError("Failed to create widget '<key>' (ValueError)")` — both a `ValueError` and a `ValidationError` |
+| a factory's `ResourceError`, `TimeoutError`, `ConcurrencyError`, `SerializationError` or `ConfigurationError` | a bounded error of the same family |
+| anything else a factory raised | the registry's bounded `OperationError` |
 
 In every bounded case the factory's error is on `__cause__`, for a log.
 `unknown` is called only for this registry's own miss, never for a factory's
@@ -417,14 +417,16 @@ else `None`, in which case name the cause by `type(exc.__cause__).__name__`.
 
 **Your own factories' words are bounded.** What `surfaced_cause` recognises
 is a registry's error and the refusals dataknobs itself raises, marked where
-they are raised. A `ValueError` your factory raises reaches your caller as
-`FactoryValueError` naming the key, which is the safe direction: whatever
+they are raised. A `ValueError` or `ValidationError` your factory raises
+reaches your caller as `FactoryValueError` naming the key, which is the safe direction: whatever
 your factory says goes to the log, not to whoever is on the other side of
 your API.
 
 `assert_no_cause_read` in `dataknobs_common.testing` keeps the unwrap from
-coming back: it fails on any read of `__cause__` under the roots you give it
-outside an allow-list of reviewed readers.
+coming back: it fails on any read of `__cause__` or `__context__` under the
+roots you give it outside an allow-list of reviewed readers, including one
+spelled `getattr(exc, "__cause__")` and a `traceback` formatter, which renders
+the whole chain.
 
 ## Lazy Initialization
 

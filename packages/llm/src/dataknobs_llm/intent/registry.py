@@ -87,8 +87,8 @@ def create_intent_classifier(
             own refusals (a composite child spec that is not a mapping or
             names no ``classifier:``, a child name not registered, a
             composite with no children) arrive as themselves, with their
-            words. A ``ValueError`` a consumer's factory raised with its own
-            words arrives as a bounded
+            words. A ``ValueError`` or ``ValidationError`` a consumer's
+            factory raised with its own words arrives as a bounded
             :class:`~dataknobs_common.exceptions.FactoryValueError` --
             still a ``ValueError`` -- naming the classifier and the error's
             type, because a factory's text can carry what it was handed.

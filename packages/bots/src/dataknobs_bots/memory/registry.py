@@ -170,8 +170,8 @@ async def create_memory_from_config(
             reports a configuration problem. dataknobs' own refusals (summary
             memory without an LLM source, a composite with no strategies, an
             unknown nested type) arrive as themselves, with their words. A
-            ``ValueError`` a backend raised with its own words arrives as a
-            bounded :class:`~dataknobs_common.exceptions.FactoryValueError`
+            ``ValueError`` or ``ValidationError`` a backend raised with its
+            own words arrives as a bounded :class:`~dataknobs_common.exceptions.FactoryValueError`
             (still a ``ValueError``), because a backend's text can carry the
             connection URL it was handed; the original is on ``__cause__``.
         PluginConfigError: A key the backend's config class refuses (also a

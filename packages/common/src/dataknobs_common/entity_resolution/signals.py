@@ -41,7 +41,7 @@ from dataknobs_common.entity_resolution.protocols import (
     SurfaceFormCatalog,
 )
 from dataknobs_common.hierarchy import K
-from dataknobs_common.exceptions import ValidationError, _written_by_dataknobs
+from dataknobs_common.exceptions import ValidationError, _given, _written_by_dataknobs
 from dataknobs_common.entity_resolution.values import (
     EntityCandidate,
     EvidenceKind,
@@ -495,7 +495,7 @@ def _checked_count(value: object, name: str, at_least: int, consequence: str) ->
         return None
     if isinstance(value, bool) or not isinstance(value, int):
         raise _written_by_dataknobs(
-            ValidationError(f"{name} must be a whole number, got {value!r}")
+            ValidationError(f"{name} must be a whole number, got {_given(value)}")
         )
     if value < at_least:
         raise _written_by_dataknobs(
@@ -587,8 +587,8 @@ def _checked_callable(
     if value is not None and not callable(value):
         raise _written_by_dataknobs(
             ValidationError(
-                f"{parameter} must be callable or None, got {type(value).__name__} "
-                f"({value!r}). A configuration document cannot write a callable, so "
+                f"{parameter} must be callable or None, got {_given(value)}. "
+                f"A configuration document cannot write a callable, so "
                 f"a dotted path here names nothing this rung can call -- build the "
                 f"rung in code, or resolve the path before handing it over."
             )
@@ -955,7 +955,7 @@ def _checked_threshold(threshold: float) -> float:
     """
     if isinstance(threshold, bool) or not isinstance(threshold, int | float):
         raise _written_by_dataknobs(
-            ValidationError(f"threshold must be a number, got {threshold!r}")
+            ValidationError(f"threshold must be a number, got {_given(threshold)}")
         )
     if not 0.0 < threshold <= 1.0:
         raise _written_by_dataknobs(

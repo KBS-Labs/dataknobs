@@ -58,6 +58,29 @@ class TestAssertNoCauseRead:
         with pytest.raises(AssertionError, match="matched no `__cause__` read"):
             assert_no_cause_read(tmp_path, allowed={"pkg/helper.py::gone"})
 
+    def test_reading_the_context_is_flagged(self, tmp_path: Path) -> None:
+        """A registry raises inside the handler, so ``__context__`` holds the same error."""
+        _write(tmp_path, "def fault(exc):\n    return str(exc.__context__)\n")
+        with pytest.raises(AssertionError, match=r"in fault \(__context__\)"):
+            assert_no_cause_read(tmp_path)
+
+    def test_naming_the_cause_as_a_string_is_flagged(self, tmp_path: Path) -> None:
+        _write(tmp_path, "def fault(exc):\n    return getattr(exc, '__cause__')\n")
+        with pytest.raises(AssertionError, match=r"in fault \('__cause__'\)"):
+            assert_no_cause_read(tmp_path)
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "import traceback\ndef fault(exc):\n    return traceback.format_exception(exc)\n",
+            "from traceback import format_exc\n",
+        ],
+    )
+    def test_formatting_the_chain_is_flagged(self, tmp_path: Path, source: str) -> None:
+        _write(tmp_path, source)
+        with pytest.raises(AssertionError, match=r"traceback\.format_exc"):
+            assert_no_cause_read(tmp_path)
+
     def test_assigning_the_cause_is_not_a_read(self, tmp_path: Path) -> None:
         _write(tmp_path, "def a(exc, other):\n    exc.__cause__ = other\n")
         assert_no_cause_read(tmp_path)

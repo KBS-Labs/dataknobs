@@ -30,13 +30,22 @@ SOURCES = sorted((ROOT / "packages").glob("*/src"))
 #: The readers of ``__cause__`` outside the registry module, each with what it
 #: does with the cause and why that shows a caller no factory's text.
 ALLOWED_CAUSE_READS = {
-    # The registry module is where the decision is made: surfaced_cause, the
-    # create_surfacing body, and the miss test read it to answer the question
-    # every other module is sent there to ask.
-    "dataknobs_common/registry.py",
+    # The registry module is where the decision is made, one function per
+    # entry so a new reader there is reviewed like any other.
+    # The answer itself: returns the cause only when dataknobs wrote it.
+    "dataknobs_common/registry.py::surfaced_cause",
+    # The create_surfacing body: asks surfaced_cause, and names the cause's
+    # type in a bounded message.
+    "dataknobs_common/registry.py::_raise_surfaced",
+    # Tests only that a miss has no cause.
+    "dataknobs_common/registry.py::_is_this_registrys_miss",
+    # The doors' question: a refusal with nothing behind it, else surfaced_cause.
+    "dataknobs_common/registry.py::_shown_failure",
     # The walk for a value-free config refusal. Reads marks and returns
     # only the words a mark recorded, never an instance's text.
     "dataknobs_common/exceptions.py::_value_free_refusal_behind",
+    # The guard's own vocabulary: the attribute names it looks for, as strings.
+    "dataknobs_common/testing/cause_reads.py::<module>",
     # Appends the cause to a server-side log line. The response body is built
     # from the policy row, never from this.
     "dataknobs_bots/api/exceptions.py::_log_handled_error",
@@ -57,6 +66,8 @@ def test_nothing_reads_a_cause_but_the_reviewed_readers() -> None:
 MARK_SITES: dict[tuple[str, str], int] = {
     # The one amender that marks again, and only an error marked on entry.
     ("dataknobs_common/exceptions.py", "naming_refusals"): 1,
+    # Every error a registry raises: names, keys and types, all its own.
+    ("dataknobs_common/registry.py", "_ours"): 1,
     # A helper's own "Unknown <subject> type" text, built from names.
     ("dataknobs_common/registry.py", "_raise_surfaced"): 1,
     # Dotted-path refusals: a module path, a name, and a type.
@@ -96,6 +107,21 @@ MARK_SITES: dict[tuple[str, str], int] = {
     # The semantic rung's refusal of its handles, and its index mismatch.
     ("dataknobs_data/entity_resolution.py", "SemanticSignal.__init__"): 1,
     ("dataknobs_data/entity_resolution.py", "_make_semantic"): 2,
+    # A data backend's refusals of its own config, raised while it is built:
+    # the native layout's columns, key and scope, the layout reader, the
+    # config classes' checks, and a registered object with no from_config.
+    ("dataknobs_data/backend_selection.py", "build_backend"): 1,
+    ("dataknobs_data/backends/column_layout.py", "NativeColumnLayout.__init__"): 4,
+    ("dataknobs_data/backends/column_layout.py", "NativeColumnLayout._check_scope_filter"): 2,
+    ("dataknobs_data/backends/column_layout.py", "NativeColumnLayout._column"): 1,
+    ("dataknobs_data/backends/column_layout.py", "_resolve_column"): 3,
+    ("dataknobs_data/backends/column_layout.py", "read_layout_config.refuse"): 1,
+    ("dataknobs_data/backends/column_layout.py", "resolve_layout"): 1,
+    ("dataknobs_data/backends/config.py", "ColumnLayoutConfig._refuse_under_native"): 1,
+    ("dataknobs_data/backends/config.py", "ElasticsearchDatabaseConfigBase.__post_init__"): 2,
+    ("dataknobs_data/backends/config.py", "PostgresDatabaseConfig.__post_init__"): 1,
+    ("dataknobs_data/backends/config.py", "S3DatabaseConfigBase.__post_init__"): 1,
+    ("dataknobs_data/backends/postgres_mixins.py", "validate_pg_identifier"): 2,
     # An unknown LLM provider name.
     ("dataknobs_llm/llm/providers/__init__.py", "LLMProviderFactory.create"): 1,
     # The composite intent classifier's refusals of its child specs.
@@ -112,6 +138,12 @@ MARK_SITES: dict[tuple[str, str], int] = {
 
 SETTER = "_written_by_dataknobs"
 ATTRIBUTE = "_WRITTEN_BY_DATAKNOBS"
+#: The two marks' attribute names on an instance, each owned by one module.
+#: Spelled out here rather than imported, so the guard reads what is written.
+MARK_VALUES = {
+    "_dataknobs_written_by_dataknobs": "dataknobs_common/exceptions.py",
+    "_dataknobs_raised_by_a_registry": "dataknobs_common/registry.py",
+}
 
 
 def _owners(tree: ast.AST) -> dict[ast.AST, str]:
@@ -172,3 +204,47 @@ def test_the_marks_attribute_is_written_only_by_its_setter() -> None:
                     writers.append(f"{_module_path(path)}::{owners.get(node, '<module>')}")
 
     assert writers == ["dataknobs_common/exceptions.py::_written_by_dataknobs"]
+
+
+def test_neither_mark_is_set_by_a_route_the_census_cannot_see() -> None:
+    """The census counts calls by name; these would set a mark without one.
+
+    An aliased import or the setter passed as a value makes a call the count
+    misses; a string or attribute naming a mark's attribute outside its own
+    module is a direct write; ``_ours`` sets both marks, so it is called in
+    the registry module and nowhere else.
+    """
+    evasions: list[str] = []
+    for source in SOURCES:
+        for path in sorted(source.rglob("*.py")):
+            module = _module_path(path)
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            parents = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
+            for node in ast.walk(tree):
+                where = f"{module}:{getattr(node, 'lineno', 0)}"
+                if isinstance(node, ast.ImportFrom):
+                    for alias in node.names:
+                        if alias.name in {SETTER, "_ours"} and alias.asname:
+                            evasions.append(f"{where} imports {alias.name} as {alias.asname}")
+                        if alias.name == "_ours" and module != "dataknobs_common/registry.py":
+                            evasions.append(f"{where} imports _ours")
+                named = (
+                    node.id
+                    if isinstance(node, ast.Name)
+                    else node.attr
+                    if isinstance(node, ast.Attribute)
+                    else None
+                )
+                if named == SETTER:
+                    parent = parents.get(node)
+                    if not (isinstance(parent, ast.Call) and parent.func is node):
+                        evasions.append(f"{where} uses {SETTER} other than by calling it")
+                if named == "_ours" and module != "dataknobs_common/registry.py":
+                    evasions.append(f"{where} uses _ours")
+                if isinstance(node, ast.Constant) and node.value in MARK_VALUES:
+                    if module != MARK_VALUES[node.value]:
+                        evasions.append(f"{where} spells the mark attribute {node.value!r}")
+                if isinstance(node, ast.Attribute) and node.attr in MARK_VALUES:
+                    evasions.append(f"{where} reaches the mark attribute {node.attr!r} directly")
+
+    assert evasions == []

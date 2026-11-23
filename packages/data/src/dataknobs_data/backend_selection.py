@@ -463,11 +463,13 @@ def build_backend(
     from_config = getattr(backend_class, "from_config", None)
     if from_config is None:
         registered = getattr(backend_class, "__name__", type(backend_class).__name__)
-        raise ValueError(
-            f"The {kind} backend registered as '{backend_type}' cannot be built "
-            f"from a config: {registered} has no 'from_config' classmethod. "
-            "Register a backend class rather than a bare callable, or build it "
-            "through the registry's own create()."
+        raise _written_by_dataknobs(
+            ValueError(
+                f"The {kind} backend registered as '{backend_type}' cannot be built "
+                f"from a config: {registered} has no 'from_config' classmethod. "
+                "Register a backend class rather than a bare callable, or build it "
+                "through the registry's own create()."
+            )
         )
     return from_config(options)
 

@@ -2713,9 +2713,8 @@ def _rung_fault(exc: Exception) -> str:
     consumer's own rung factory is theirs, and its text is shown only when a
     registry or dataknobs wrote it; anything else stays the registry's
     bounded "Failed to create plugin '<kind>' (<type>)", with the original on
-    ``__cause__``. An earlier rule read back every ``ValidationError``, which
-    showed a consumer factory's text over a connection it could not open;
-    marking the in-tree refusals keeps their diagnosis without that.
+    ``__cause__``. A ``ValidationError`` is no exception: a consumer factory
+    can raise one with the connection it could not open in its text.
     """
     if isinstance(exc, OperationError):
         shown = _shown_failure(exc)

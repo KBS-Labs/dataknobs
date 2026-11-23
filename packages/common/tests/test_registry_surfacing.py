@@ -76,6 +76,16 @@ async def _create(
 LANES = ["sync", "async"]
 
 
+class _Ambiguous:
+    """A value whose comparison raises, as a numpy array's truth value does."""
+
+    def __eq__(self, other: object) -> bool:
+        raise ValueError("the truth value is ambiguous")
+
+    def __hash__(self) -> int:
+        return id(self)
+
+
 def _assert_no_dsn(error: BaseException) -> None:
     assert DSN not in str(error)
     context = getattr(error, "context", {}) or {}
@@ -108,6 +118,16 @@ class TestSurfacedCause:
         bounded = OperationError("bounded")
         bounded.__cause__ = missed.value
         assert surfaced_cause(bounded) is missed.value
+
+    def test_an_error_a_registry_raised_then_amended_is_not_surfaced(self) -> None:
+        """The registry's mark vouches for its words, like any other."""
+        inner = _registry()
+        with pytest.raises(NotFoundError) as missed:
+            inner.create(config={"type": "nope"})
+        missed.value.args = (f"{missed.value}; tried {DSN}",)
+        bounded = OperationError("bounded")
+        bounded.__cause__ = missed.value
+        assert surfaced_cause(bounded) is None
 
     def test_it_reads_one_link_only(self) -> None:
         """What the cause was raised ``from`` is the cause's business."""
@@ -145,6 +165,18 @@ class TestTheMarkVouchesForWordsNotForAnInstance:
 
         error = _written_by_dataknobs(ValidationError("ours", context={"x": Uncopyable()}))
         assert not _is_written_by_dataknobs(error)
+
+    def test_a_context_whose_comparison_raises_is_not_vouched_for(self) -> None:
+        """Asked while handling another error, the question must not raise."""
+        error = _written_by_dataknobs(ValidationError("ours", context={"x": _Ambiguous()}))
+        assert not _is_written_by_dataknobs(error)
+
+    def test_naming_refusals_survives_a_context_whose_comparison_raises(self) -> None:
+        with pytest.raises(ValidationError) as caught:
+            with naming_refusals("source 'cases'"):
+                raise _written_by_dataknobs(ValidationError("ours", context={"x": _Ambiguous()}))
+        assert str(caught.value) == "source 'cases': ours"
+        assert not _is_written_by_dataknobs(caught.value)
 
     def test_naming_refusals_keeps_a_marked_refusal_ours_with_its_origin(self) -> None:
         with pytest.raises(ValidationError) as caught:
@@ -189,15 +221,17 @@ class TestAFactorysOwnWordsStayBounded:
         with pytest.raises(ValidationError):
             await _create(lane, registry, {"type": "pg"})
 
-    async def test_a_factorys_own_validation_error_is_bounded(self, lane: str) -> None:
-        """Not a ValueError, so it stays the registry's bounded OperationError."""
-        registry = _registry(pg=_raising(ValidationError(f"refused {DSN}")))
+    async def test_a_factorys_own_validation_error_becomes_a_factory_value_error(
+        self, lane: str
+    ) -> None:
+        """The dataknobs type for a refused config is reported as a ValueError is."""
+        registry = _registry(pg=_raising(ValidationError(f"refused {DSN}", context={"u": DSN})))
 
-        with pytest.raises(OperationError) as caught:
+        with pytest.raises(FactoryValueError) as caught:
             await _create(lane, registry, {"type": "pg"})
 
         _assert_no_dsn(caught.value)
-        assert type(caught.value) is OperationError
+        assert str(caught.value) == "Failed to create widget 'pg' (ValidationError)"
 
     @pytest.mark.parametrize(
         "family",
@@ -283,6 +317,61 @@ class TestWhatDataknobsWroteIsShown:
 
         assert str(caught.value) == "Failed to create child widget 'pg' (ValueError)"
         _assert_no_dsn(caught.value)
+
+    async def test_a_nested_helpers_bounded_error_amended_by_a_factory_is_bounded(
+        self, lane: str
+    ) -> None:
+        """The bounded error's mark records its words; adding a DSN voids it."""
+        inner = _registry(pg=_raising(ValueError(DSN)))
+
+        def composite(config: Any, **_: Any) -> Any:
+            try:
+                return create_surfacing(inner, subject="child widget", config={"type": "pg"})
+            except FactoryValueError as exc:
+                exc.args = (f"{exc}; tried {DSN}",)
+                raise
+
+        outer = _registry(composite=composite)
+        with pytest.raises(FactoryValueError) as caught:
+            await _create(lane, outer, {"type": "composite"})
+
+        _assert_no_dsn(caught.value)
+        assert str(caught.value) == "Failed to create widget 'composite' (FactoryValueError)"
+
+    async def test_a_nested_registrys_error_amended_by_a_factory_is_bounded(
+        self, lane: str
+    ) -> None:
+        """The outer registry passes it through; the helper must not trust it."""
+        inner = _registry(pg=_raising(ValueError(DSN)))
+
+        def composite(config: Any, **_: Any) -> Any:
+            try:
+                return inner.create(config={"type": "pg"})
+            except OperationError as exc:
+                exc.args = (f"{exc}; tried {DSN}",)
+                raise
+
+        outer = _registry(composite=composite)
+        with pytest.raises(OperationError) as caught:
+            await _create(lane, outer, {"type": "composite"})
+
+        _assert_no_dsn(caught.value)
+        assert caught.value.context == {"registry": "widgets", "cause_type": "OperationError"}
+
+    async def test_a_nested_registrys_bounded_error_keeps_its_own_key(self, lane: str) -> None:
+        """Its words name the inner key, so the outer subject is not put in front of them."""
+        inner: PluginRegistry[Any] = PluginRegistry("gadgets", config_key="type")
+        inner.register("pg", _raising(ValueError(DSN)))
+
+        def composite(config: Any, **_: Any) -> Any:
+            return inner.create(config={"type": "pg"})
+
+        outer = _registry(composite=composite)
+        with pytest.raises(OperationError) as caught:
+            await _create(lane, outer, {"type": "composite"})
+
+        assert type(caught.value) is OperationError
+        assert str(caught.value) == "Failed to create plugin 'pg' (ValueError)"
 
     async def test_a_config_refusal_is_carried_as_the_registry_built_it(self, lane: str) -> None:
         class Section(StructuredConfig):
