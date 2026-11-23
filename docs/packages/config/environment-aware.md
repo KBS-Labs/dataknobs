@@ -647,7 +647,11 @@ itself, and is built through `from_config_async(config)` (by `resolve_async`,
 when it has one) or `from_config(config)` -- the test `ObjectBuilder` applies
 to a `factory:`. Anything else is a factory, called through
 `create_async(**config)` (by `resolve_async`), `create(**config)`,
-`build(**config)`, or `factory(**config)`. A factory object whose class
+`build(**config)`, or `factory(**config)`. Last, an object that is not a
+class and has none of those -- a registered singleton, a module -- is built
+through `from_config_async(config)` (by `resolve_async`, when it has one) or
+`from_config(config)`. A class with both `from_config` and `create` is a
+factory, and goes through `create`. A factory object whose class
 inherits `ConfigurableBase` therefore still goes through its `create`, even
 though that base gives it a `from_config` classmethod.
 

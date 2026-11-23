@@ -123,7 +123,7 @@ class ResourceFactory(Protocol):
     """Protocol for resource factories that can create from config.
 
     The usual shape. The resolver also accepts ``build(**config)``, a plain
-    callable, and a class with ``from_config`` -- see
+    callable, and a class or other object with ``from_config`` -- see
     :meth:`ConfigBindingResolver.register_factory`.
     """
 
@@ -234,9 +234,10 @@ class ConfigBindingResolver:
             factory: What builds the resource: a factory object with
                 ``create(**config)`` (and optionally ``create_async``) or
                 ``build(**config)``, a callable taking the config as keyword
-                arguments, or a class with ``from_config(config)`` (and
-                optionally ``from_config_async``) and none of the factory
-                methods. :meth:`_constructor` states the precedence.
+                arguments, or a class or other object with
+                ``from_config(config)`` (and optionally ``from_config_async``)
+                and none of the factory methods. :meth:`_constructor` states
+                the precedence.
         """
         self._factories[resource_type] = factory
         logger.debug(f"Registered factory for resource type: {resource_type}")
@@ -489,7 +490,9 @@ class ConfigBindingResolver:
 
     def _constructor(
         self,
-        factory: ResourceFactory | Callable[..., Any],
+        # `object`, not the registered type: the resolver accepts surfaces
+        # (`build`, `from_config`) that type does not describe.
+        factory: object,
         *,
         can_await: bool,
     ) -> Callable[[dict[str, Any]], Any]:
@@ -504,7 +507,12 @@ class ConfigBindingResolver:
           one, else ``from_config(config)``;
         * any other factory through ``create_async(**config)`` when the caller
           can await, then ``create(**config)``, ``build(**config)``, or
-          ``factory(**config)``.
+          ``factory(**config)``;
+        * last, an object that is not a class and has none of those -- a
+          registered singleton, a module -- through ``from_config_async(config)``
+          when the caller can await and it has one, else ``from_config(config)``.
+
+        That is ``ObjectBuilder``'s order for a ``factory:`` reference.
 
         The consumer-class test is ``ObjectBuilder``'s
         (:func:`~dataknobs_config.builders._is_consumer_class`), and only a
@@ -544,6 +552,15 @@ class ConfigBindingResolver:
         if callable(factory):
             call = factory
             return lambda config: call(**config)
+        # An object that is not a class -- a registered singleton, a module --
+        # with only the consumer protocol, after the factory protocol and the
+        # `callable` fallback, as `ObjectBuilder` orders it.
+        if can_await and hasattr(factory, "from_config_async"):
+            object_from_config_async: Callable[[dict[str, Any]], Any] = factory.from_config_async
+            return object_from_config_async
+        if hasattr(factory, "from_config"):
+            object_from_config: Callable[[dict[str, Any]], Any] = factory.from_config
+            return object_from_config
         # Named by its type: a factory object's ``repr`` is its author's, and
         # can carry the connection URL it holds.
         raise BindingResolverError(

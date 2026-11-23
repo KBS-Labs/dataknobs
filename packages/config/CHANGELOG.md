@@ -65,7 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `create`, `create_async` or `build`, the test `ObjectBuilder` already
   applies -- is built through `from_config_async` (when the caller can
   await) or `from_config`. Anything else is called through `create_async`
-  (when the caller can await), `create`, `build`, or as a callable. So a
+  (when the caller can await), `create`, `build`, or as a callable, and
+  last, an object that is not a class and has none of those -- a registered
+  singleton, a module -- through `from_config_async` or `from_config`. That
+  is `ObjectBuilder`'s order for a `factory:`. So a class with both
+  `from_config` and `create` is a factory and goes through `create`, and a
   factory object whose class inherits `ConfigurableBase`, and with it a
   `from_config` classmethod, is still called through its `create`. A
   consumer class registered directly on the resolver whose `from_config`

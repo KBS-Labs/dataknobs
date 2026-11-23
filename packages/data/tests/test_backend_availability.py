@@ -699,20 +699,19 @@ class TestAnImportFailureIsReportedByModule:
 
     PATH = "/opt/venv/lib/python3.12/site-packages/acme_sdk/__init__.py"
 
-    def _declared(self, error: ImportError) -> PluginRegistry[Any]:
+    def _declared(
+        self, error: ImportError, *, hint: str | None = "pip install acme"
+    ) -> PluginRegistry[Any]:
         from dataknobs_data.backend_selection import register_backend
 
         def load() -> Any:
             raise error
 
+        metadata: dict[str, Any] = {"requires_module": "acme_sdk"}
+        if hint is not None:
+            metadata["requires_install"] = hint
         registry: PluginRegistry[Any] = PluginRegistry("t")
-        register_backend(
-            registry,
-            "acme",
-            load,
-            metadata={"requires_module": "acme_sdk", "requires_install": "pip install acme"},
-            installed=lambda module: True,
-        )
+        register_backend(registry, "acme", load, metadata=metadata, installed=lambda module: True)
         return registry
 
     def test_the_path_stays_out_of_the_reason(self) -> None:
@@ -735,6 +734,13 @@ class TestAnImportFailureIsReportedByModule:
         assert reason is not None
         assert self.PATH not in reason
         assert reason.startswith("a module it needs could not be imported")
+
+    def test_with_no_install_hint_the_reason_names_only_the_module(self) -> None:
+        error = ImportError(f"cannot import name 'Client' ({self.PATH})", name="acme_sdk")
+
+        reason = self._declared(error, hint=None).unavailable_reason("acme")
+
+        assert reason == "acme_sdk could not be imported"
 
     def test_the_full_text_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
         error = ImportError(f"cannot import name 'Client' ({self.PATH})", name="acme_sdk")

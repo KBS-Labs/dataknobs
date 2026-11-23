@@ -827,6 +827,112 @@ class TestAFactorysOwnMethodsWin:
         assert isinstance(db, MockDatabase)
 
 
+class _BuilderObject:
+    """A registered object that is not a class, not callable, and builds via ``from_config``."""
+
+    def from_config(self, config: dict) -> MockDatabase:
+        return MockDatabase(backend=config["backend"], via="from_config")
+
+
+class _AsyncBuilderObject:
+    """A registered object that is not a class and builds only via ``from_config_async``."""
+
+    async def from_config_async(self, config: dict) -> MockAsyncDatabase:
+        return MockAsyncDatabase(backend=config["backend"], connected=True)
+
+
+class _ClassWithFromConfigAndCreate:
+    """A class answering both protocols: it is a factory, so ``create`` wins."""
+
+    @classmethod
+    def from_config(cls, config: dict) -> str:
+        return "built by from_config"
+
+    @classmethod
+    def create(cls, backend: str, **kwargs) -> MockDatabase:
+        return MockDatabase(backend=backend, **kwargs)
+
+
+class TestAnObjectThatIsNotAClass:
+    """An object with only the consumer protocol is built through it, as ``ObjectBuilder`` does.
+
+    The consumer-class test admits only classes, because a class is always
+    callable and must be caught before the ``callable`` fallback. An object
+    that is not a class and has no factory method reaches ``from_config`` /
+    ``from_config_async`` after that fallback instead of being refused.
+    """
+
+    @pytest.fixture
+    def env_config(self):
+        return EnvironmentConfig(
+            name="test",
+            resources={"databases": {"primary": {"backend": "postgres"}}},
+        )
+
+    def test_resolve_builds_it_through_from_config(self, env_config) -> None:
+        resolver = ConfigBindingResolver(env_config)
+        resolver.register_factory("databases", _BuilderObject())
+
+        db = resolver.resolve("databases", "primary")
+
+        assert isinstance(db, MockDatabase)
+        assert db.backend == "postgres"
+        assert db.extra == {"via": "from_config"}
+
+    @pytest.mark.asyncio
+    async def test_resolve_async_builds_it_through_from_config(self, env_config) -> None:
+        resolver = ConfigBindingResolver(env_config)
+        resolver.register_factory("databases", _BuilderObject())
+
+        db = await resolver.resolve_async("databases", "primary")
+
+        assert isinstance(db, MockDatabase)
+
+    @pytest.mark.asyncio
+    async def test_resolve_async_builds_it_through_from_config_async(self, env_config) -> None:
+        resolver = ConfigBindingResolver(env_config)
+        resolver.register_factory("databases", _AsyncBuilderObject())
+
+        db = await resolver.resolve_async("databases", "primary")
+
+        assert isinstance(db, MockAsyncDatabase)
+        assert db.connected is True
+
+    def test_resolve_refuses_an_async_only_one_by_name(self, env_config) -> None:
+        resolver = ConfigBindingResolver(env_config)
+        resolver.register_factory("databases", _AsyncBuilderObject())
+
+        with pytest.raises(BindingResolverError) as caught:
+            resolver.resolve("databases", "primary")
+
+        assert "has none of" in str(caught.value)
+        assert "_AsyncBuilderObject" in str(caught.value)
+
+
+class TestAClassWithBothProtocolsIsAFactory:
+    @pytest.fixture
+    def env_config(self):
+        return EnvironmentConfig(
+            name="test",
+            resources={"databases": {"primary": {"backend": "postgres"}}},
+        )
+
+    def test_resolve_calls_create(self, env_config) -> None:
+        resolver = ConfigBindingResolver(env_config)
+        resolver.register_factory("databases", _ClassWithFromConfigAndCreate)
+
+        assert isinstance(resolver.resolve("databases", "primary"), MockDatabase)
+
+    @pytest.mark.asyncio
+    async def test_resolve_async_calls_create(self, env_config) -> None:
+        resolver = ConfigBindingResolver(env_config)
+        resolver.register_factory("databases", _ClassWithFromConfigAndCreate)
+
+        db = await resolver.resolve_async("databases", "primary")
+
+        assert isinstance(db, MockDatabase)
+
+
 class TestTheAsyncRefusalNamesTheFactory:
     @pytest.fixture
     def env_config(self):
