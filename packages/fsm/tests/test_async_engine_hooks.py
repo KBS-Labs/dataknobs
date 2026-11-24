@@ -159,7 +159,7 @@ class TestErrorHook:
         builder.register_function("bad_transform", bad_transform)
         fsm = builder.build(fsm_config)
 
-        engine = AsyncExecutionEngine(fsm)
+        engine = AsyncExecutionEngine(fsm, retry_delay=0)
         engine.add_error_hook(error_hook)
 
         ctx = ExecutionContext()
