@@ -19,8 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now passes one through only while its message and `context` are what the
   registry wrote, and while it carries no note added since; an amended one
   is bounded like any factory error, `"Failed to create plugin '<outer key>'
-  (<type>)"`, with the amended error on `__cause__`. An error
-  `naming_refusals` prefixed still passes through, prefix included. The same
+  (<type>)"`, with the amended error on `__cause__`. An error a dataknobs
+  component names with an origin from the config it was given -- a grounded
+  source, an ontology binding -- still passes through, origin included; an
+  origin added with the public `naming_refusals` is the caller's text and is
+  not. The same
   record now covers notes everywhere the written-by mark is read: an error
   given a note after it was marked (`add_note`) is no longer shown as
   dataknobs' words, since a note prints with it in every traceback and log
@@ -108,6 +111,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     like any other error. The mark records the refusal's words as written,
     and those are what is carried: a factory that amends the refusal before
     raising it, with `naming_refusals` or by hand, adds nothing of its own.
+    Only an error dataknobs wrote and marked as its own, raised `from` the
+    refusal and unchanged since, is carried in its place, its `context`
+    merged over the refusal's; that is how a grounded `database` source's
+    `"Source '<name>': <refusal>"` reaches the caller of
+    `create_source_from_config` with the source named.
 
   `except NotFoundError` and `except OperationError` catch what they caught
   before. **A caller catching a narrower class raised inside a factory**, for
@@ -581,13 +589,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`PluginUnavailableError`, for a plugin a registry knows of but cannot
-  create here.** Raised by `PluginRegistry.create` and `create_async` for a
-  key declared with `declare_unavailable`, whose message says it is not
-  available here and why. It is both a `NotFoundError`, which a registry
-  raises for a key it cannot create, and a `ValueError`, which the helpers in
-  front of registries promise for a configuration problem, so an `except` of
-  either kind keeps catching it. A registry with its own
-  `not_found_exception` keeps raising that type.
+  create here.** Raised by `PluginRegistry.create`, `create_async`, `get`
+  and `get_async` for a key declared with `declare_unavailable`, whose
+  message says it is not available here and why, in the same words on every
+  lane. It is both a `NotFoundError`, which a registry raises for a key it
+  cannot create, and a `ValueError`, which the helpers in front of
+  registries promise for a configuration problem, so an `except` of either
+  kind keeps catching it. On `create`, a registry with its own
+  `not_found_exception` keeps raising that type. The metadata
+  `declare_unavailable` attaches is the plugin's: a later `register` with no
+  metadata keeps it.
 
 - **`surfaced_cause`, `create_surfacing` and `create_surfacing_async`: the one
   answer to "may a caller see this factory's error?".** A `PluginRegistry`
@@ -862,7 +873,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ConfigurationError` (a subclass included) as the same exception, its
   message prefixed with the origin and the caller's context merged into its
   own, so its type and attributes survive and an existing handler for a
-  subclass still catches it. Any other exception passes through.
+  subclass still catches it. Any other exception passes through. The origin
+  is the caller's text and can hold what the caller tried, so it is never
+  vouched for as dataknobs' own: behind a `PluginRegistry` it never arrives.
+  A refusal `StructuredConfig` wrote arrives as its own words, bounded under
+  the outer key; any other refusal is named by its type alone.
 
 - **An entity's aliases can be indexed in its own row.** `aliases` joins
   `TEXT_FIELDS`, so `EntitySourceIndexSource(onto, fields=("name",
@@ -2444,6 +2459,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than going quiet.
 
 ### Changed
+
+- **`PluginRegistry.get` and `get_async` refuse a key declared unavailable,
+  even with a `default_factory`.** They reported such a key as `"Plugin
+  '<key>' not registered and no default available"`, and on a registry with
+  a `default_factory` built the default in its place -- a different plugin
+  from the one named, while `create` refused it. They now raise
+  `PluginUnavailableError` with the declared reason, as `create` does, before
+  the default is tried. It is a `NotFoundError`, so an existing `except
+  NotFoundError` keeps catching it; a caller that relied on the default
+  standing in for an unavailable key now gets the refusal. An unknown key
+  still gets the default, and its message is unchanged.
 
 - **`sanitize_for_json` and `validate_json_safe` take only their documented
   parameters.** `sanitize_for_json` also accepted `_path` and `_dropped`,

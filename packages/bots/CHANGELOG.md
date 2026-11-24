@@ -64,6 +64,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `database` source's backend refusing a key names the source.**
+  `create_source_from_config` with `{"backend": "memory", "nonsense_key": 1}`
+  raised `PluginConfigError: Failed to create plugin 'database':
+  MemoryDatabaseConfig does not accept 'nonsense_key'...`, so a bot config
+  declaring several sources did not say which one refused it. It now reads
+  `Failed to create plugin 'database': Source '<name>': MemoryDatabaseConfig
+  does not accept 'nonsense_key'...`, with `source` in `context`, as calling
+  the source factory directly already did.
+
 - **A backend this install cannot build is reported with its reason.**
   `create_memory_from_config`, `create_knowledge_base_from_config` and
   `create_source_from_config` reported a backend declared unavailable as

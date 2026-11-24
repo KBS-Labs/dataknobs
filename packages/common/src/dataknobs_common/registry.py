@@ -60,6 +60,7 @@ from typing import (
     Dict,
     Generic,
     List,
+    Literal,
     NamedTuple,
     NoReturn,
     TYPE_CHECKING,
@@ -84,8 +85,8 @@ from dataknobs_common.exceptions import (
     SerializationError,
     TimeoutError as DataknobsTimeoutError,
     ValidationError,
+    _carried_refusal_words,
     _is_written_by_dataknobs,
-    _value_free_refusal_behind,
     _written_by_dataknobs,
 )
 
@@ -120,6 +121,11 @@ _Raised = TypeVar("_Raised", bound=BaseException)
 #: Set on every exception this module raises, so a registry can tell its own
 #: error from one a factory raised with the same type. See :func:`_ours`.
 _RAISED_BY_A_REGISTRY = "_dataknobs_raised_by_a_registry"
+
+
+def _raised_by_a_registry(exc: BaseException) -> bool:
+    """Whether a registry raised ``exc`` -- the boolean mark :func:`_ours` sets."""
+    return bool(getattr(exc, _RAISED_BY_A_REGISTRY, False))
 
 
 def _ours(exc: _Raised) -> _Raised:
@@ -1565,7 +1571,12 @@ class PluginRegistry(Generic[T]):
             key: Unique identifier for the plugin
             factory: Plugin class or factory function that creates instances
             override: If True, allow overriding existing registration
-            metadata: Optional metadata to attach to the registration
+            metadata: Metadata to attach to the registration, replacing any
+                the key had. ``None`` (the default) leaves the key's metadata
+                as it is -- including what :meth:`declare_unavailable`
+                attached, which describes the plugin rather than the
+                declaration, so registering it once it can be built keeps
+                its ``requires_install``. Pass a mapping to replace it.
             allow_overwrite: Alias for ``override`` matching the
                 :class:`Registry`-style spelling. When ``None`` (default),
                 the ``override`` flag is used unmodified. When explicitly
@@ -1670,7 +1681,10 @@ class PluginRegistry(Generic[T]):
             key: Plugin identifier.
             metadata: Metadata to attach, as :meth:`register` takes. This is
                 what makes ``requires_install`` readable while the plugin is
-                uninstalled.
+                uninstalled. It is the plugin's metadata, not the
+                declaration's: a later :meth:`register` with no metadata
+                clears the declaration and keeps it, since what install
+                provides the plugin stays true once it is installed.
             reason: Why it cannot be created here, in a sentence a caller
                 can act on -- ``create()`` raises this instead of reporting
                 an unknown key.
@@ -1807,12 +1821,18 @@ class PluginRegistry(Generic[T]):
                 ``factory(key, config)``. A typed config is not taken here:
                 use ``create`` for a ``StructuredConfig``.
             use_cache: Return cached instance if available
-            use_default: Use default factory if key not registered
+            use_default: Use default factory if key not registered. Never
+                for a key declared unavailable: the registry knows that
+                plugin, and building the default in its place would hide it.
 
         Returns:
             Plugin instance
 
         Raises:
+            PluginUnavailableError: If the key was declared unavailable
+                (:meth:`declare_unavailable`), with the reason in the message
+                and in ``context["unavailable"]`` -- worded as ``create``
+                words it. A ``NotFoundError`` and a ``ValueError``.
             NotFoundError: If key not registered and use_default=False, or
                 wrapping a ``NotFoundError`` the factory raised (see "Errors
                 from a factory").
@@ -1834,22 +1854,15 @@ class PluginRegistry(Generic[T]):
             if use_cache and key in self._instances:
                 return self._instances[key]
 
-            # Get factory
+            # Get factory. A key declared unavailable refuses before the
+            # default is asked: the registry knows the plugin it was named,
+            # and building a different one in its place would hide that.
             if key in self._factories:
                 factory = self._factories[key]
-            elif use_default and self._default_factory:
+            elif use_default and self._default_factory and key not in self._unavailable:
                 factory = self._default_factory
             else:
-                raise _ours(
-                    NotFoundError(
-                        f"Plugin '{key}' not registered and no default available",
-                        context={
-                            "key": key,
-                            "registry": self._name,
-                            "available": list(self._factories.keys()),
-                        },
-                    )
-                )
+                self._raise_miss(key, lane="get")
 
             # Create instance
             # Annotated for the same reason the other three entry points
@@ -1897,12 +1910,18 @@ class PluginRegistry(Generic[T]):
             key: Plugin identifier
             config: Configuration mapping, as for ``get``
             use_cache: Return cached instance if available
-            use_default: Use default factory if key not registered
+            use_default: Use default factory if key not registered. Never
+                for a key declared unavailable: the registry knows that
+                plugin, and building the default in its place would hide it.
 
         Returns:
             Plugin instance
 
         Raises:
+            PluginUnavailableError: If the key was declared unavailable
+                (:meth:`declare_unavailable`), with the reason in the message
+                and in ``context["unavailable"]`` -- worded as ``create``
+                words it. A ``NotFoundError`` and a ``ValueError``.
             NotFoundError: If key not registered and use_default=False, or
                 wrapping a ``NotFoundError`` the factory raised (see "Errors
                 from a factory").
@@ -1922,22 +1941,15 @@ class PluginRegistry(Generic[T]):
             if use_cache and key in self._instances:
                 return self._instances[key]
 
-            # Get factory
+            # Get factory. A key declared unavailable refuses before the
+            # default is asked: the registry knows the plugin it was named,
+            # and building a different one in its place would hide that.
             if key in self._factories:
                 factory = self._factories[key]
-            elif use_default and self._default_factory:
+            elif use_default and self._default_factory and key not in self._unavailable:
                 factory = self._default_factory
             else:
-                raise _ours(
-                    NotFoundError(
-                        f"Plugin '{key}' not registered and no default available",
-                        context={
-                            "key": key,
-                            "registry": self._name,
-                            "available": list(self._factories.keys()),
-                        },
-                    )
-                )
+                self._raise_miss(key, lane="get")
 
         # Create instance (outside lock for async)
         # Annotated: the dispatch below reaches the factory through
@@ -2218,40 +2230,62 @@ class PluginRegistry(Generic[T]):
 
         with self._lock:
             if key not in self._factories:
-                available = sorted(self._factories.keys())
-                context: Dict[str, Any] = {
-                    "key": key,
-                    "registry": self._name,
-                    "available": available,
-                }
-                exc_cls = self._not_found_exception
-                if key in self._unavailable:
-                    # Known, but not creatable here. Reporting it as unknown
-                    # sends the reader looking for a typo in a name that is
-                    # spelled correctly. The reason is in `context` as well,
-                    # so a helper in front of this registry can tell the two
-                    # misses apart from the error alone and not word this one
-                    # as a typo.
-                    reason = self._unavailable[key].reason
-                    message = (
-                        f"{self._not_found_kind or 'Plugin'} '{key}' is not "
-                        f"available here: {reason}"
-                    )
-                    context["unavailable"] = reason
-                    if exc_cls is NotFoundError:
-                        exc_cls = PluginUnavailableError
-                elif self._not_found_kind is not None:
-                    message = (
-                        f"Unknown {self._not_found_kind}: {key}. "
-                        f"Available backends: {', '.join(available)}"
-                    )
-                else:
-                    message = f"Plugin '{key}' not registered"
-
-                if issubclass(exc_cls, DataknobsError):
-                    raise _ours(exc_cls(message, context=context))
-                raise _ours(exc_cls(message))
+                self._raise_miss(key, lane="create")
             return self._factories[key], key, config
+
+    def _raise_miss(self, key: str, *, lane: Literal["create", "get"]) -> NoReturn:
+        """Raise what a caller of ``create`` or ``get`` sees for a key with no factory.
+
+        The one statement of the miss both lanes share; the caller holds the
+        lock. A key declared unavailable is worded the same on both, because
+        it is the same fact: known, but not creatable here. Reporting it as
+        unknown sends the reader looking for a typo in a name that is spelled
+        correctly. The reason is in ``context`` as well, so a helper in front
+        of this registry can tell the two misses apart from the error alone
+        and not word this one as a typo.
+
+        An unknown key keeps each lane's own words: ``create`` honours the
+        ``not_found_exception`` / ``not_found_kind`` the registry was built
+        with, and ``get`` has always raised
+        ``NotFoundError("... not registered and no default available")``. So
+        the class is the registry's ``not_found_exception`` on the create
+        lane and ``NotFoundError`` on the get lane, and an unavailable key
+        raises its :class:`PluginUnavailableError` subclass whenever that
+        class is ``NotFoundError`` -- which keeps a handler for either
+        catching it, since it is both a ``NotFoundError`` and a
+        ``ValueError``.
+        """
+        # The get lane's unknown miss has always listed keys in registration
+        # order; everything else, sorted -- so an unavailable key's context is
+        # the same on both lanes.
+        if lane == "get" and key not in self._unavailable:
+            available = list(self._factories.keys())
+        else:
+            available = sorted(self._factories.keys())
+        context: Dict[str, Any] = {
+            "key": key,
+            "registry": self._name,
+            "available": available,
+        }
+        exc_cls = self._not_found_exception if lane == "create" else NotFoundError
+        if key in self._unavailable:
+            reason = self._unavailable[key].reason
+            message = f"{self._not_found_kind or 'Plugin'} '{key}' is not available here: {reason}"
+            context["unavailable"] = reason
+            if exc_cls is NotFoundError:
+                exc_cls = PluginUnavailableError
+        elif lane == "get":
+            message = f"Plugin '{key}' not registered and no default available"
+        elif self._not_found_kind is not None:
+            message = (
+                f"Unknown {self._not_found_kind}: {key}. Available backends: {', '.join(available)}"
+            )
+        else:
+            message = f"Plugin '{key}' not registered"
+
+        if issubclass(exc_cls, DataknobsError):
+            raise _ours(exc_cls(message, context=context))
+        raise _ours(exc_cls(message))
 
     # ------------------------------------------------------------------
     # The invocation epilogue
@@ -2291,7 +2325,16 @@ class PluginRegistry(Generic[T]):
         other error. What is carried is the refusal's words as the mark
         recorded them, so a factory that amended the refusal before raising
         it (with :func:`~dataknobs_common.exceptions.naming_refusals`, say)
-        adds none of its own text.
+        adds none of its own text -- unless dataknobs wrote what was added:
+        an error marked as dataknobs' own text, raised ``from`` the refusal,
+        still saying what it said when marked, and repeating the refusal's
+        words, is carried in its place, its ``context`` merged over the
+        refusal's. That is how a source factory's "Source 'cases': <the
+        refusal's words>" reaches the caller with the source's name in it.
+        The outermost such error wins. A ``NotFoundError`` and an error a
+        registry raised never qualify: a registry's error names a key its
+        caller chose, and is shown by a plain ``create`` or ``get`` no more
+        when a refusal sits beneath it than when none does.
 
         A ``NotFoundError`` never carries a refusal: one raised ``from`` a
         refusal stays a bounded ``NotFoundError``, so a caller catching that
@@ -2320,7 +2363,7 @@ class PluginRegistry(Generic[T]):
         ):
             raise exc
         if not isinstance(exc, NotFoundError):
-            words = _value_free_refusal_behind(exc)
+            words = _carried_refusal_words(exc, raised_by_a_registry=_raised_by_a_registry)
             if words is not None:
                 message, context = words
                 raise _ours(

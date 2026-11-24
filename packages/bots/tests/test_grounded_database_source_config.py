@@ -28,7 +28,10 @@ from typing import Any
 
 import pytest
 
-from dataknobs_bots.knowledge.sources.factory import _create_database_source
+from dataknobs_bots.knowledge.sources.factory import (
+    _create_database_source,
+    create_source_from_config,
+)
 from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
 from dataknobs_bots.testing import BotTestHarness, GroundedConfigBuilder
 from dataknobs_common.exceptions import ValidationError
@@ -500,3 +503,44 @@ async def test_a_column_type_is_refused_where_no_layout_reads_one() -> None:
     message = str(excinfo.value)
     assert message.startswith("source 'case_studies': ")
     assert "'sql_type'" in message
+
+
+# --------------------------------------------------------------------------
+# Through ``create_source_from_config``, a backend's refusal names the source
+# --------------------------------------------------------------------------
+
+
+def _backend_options(backend: str, tmp_path: Path) -> dict[str, Any]:
+    if backend == "sqlite":
+        return {"backend": "sqlite", "path": str(tmp_path / "cases.db")}
+    return {"backend": backend}
+
+
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+async def test_a_backend_key_refusal_names_the_source_through_the_helper(
+    backend: str, tmp_path: Path
+) -> None:
+    """The helper builds through a registry, which carries the source's name with the refusal.
+
+    The factory names the source in an error dataknobs marks as its own, raised
+    from the backend config's refusal. The registry used to carry only the
+    refusal's words, so a bot config declaring several sources was told a key
+    was refused without being told which source refused it.
+    """
+    config = _config(**_backend_options(backend, tmp_path), nonsense_key=1)
+
+    with pytest.raises(ValueError) as excinfo:
+        await create_source_from_config(config)
+
+    message = str(excinfo.value)
+    assert "Source 'case_studies': " in message
+    assert "does not accept 'nonsense_key'" in message
+
+
+async def test_a_backend_key_refusal_names_the_source_called_directly() -> None:
+    """Calling the factory itself was already right, and stays so."""
+    with pytest.raises(ValueError) as excinfo:
+        await _create_database_source(_config(backend="memory", nonsense_key=1))
+
+    assert str(excinfo.value).startswith("Source 'case_studies': ")
+    assert "does not accept 'nonsense_key'" in str(excinfo.value)
