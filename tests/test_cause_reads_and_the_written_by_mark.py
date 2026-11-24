@@ -125,7 +125,7 @@ MARK_SITES: dict[tuple[str, str], int] = {
     ("dataknobs_data/backends/config.py", "ColumnLayoutConfig._refuse_under_native"): 1,
     ("dataknobs_data/backends/config.py", "ElasticsearchDatabaseConfigBase.__post_init__"): 2,
     ("dataknobs_data/backends/config.py", "PostgresDatabaseConfig.__post_init__"): 1,
-    ("dataknobs_data/backends/config.py", "S3DatabaseConfigBase.__post_init__"): 1,
+    ("dataknobs_data/backends/config.py", "S3DatabaseConfigBase.__post_init__"): 2,
     ("dataknobs_data/backends/postgres_mixins.py", "validate_pg_identifier"): 2,
     # The binding resolver's refusal of an async factory on its sync path,
     # naming the factory's type and the resource; and the async-only factory's

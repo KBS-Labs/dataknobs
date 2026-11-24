@@ -5,19 +5,27 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
 from dataknobs_common.clock import now_iso
+from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.aws import create_aioboto3_session
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import AsyncDatabase, version_conflict_error
 from ..exceptions import DuplicateRecordError
 from ..pooling import ConnectionPoolManager
-from ..pooling.s3 import S3PoolConfig, is_s3_conditional_conflict, validate_s3_session
+from ..pooling.s3 import (
+    S3PoolConfig,
+    is_s3_conditional_conflict,
+    is_s3_missing_object,
+    validate_s3_session,
+)
 from ..query import Query, is_storage_key_field
 from ..query_logic import ComplexQuery
 from ..records import Record
@@ -90,6 +98,7 @@ class AsyncS3Database(
             aws_session_token=cfg.aws_session_token,
             endpoint_url=cfg.endpoint_url,
         )
+        self._max_concurrency = cfg.max_pool_connections
         # Public, symmetric with ``SyncS3Database.region``: the resolved
         # region (``None`` when config relies on the boto default chain).
         # Lets callers/tests inspect region resolution without reaching
@@ -161,6 +170,95 @@ class AsyncS3Database(
             return f"{self._pool_config.prefix}/{id}.json"
         return f"{id}.json"
 
+    def _client(self) -> Any:
+        """A client context manager over the shared session, for one operation."""
+        from aiobotocore.config import AioConfig
+
+        return self._session.client(
+            "s3",
+            endpoint_url=self._pool_config.endpoint_url,
+            config=AioConfig(max_pool_connections=self._max_concurrency),
+        )
+
+    @property
+    def _key_prefix(self) -> str:
+        """What every key :meth:`_get_key` makes starts with.
+
+        With its separator: the bare prefix ``p`` also begins the keys of a
+        database at ``pq``.
+        """
+        return f"{self._pool_config.prefix}/" if self._pool_config.prefix else ""
+
+    def _id_from_key(self, key: str) -> str:
+        """The record id :meth:`_get_key` made ``key`` from."""
+        return key[len(self._key_prefix) : -len(".json")]
+
+    async def _iter_keys(self, s3: Any, page_size: int | None = None) -> AsyncIterator[str]:
+        """Every record's object key, in key order."""
+        params: dict[str, Any] = {"Bucket": self._pool_config.bucket}
+        if self._key_prefix:
+            params["Prefix"] = self._key_prefix
+        if page_size is not None:
+            params["MaxKeys"] = page_size
+        async for page in s3.get_paginator("list_objects_v2").paginate(**params):
+            for obj in page.get("Contents", ()):
+                if obj["Key"].endswith(".json"):
+                    yield obj["Key"]
+
+    async def _fetch_matching(
+        self, s3: Any, query: Query, page_size: int | None = None
+    ) -> AsyncIterator[Record]:
+        """The records matching ``query``'s filters, in key order.
+
+        Reads up to ``max_pool_connections`` objects ahead of the caller, so
+        one that stops early has fetched at most that many it did not use.
+        """
+        pending: deque[asyncio.Task[Record | None]] = deque()
+        try:
+            async with aclosing_iter(self._iter_keys(s3, page_size)) as keys:
+                async for key in keys:
+                    pending.append(asyncio.create_task(self._fetch_and_filter(s3, key, query)))
+                    if len(pending) >= self._max_concurrency:
+                        record = await pending[0]
+                        pending.popleft()
+                        if record is not None:
+                            yield record
+            while pending:
+                record = await pending[0]
+                pending.popleft()
+                if record is not None:
+                    yield record
+        finally:
+            # The client closes when the caller's block does, so no fetch may
+            # outlive this one.
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _fetch_and_filter(self, s3: Any, key: str, query: Query) -> Record | None:
+        """The record at ``key``, or ``None`` when ``query`` does not match it.
+
+        ``None`` also when the object was deleted after it was listed. Any
+        other failure is raised.
+        """
+        record = await self._fetch(s3, key)
+        if record is None:
+            return None
+        record.metadata["id"] = self._id_from_key(key)
+        return record if self._matches_filters(record, query.filters) else None
+
+    async def _fetch(self, s3: Any, key: str) -> Record | None:
+        """The record at ``key``, or ``None`` when there is no such object."""
+        from botocore.exceptions import ClientError
+
+        try:
+            response = await s3.get_object(Bucket=self._pool_config.bucket, Key=key)
+        except ClientError as e:
+            if is_s3_missing_object(e):
+                return None
+            raise
+        return self._s3_object_to_record(json.loads(await response["Body"].read()))
+
     def _record_to_s3_object(self, record: Record) -> dict[str, Any]:
         """Convert a Record to an S3 object."""
         # Use Record's built-in serialization which handles VectorFields
@@ -205,7 +303,7 @@ class AsyncS3Database(
         # already exists (412 PreconditionFailed) or if a concurrent conditional
         # write races it (409 ConditionalRequestConflict), so a colliding id
         # cannot silently overwrite an existing record.
-        async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
+        async with self._client() as s3:
             try:
                 await s3.put_object(
                     Bucket=self._pool_config.bucket,
@@ -225,33 +323,15 @@ class AsyncS3Database(
         """Read a record from S3."""
         self._check_connection()
 
-        key = self._get_key(id)
+        async with self._client() as s3:
+            stored = await self._fetch(s3, self._get_key(id))
 
-        try:
-            async with self._session.client(
-                "s3", endpoint_url=self._pool_config.endpoint_url
-            ) as s3:
-                response = await s3.get_object(Bucket=self._pool_config.bucket, Key=key)
-
-                # Read the object body
-                body = await response["Body"].read()
-                obj = json.loads(body)
-
-                # `_prepare_record_from_storage` is typed for the read paths
-                # that hand it whatever the store returned, so it answers
-                # `Record | None`. Here the input is `_s3_object_to_record`,
-                # which never returns `None` -- narrowed rather than asserted,
-                # so a future change to either one is a type error and not a
-                # crash on the next line.
-                prepared = self._prepare_record_from_storage(self._s3_object_to_record(obj), id)
-                if prepared is None:
-                    return None
-                # Ensure ID is in metadata
-                prepared.metadata["id"] = id
-
-                return prepared
-        except Exception:
+        prepared = self._prepare_record_from_storage(stored, id)
+        if prepared is None:
             return None
+        # Ensure ID is in metadata
+        prepared.metadata["id"] = id
+        return prepared
 
     async def get_version(self, id: str) -> str | None:
         """Return the object's S3 ``ETag`` as the version token.
@@ -265,9 +345,7 @@ class AsyncS3Database(
         from botocore.exceptions import ClientError
 
         try:
-            async with self._session.client(
-                "s3", endpoint_url=self._pool_config.endpoint_url
-            ) as s3:
+            async with self._client() as s3:
                 response = await s3.head_object(
                     Bucket=self._pool_config.bucket,
                     Key=key,
@@ -317,9 +395,7 @@ class AsyncS3Database(
         from botocore.exceptions import ClientError
 
         try:
-            async with self._session.client(
-                "s3", endpoint_url=self._pool_config.endpoint_url
-            ) as s3:
+            async with self._client() as s3:
                 await s3.put_object(**put_kwargs)
         except ClientError as e:
             if expected_version is not None:
@@ -358,9 +434,7 @@ class AsyncS3Database(
             from botocore.exceptions import ClientError
 
             try:
-                async with self._session.client(
-                    "s3", endpoint_url=self._pool_config.endpoint_url
-                ) as s3:
+                async with self._client() as s3:
                     await s3.delete_object(
                         Bucket=self._pool_config.bucket,
                         Key=key,
@@ -381,14 +455,9 @@ class AsyncS3Database(
                     raise version_conflict_error(id, expected_version, current) from e
                 raise
 
-        try:
-            async with self._session.client(
-                "s3", endpoint_url=self._pool_config.endpoint_url
-            ) as s3:
-                await s3.delete_object(Bucket=self._pool_config.bucket, Key=key)
-            return True
-        except Exception:
-            return False
+        async with self._client() as s3:
+            await s3.delete_object(Bucket=self._pool_config.bucket, Key=key)
+        return True
 
     async def exists(self, id: str) -> bool:
         """Check if a record exists in S3."""
@@ -396,14 +465,16 @@ class AsyncS3Database(
 
         key = self._get_key(id)
 
+        from botocore.exceptions import ClientError
+
         try:
-            async with self._session.client(
-                "s3", endpoint_url=self._pool_config.endpoint_url
-            ) as s3:
+            async with self._client() as s3:
                 await s3.head_object(Bucket=self._pool_config.bucket, Key=key)
             return True
-        except Exception:
-            return False
+        except ClientError as e:
+            if is_s3_missing_object(e):
+                return False
+            raise
 
     async def upsert(
         self,
@@ -445,7 +516,7 @@ class AsyncS3Database(
         # Add ID to metadata
         obj["metadata"]["id"] = id
 
-        async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
+        async with self._client() as s3:
             await s3.put_object(
                 Bucket=self._pool_config.bucket,
                 Key=key,
@@ -476,42 +547,10 @@ class AsyncS3Database(
         # to a string and crashes on under mixed types).
         results: list[tuple[str, Record]] = []
 
-        async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-            # List all objects
-            paginator = s3.get_paginator("list_objects_v2")
-
-            params = {
-                "Bucket": self._pool_config.bucket,
-            }
-            if self._pool_config.prefix:
-                params["Prefix"] = self._pool_config.prefix
-
-            async for page in paginator.paginate(**params):
-                if "Contents" not in page:
-                    continue
-
-                # Process each object
-                for obj_summary in page["Contents"]:
-                    key = obj_summary["Key"]
-
-                    # Skip non-JSON files
-                    if not key.endswith(".json"):
-                        continue
-
-                    # Get the object
-                    response = await s3.get_object(Bucket=self._pool_config.bucket, Key=key)
-
-                    body = await response["Body"].read()
-                    obj = json.loads(body)
-                    record = self._s3_object_to_record(obj)
-
-                    # Extract ID from key
-                    id = key.replace(self._pool_config.prefix + "/", "").replace(".json", "")
-                    record.metadata["id"] = id
-
-                    # Apply filters
-                    if self._matches_filters(record, query.filters):
-                        results.append((id, record))
+        async with self._client() as s3:
+            async with aclosing_iter(self._fetch_matching(s3, query)) as records:
+                async for record in records:
+                    results.append((record.metadata["id"], record))
 
         # Records are freshly deserialized from S3 (no shared aliasing), so
         # ``ensure_record_id`` inside the helper is the only copy needed.
@@ -540,38 +579,21 @@ class AsyncS3Database(
         """Count all records in the database."""
         self._check_connection()
 
-        count = 0
-        async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-            paginator = s3.get_paginator("list_objects_v2")
-
-            params = {
-                "Bucket": self._pool_config.bucket,
-            }
-            if self._pool_config.prefix:
-                params["Prefix"] = self._pool_config.prefix
-
-            async for page in paginator.paginate(**params):
-                if "Contents" in page:
-                    for obj in page["Contents"]:
-                        if obj["Key"].endswith(".json"):
-                            count += 1
-
-        return count
+        async with self._client() as s3:
+            return sum([1 async for _ in self._iter_keys(s3)])
 
     async def clear(self) -> int:
         """Clear all records from the database."""
         self._check_connection()
 
         count = 0
-        async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
+        async with self._client() as s3:
             # List and delete all objects
             paginator = s3.get_paginator("list_objects_v2")
 
-            params = {
-                "Bucket": self._pool_config.bucket,
-            }
-            if self._pool_config.prefix:
-                params["Prefix"] = self._pool_config.prefix
+            params = {"Bucket": self._pool_config.bucket}
+            if self._key_prefix:
+                params["Prefix"] = self._key_prefix
 
             async for page in paginator.paginate(**params):
                 if "Contents" not in page:
@@ -599,43 +621,17 @@ class AsyncS3Database(
         self._check_connection()
         config = config or StreamConfig()
 
-        async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-            paginator = s3.get_paginator("list_objects_v2")
-
-            params = {"Bucket": self._pool_config.bucket, "MaxKeys": config.batch_size}
-            if self._pool_config.prefix:
-                params["Prefix"] = self._pool_config.prefix
-
-            async for page in paginator.paginate(**params):
-                if "Contents" not in page:
-                    continue
-
-                for obj_summary in page["Contents"]:
-                    key = obj_summary["Key"]
-
-                    if not key.endswith(".json"):
-                        continue
-
-                    # Get the object
-                    response = await s3.get_object(Bucket=self._pool_config.bucket, Key=key)
-
-                    body = await response["Body"].read()
-                    obj = json.loads(body)
-                    record = self._s3_object_to_record(obj)
-
-                    # Extract ID from key
-                    id = key.replace(self._pool_config.prefix + "/", "").replace(".json", "")
-                    record.metadata["id"] = id
-
-                    # Apply filters if query provided
-                    if query and query.filters:
-                        if not self._matches_filters(record, query.filters):
-                            continue
-
-                    # Apply field projection
-                    if query and query.fields:
-                        record = record.project(query.fields)
-
+        async with (
+            self._client() as s3,
+            aclosing_iter(
+                self._fetch_matching(s3, query or Query(), page_size=config.batch_size)
+            ) as records,
+        ):
+            async for record in records:
+                # Apply field projection
+                if query and query.fields:
+                    yield record.project(query.fields)
+                else:
                     yield record
 
     async def stream_write(
@@ -675,28 +671,8 @@ class AsyncS3Database(
         """List all record IDs in the database."""
         self._check_connection()
 
-        ids = []
-        async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
-            paginator = s3.get_paginator("list_objects_v2")
-
-            params = {
-                "Bucket": self._pool_config.bucket,
-            }
-            if self._pool_config.prefix:
-                params["Prefix"] = self._pool_config.prefix
-
-            async for page in paginator.paginate(**params):
-                if "Contents" not in page:
-                    continue
-
-                for obj in page["Contents"]:
-                    key = obj["Key"]
-                    if key.endswith(".json"):
-                        # Extract ID from key
-                        id = key.replace(self._pool_config.prefix + "/", "").replace(".json", "")
-                        ids.append(id)
-
-        return ids
+        async with self._client() as s3:
+            return [self._id_from_key(key) async for key in self._iter_keys(s3)]
 
     async def _vector_search(
         self,

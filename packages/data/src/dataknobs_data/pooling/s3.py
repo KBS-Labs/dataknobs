@@ -77,6 +77,22 @@ def is_s3_conditional_conflict(error: BaseException) -> bool:
     )
 
 
+def is_s3_missing_object(error: BaseException) -> bool:
+    """Whether a boto ``ClientError`` says the object does not exist.
+
+    A GET names it ``NoSuchKey``. A HEAD has no body to name anything in, so
+    botocore reports the bare status, ``404``. Read from the code and not the
+    HTTP status: a missing *bucket* is a 404 too, and is a failure rather than
+    an absent record wherever the response can tell them apart.
+
+    Duck-typed like :func:`is_s3_conditional_conflict`.
+    """
+    response = getattr(error, "response", None)
+    if not isinstance(response, dict):
+        return False
+    return response.get("Error", {}).get("Code") in ("NoSuchKey", "404")
+
+
 def create_boto3_s3_client(
     config: AwsSessionConfig | dict[str, Any] | None = None,
 ) -> Any:

@@ -711,6 +711,9 @@ class S3DatabaseConfigBase(VectorBackendConfig):
         aws_session_token: AWS session token (alias: ``session_token``).
             Redacted from ``repr``.
         endpoint_url: Custom S3 endpoint (LocalStack / MinIO / etc.).
+        max_pool_connections: Connection-pool size of the S3 client (alias:
+            ``max_workers``), at least 1. Also the most objects ``search``
+            and ``stream_read`` fetch at once.
     """
 
     bucket: str | None = None
@@ -719,6 +722,7 @@ class S3DatabaseConfigBase(VectorBackendConfig):
     aws_secret_access_key: str | None = None
     aws_session_token: str | None = None
     endpoint_url: str | None = None
+    max_pool_connections: int = 10
 
     # Redacted from ``repr`` by the StructuredConfig base. Declared on the
     # shared base so both Sync/AsyncS3DatabaseConfig inherit the masking.
@@ -731,12 +735,12 @@ class S3DatabaseConfigBase(VectorBackendConfig):
     # describes the surface a caller may actually write, not only the
     # names that survive normalization.
     _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset(
-        {"region", "access_key_id", "secret_access_key", "session_token"}
+        {"region", "access_key_id", "secret_access_key", "session_token", "max_workers"}
     )
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
-        # Map the legacy region/credential aliases onto the canonical keys
+        # Map the legacy aliases onto the canonical keys
         # so the typed config is canonical (the canonical key wins when
         # both are present, matching ``AwsSessionConfig.from_dict``).
         for alias, canonical in (
@@ -744,6 +748,7 @@ class S3DatabaseConfigBase(VectorBackendConfig):
             ("access_key_id", "aws_access_key_id"),
             ("secret_access_key", "aws_secret_access_key"),
             ("session_token", "aws_session_token"),
+            ("max_workers", "max_pool_connections"),
         ):
             if alias in raw:
                 if canonical not in raw:
@@ -755,6 +760,15 @@ class S3DatabaseConfigBase(VectorBackendConfig):
         super().__post_init__()
         if not self.bucket:
             raise _written_by_dataknobs(ValueError("S3 backend requires 'bucket' in configuration"))
+        # Coerced so YAML/env string values behave as they did when
+        # ``AwsSessionConfig.from_dict`` applied ``int(...)``.
+        object.__setattr__(self, "max_pool_connections", int(self.max_pool_connections))
+        if self.max_pool_connections < 1:
+            raise _written_by_dataknobs(
+                ValueError(
+                    f"max_pool_connections must be at least 1, got {self.max_pool_connections}"
+                )
+            )
 
 
 @dataclass(frozen=True)
@@ -762,9 +776,8 @@ class SyncS3DatabaseConfig(S3DatabaseConfigBase):
     """Configuration for ``SyncS3Database``.
 
     Adds the sync-only client tuning knobs consumed by
-    :class:`~dataknobs_common.aws.AwsSessionConfig` (``max_workers`` /
-    ``max_retries`` are accepted as aliases for ``max_pool_connections`` /
-    ``max_attempts``) plus the multipart thresholds. ``prefix`` defaults
+    :class:`~dataknobs_common.aws.AwsSessionConfig` (``max_retries`` is
+    accepted as an alias for ``max_attempts``) plus the multipart thresholds. ``prefix`` defaults
     to ``"records/"`` and is normalized to a single trailing slash, matching
     the legacy backend.
 
@@ -772,8 +785,6 @@ class SyncS3DatabaseConfig(S3DatabaseConfigBase):
         prefix: Object key prefix (normalized to end with ``/``).
         multipart_threshold: Size threshold for multipart uploads.
         multipart_chunksize: Chunk size for multipart uploads.
-        max_pool_connections: boto3 connection-pool size (alias:
-            ``max_workers``). Also bounds the search/write thread pool.
         max_attempts: boto3 retry attempts (alias: ``max_retries``).
         retry_mode: boto3 retry mode.
         extra_client_kwargs: Extra kwargs forwarded to the boto3 client.
@@ -782,37 +793,27 @@ class SyncS3DatabaseConfig(S3DatabaseConfigBase):
     prefix: str = "records/"
     multipart_threshold: int = 8 * 1024 * 1024
     multipart_chunksize: int = 8 * 1024 * 1024
-    max_pool_connections: int = 10
     max_attempts: int = 3
     retry_mode: str = "standard"
     extra_client_kwargs: dict[str, Any] = field(default_factory=dict)
 
-    # Only the two this class adds -- ``_accepted_keys`` unions
-    # ``_INPUT_KEYS`` across the MRO, so the base's credential aliases
-    # stay accepted without being restated here.
-    _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset({"max_workers", "max_retries"})
+    # Only the one this class adds -- ``_accepted_keys`` unions
+    # ``_INPUT_KEYS`` across the MRO, so the base's aliases stay accepted
+    # without being restated here.
+    _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset({"max_retries"})
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
-        # Sync-only pool/retry aliases, then the shared region/credential
-        # aliases handled by the base.
-        for alias, canonical in (
-            ("max_workers", "max_pool_connections"),
-            ("max_retries", "max_attempts"),
-        ):
-            if alias in raw:
-                if canonical not in raw:
-                    raw[canonical] = raw[alias]
-                del raw[alias]
+        # The sync-only retry alias, then the shared ones handled by the base.
+        if "max_retries" in raw:
+            raw.setdefault("max_attempts", raw["max_retries"])
+            del raw["max_retries"]
         return super()._normalize_dict(raw)
 
     def __post_init__(self) -> None:
         super().__post_init__()
         # Normalize the prefix to a single trailing slash (legacy behavior).
         object.__setattr__(self, "prefix", self.prefix.rstrip("/") + "/")
-        # Coerce the int knobs so YAML/env string values behave as they did
-        # when ``AwsSessionConfig.from_dict`` applied ``int(...)``.
-        object.__setattr__(self, "max_pool_connections", int(self.max_pool_connections))
         object.__setattr__(self, "max_attempts", int(self.max_attempts))
 
 
