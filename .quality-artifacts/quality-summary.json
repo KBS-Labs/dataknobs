@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-11-24T18:29:43Z",
+  "timestamp": "2026-11-24T19:31:00Z",
   "overall_status": "PASS",
   "run_mode": "all",
   "environment": "host",
@@ -32,12 +32,12 @@
   },
   "workspace_hashes": {
     "toolchain": "daa5b0cb397ff727a00dccbacfe4798fe65360633157bc78bd86084cbce704fd",
-    "toolchain_test": "112bc414a0e8fb4221c01856a4265c6d46739f2229f24f50a0936790b70aa114",
+    "toolchain_test": "d428a3c006bcf8c5eff5e6b13aeb3dcaf18e986c8eb9e5829fa2631876d4761d",
     "toolchain_lint": "6bcbb34df9feb37c7eec4ca866cdcb1f006d710109517161e59a83019d12fbbd",
-    "workspace_tests": "0f8b49f431037eb9e0b28a56fa59edc1b7aaaf9666126aaf76af68297236ca57",
-    "docs": "af6d10b220947d1edec9f56a9eab45e0f90541f601fa3db9b34d3dc2522c099b"
+    "workspace_tests": "de5874277bd9ee0635f72ee7a5fcee14f9afb5eb309e3b806e9c70f23105c345",
+    "docs": "5e5792bf8bd76242389e7abd993c156501671273767dc5caa9ec1b79a5f1357e"
   },
-  "total_seconds": 229,
+  "total_seconds": 233,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -55,34 +55,34 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 3
+      "duration_seconds": 1
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 25
+      "duration_seconds": 23
     },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 135,
-      "workspace_guards_seconds": 135
+      "duration_seconds": 142,
+      "workspace_guards_seconds": 142
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 54
+      "duration_seconds": 56
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 33
+      "duration_seconds": 32
     },
     "documentation_versions": {
       "status": "pass",
@@ -96,7 +96,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-mirror-check.py",
-      "duration_seconds": 0
+      "duration_seconds": 1
     }
   }
 }
