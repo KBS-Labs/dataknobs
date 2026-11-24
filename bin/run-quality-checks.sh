@@ -1367,9 +1367,9 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         # shellcheck disable=SC2329  # called by run_pool, by name
         run_gate_job() {
             case "$1" in
-                @workspace) run_workspace_guards ;;
+                @workspace) run_workspace_guards || return $? ;;
                 @docs) run_docs_checks ;;
-                *) run_unit_for_pkg "$1" ;;
+                *) run_unit_for_pkg "$1" || return $? ;;
             esac
         }
 
