@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -152,6 +153,138 @@ def test_packages_are_ordered_by_the_size_of_their_unit_suite(tmp_path: Path) ->
 def test_the_gate_runs_its_unit_suites_through_the_pool() -> None:
     source = GATE.read_text(encoding="utf-8")
     assert re.search(r"^\s*run_pool .*\|\| UNIT_TEST_STATUS=", source, re.MULTILINE)
+
+
+# --------------------------------------------------------------------------
+# what else the pool runs
+# --------------------------------------------------------------------------
+
+
+def _gate_function(name: str) -> str:
+    """One function out of the gate, which cannot itself be sourced."""
+    source = GATE.read_text(encoding="utf-8")
+    found = re.search(rf"^( *){name}\(\) \{{\n.*?^\1\}}$", source, re.MULTILINE | re.DOTALL)
+    assert found, f"{GATE.name} defines no {name}()"
+    return textwrap.dedent(found[0])
+
+
+def _run_gate_functions(
+    tmp_path: Path, names: tuple[str, ...], script: str
+) -> subprocess.CompletedProcess[str]:
+    """Run gate functions with the output directory and reporters they expect."""
+    preamble = f"""
+        OUTPUT_DIR="{tmp_path}"
+        SCRIPT_DIR="{tmp_path}"
+        FAILED_SUITES_FILE="{tmp_path}/failed-suites.txt"
+        PYTEST_ARGS=""
+        print_status() {{ echo "status: $1"; }}
+        print_success() {{ echo "success: $1"; }}
+        print_error() {{ echo "error: $1"; }}
+        elapsed_since() {{ echo $(( $(date +%s) - $1 )); }}
+        report_failed_suite() {{ echo "$1" >> "$2"; }}
+    """
+    functions = "\n".join(_gate_function(name) for name in names)
+    return _bash(textwrap.dedent(preamble) + functions + "\n" + textwrap.dedent(script))
+
+
+def test_each_pool_job_reaches_its_own_runner(tmp_path: Path) -> None:
+    result = _run_gate_functions(
+        tmp_path,
+        ("run_gate_job",),
+        """
+        run_workspace_guards() { echo guards; }
+        run_docs_checks() { echo docs; }
+        run_unit_for_pkg() { echo "unit $1"; }
+        run_gate_job @workspace
+        run_gate_job @docs
+        run_gate_job data
+        """,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split("\n")[:3] == ["guards", "docs", "unit data"]
+
+
+def test_the_pool_is_given_the_guards_and_the_docs_checks() -> None:
+    source = GATE.read_text(encoding="utf-8")
+    assert re.search(r"^\s*run_pool .* run_gate_job \$GATE_JOBS ", source, re.MULTILINE)
+    assert re.search(r'^\s*GATE_JOBS="@workspace"$', source, re.MULTILINE)
+    assert re.search(r'^\s*GATE_JOBS="\$GATE_JOBS @docs"$', source, re.MULTILINE)
+
+
+@pytest.mark.parametrize(("code", "fails"), [(0, False), (5, False), (1, True), (2, True)], ids=str)
+def test_the_guards_verdict_leaves_the_background_job(
+    tmp_path: Path, code: int, fails: bool
+) -> None:
+    """A job is a subshell: a variable it sets is lost, so the verdict is its status."""
+    result = _run_gate_functions(
+        tmp_path,
+        ("run_workspace_guards",),
+        f"""
+        TEST_CMD="stub"
+        stub() {{ echo "$@"; return {code}; }}
+        job() {{ run_workspace_guards; }}
+        run_pool 2 job one || echo POOL-FAILED
+        """,
+    )
+    assert ("POOL-FAILED" in result.stdout) is fails, result.stdout + result.stderr
+    assert (tmp_path / "failed-suites.txt").exists() is fails
+    assert (tmp_path / "workspace-guards-seconds.txt").read_text().strip().isdigit()
+    assert (tmp_path / "unit-test-output-workspace.txt").read_text().startswith("workspace --")
+
+
+def test_docs_checks_that_die_leave_no_earlier_verdict_to_read(tmp_path: Path) -> None:
+    """The status file is the docs verdict, and the directory outlives a run."""
+    (tmp_path / "docs-checks-status.json").write_text('{"docs-build": {"exit_code": 0}}\n')
+    dying = tmp_path / "docs-checks.sh"
+    dying.write_text("#!/bin/sh\nexit 3\n")
+    dying.chmod(0o755)
+
+    result = _run_gate_functions(tmp_path, ("run_docs_checks",), "run_docs_checks")
+
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "docs-checks-status.json").exists()
+
+
+def test_a_docs_failure_is_not_recorded_as_a_unit_test_failure(tmp_path: Path) -> None:
+    """The pool's status is the unit verdict; the docs verdict is the status file."""
+    failing = tmp_path / "docs-checks.sh"
+    failing.write_text("#!/bin/sh\nexit 1\n")
+    failing.chmod(0o755)
+    result = _run_gate_functions(
+        tmp_path,
+        ("run_docs_checks",),
+        """
+        job() { run_docs_checks; }
+        run_pool 2 job one && echo POOL-PASSED
+        """,
+    )
+    assert "POOL-PASSED" in result.stdout, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("status", [None, "{", "[]"], ids=["absent", "malformed", "wrong-shape"])
+def test_an_unreadable_docs_status_records_three_failures(
+    tmp_path: Path, status: str | None
+) -> None:
+    if status is not None:
+        (tmp_path / "docs-checks-status.json").write_text(status)
+    result = _run_gate_functions(
+        tmp_path,
+        ("record_docs_checks",),
+        """
+        record_check() { echo "record $1 $2"; }
+        record_docs_checks
+        """,
+    )
+    assert result.returncode == 0, result.stderr
+    for name in ("documentation", "documentation_versions", "documentation_mirrors"):
+        assert f"record {name} 1" in result.stdout
+
+
+def test_docs_checks_still_run_when_the_tests_are_skipped() -> None:
+    source = GATE.read_text(encoding="utf-8")
+    skipped = source[source.index('print_status "Skipping tests"') :]
+    branch = skipped[: skipped.index("\nfi\n")]
+    assert re.search(r"^\s*run_docs_checks$", branch, re.MULTILINE)
 
 
 # --------------------------------------------------------------------------

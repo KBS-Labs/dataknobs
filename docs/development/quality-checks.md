@@ -278,7 +278,13 @@ workspace guards under `tests/`; those are folded into the unit-test status
 rather than reported as their own check, so without that field their cost is
 invisible.
 
-That suite is also run with `--durations=10`, because one number for a whole
+In PR and `--all` runs, the workspace guards, the documentation checks and the package
+unit suites share one pool that runs three jobs at a time; `--full` runs them one
+at a time. Each duration is the time that check itself took, except that
+`unit_tests` spans the whole pool. Rows therefore overlap, and their sum
+can exceed `total_seconds`.
+
+The guard suite is also run with `--durations=10`, because one number for a whole
 suite says it is expensive without saying which part of it is. The ten slowest
 guards are listed at the end of
 `.quality-artifacts/unit-test-output-workspace.txt`:
