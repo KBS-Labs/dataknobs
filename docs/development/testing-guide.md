@@ -55,6 +55,9 @@ target of its own:
 ```bash
 # Run the workspace guards alone (no services, no coverage)
 bin/test.sh workspace
+
+# The same, in parallel, as PR and --all gate runs do (PYTEST_WORKERS, default 8)
+bin/test.sh workspace --parallel
 ```
 
 A bare `bin/test.sh` runs them too, ahead of the discovered packages: "run

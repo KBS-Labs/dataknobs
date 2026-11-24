@@ -1348,12 +1348,13 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             # test.sh owns the invocation now (see run_workspace_tests there),
             # including the --durations=10 that names the slowest guards.
             #
-            # No $TEST_FLAGS: --parallel would hand a guard suite that shells
-            # out to the linters to xdist for no gain, and --quiet would drop
-            # the durations line this captures the output for.
+            # The parallel flag without the rest of $TEST_FLAGS: --quiet would
+            # drop the durations line this captures the output for. Run
+            # serially the guards outlast every package suite, so they alone
+            # decided how long the unit stage took.
             # Deliberate word splitting — see the waiver above the ruff call.
             # shellcheck disable=SC2086
-            $TEST_CMD workspace -- $PYTEST_ARGS \
+            $TEST_CMD workspace $TEST_PARALLEL_FLAG -- $PYTEST_ARGS \
                 > "$OUTPUT_DIR/unit-test-output-workspace.txt" 2>&1 || guards_exit=$?
             elapsed_since "$guards_start" > "$OUTPUT_DIR/workspace-guards-seconds.txt"
 
@@ -1395,9 +1396,9 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             UNIT_COV_REPORT="none"
         fi
 
-        # The guards are the longest job of all, so they start first; then the
-        # documentation checks, then the packages largest first, so the longest
-        # suite is not left to run alone at the end. An order only:
+        # The guards start first, being the widest job; then the documentation
+        # checks, then the packages largest first, so the longest suite is not
+        # left to run alone at the end. An order only:
         # PACKAGES_TO_TEST stays as it was for the integration loop and the
         # recorded tested_packages.
         #

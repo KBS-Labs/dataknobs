@@ -4,6 +4,9 @@ Each test names the behaviour it pins; the three were reported together
 by a downstream user of the Postgres backend.
 """
 
+from collections.abc import Iterator
+from typing import Any
+
 import pytest
 from dataknobs_common.testing import postgres_dsn, requires_real_postgres
 
@@ -11,9 +14,19 @@ from dataknobs_common.testing import postgres_dsn, requires_real_postgres
 skip_postgres = requires_real_postgres
 
 
+@pytest.fixture
+def postgres_table(make_postgres_test_db) -> Iterator[dict[str, Any]]:
+    """A connection config naming a table no other test writes.
+
+    These count what a search finds, so a table another test clears or fills
+    while they run decides their result.
+    """
+    yield from make_postgres_test_db("test_backend_fixes_")
+
+
 @skip_postgres
 @pytest.mark.asyncio
-async def test_postgres_search_populates_storage_id(postgres_connection_params):
+async def test_postgres_search_populates_storage_id(postgres_table):
     """Test that PostgreSQL search() populates storage_id from database ID.
 
     Search must populate ``record.storage_id`` from the row's ``id``.
@@ -24,13 +37,12 @@ async def test_postgres_search_populates_storage_id(postgres_connection_params):
 
     # Create backend with connection string (also covers the
     # connection-string acceptance path below).
-    backend = AsyncPostgresDatabase({"connection_string": postgres_dsn(postgres_connection_params)})
+    backend = AsyncPostgresDatabase(
+        {"connection_string": postgres_dsn(postgres_table), "table": postgres_table["table"]}
+    )
 
     try:
         await backend.connect()
-
-        # Clear any existing records from previous test runs
-        await backend.clear()
 
         # Create a record
         record = Record(data={"test": "data", "status": "pending"})
@@ -53,7 +65,7 @@ async def test_postgres_search_populates_storage_id(postgres_connection_params):
 
 @skip_postgres
 @pytest.mark.asyncio
-async def test_postgres_update_persists_changes(postgres_connection_params):
+async def test_postgres_update_persists_changes(postgres_table):
     """Test that PostgreSQL update() persists changes to the database.
 
     ``update()`` must write through using the storage_id, not the
@@ -64,13 +76,10 @@ async def test_postgres_update_persists_changes(postgres_connection_params):
     from dataknobs_data.query import Query
     from dataknobs_data.records import Record
 
-    backend = AsyncPostgresDatabase(dict(postgres_connection_params))
+    backend = AsyncPostgresDatabase(dict(postgres_table))
 
     try:
         await backend.connect()
-
-        # Clear any existing records from previous test runs
-        await backend.clear()
 
         # Create initial record
         record = Record(data={"status": "pending", "count": 0})
@@ -105,7 +114,7 @@ async def test_postgres_update_persists_changes(postgres_connection_params):
 
 @skip_postgres
 @pytest.mark.asyncio
-async def test_postgres_connection_string(postgres_connection_params):
+async def test_postgres_connection_string(postgres_table):
     """Test that PostgreSQL backend accepts connection strings.
 
     ``PostgresPoolConfig.from_dict()`` must accept a ``connection_string``
@@ -115,14 +124,13 @@ async def test_postgres_connection_string(postgres_connection_params):
     from dataknobs_data.records import Record
 
     # Test with connection string
-    connection_string = postgres_dsn(postgres_connection_params)
-    backend = AsyncPostgresDatabase({"connection_string": connection_string})
+    connection_string = postgres_dsn(postgres_table)
+    backend = AsyncPostgresDatabase(
+        {"connection_string": connection_string, "table": postgres_table["table"]}
+    )
 
     try:
         await backend.connect()
-
-        # Clear any existing records from previous test runs
-        await backend.clear()
 
         # Should successfully connect and be usable
         record = Record(data={"test": "connection_string"})

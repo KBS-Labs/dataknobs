@@ -135,14 +135,17 @@ init_random_seed() {
 }
 
 # Build extra pytest args for parallel execution and verbosity
+# Args: $1=xdist distribution mode (default: loadscope), $2=worker count when
+# PYTEST_WORKERS names none (default: 4)
 build_extra_args() {
+    local dist="${1:-loadscope}" default_workers="${2:-4}"
     local parts=()
     if [ "$PARALLEL" = "yes" ]; then
-        # PYTEST_WORKERS controls xdist worker count (default: 4)
+        # PYTEST_WORKERS controls xdist worker count
         # Using a fixed count rather than "auto" to avoid oversubscription
         # when multiple packages run concurrently
-        local workers="${PYTEST_WORKERS:-4}"
-        parts+=("-n" "$workers" "--dist" "loadscope")
+        local workers="${PYTEST_WORKERS:-$default_workers}"
+        parts+=("-n" "$workers" "--dist" "$dist")
     fi
     case "$VERBOSITY" in
         quiet)   parts+=("-q") ;;
@@ -640,6 +643,12 @@ run_integration_tests() {
 # behind, and --durations=10 because one number for the whole suite says it is
 # expensive without saying which part is: the first run with the flag attributed
 # 45 of 54 seconds to a single file re-invoking the shell lint per test.
+#
+# Under --parallel, worksteal and eight workers rather than the packages'
+# loadscope and four. The cost is concentrated in a few files, and loadscope
+# keeps a file's functions on one worker, so the slowest file would set the
+# floor. The gate runs two other jobs beside this one, at most four workers
+# each.
 run_workspace_tests() {
     echo -e "${YELLOW}Running workspace guards${NC}"
 
@@ -650,7 +659,7 @@ run_workspace_tests() {
     fi
 
     local extra_args
-    extra_args=$(build_extra_args)
+    extra_args=$(build_extra_args worksteal 8)
     local cmd="pytest $test_path --ignore=$test_path/integration -p no:cacheprovider --durations=10 $extra_args $PYTEST_ARGS --color=yes"
     execute_pytest "$cmd" "workspace guards"
 }

@@ -1704,6 +1704,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A failed Postgres batch insert finds the colliding id in one query.** The
+  sync `create_batch`, and the batch insert behind `stream_write` on both
+  twins, asked once per record until it reached the one already stored: 33,000
+  round trips when that was the last of 33,000. The id named is unchanged.
+
 - **A backend whose module fails to import is reported by the module's name,
   not the import error's text.** `register_backend` used `str(exc)` of a
   loader's `ImportError` as the backend's unavailable reason, which a
