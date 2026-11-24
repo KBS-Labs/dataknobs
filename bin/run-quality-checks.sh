@@ -355,6 +355,10 @@ RECORDS_FILE="$OUTPUT_DIR/check-records.jsonl"
 FAILED_SUITES_FILE="$OUTPUT_DIR/failed-suites.txt"
 : > "$FAILED_SUITES_FILE"
 
+# Coverage from an earlier run, cleared for the same reason. None of it is
+# committed, so nothing here is evidence an aborted run would lose.
+clear_coverage "$OUTPUT_DIR"
+
 # record_check <name> <exit_code> [--tool T] [--skipped true|false]
 #              --duration <seconds|null> [--field key=<json>]
 #

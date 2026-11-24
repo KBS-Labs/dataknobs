@@ -81,3 +81,13 @@ largest_suite_first() {
         printf '%d %s\n' "$size" "$pkg"
     done | sort -k1,1rn -k2 | cut -d' ' -f2
 }
+
+# clear_coverage DIR
+#
+# Remove every coverage report and data file in DIR. The artifacts directory
+# outlives a run, and a run that selects no package writes no coverage of its
+# own: without this it would report whatever an earlier run, possibly on
+# another branch, had left behind.
+clear_coverage() {
+    rm -f "$1"/coverage*.xml "$1"/.coverage "$1"/.coverage.*
+}

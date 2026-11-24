@@ -111,6 +111,30 @@ def test_an_empty_pool_succeeds() -> None:
     assert _bash("run_pool 3 job").returncode == 0
 
 
+def test_an_earlier_runs_coverage_is_cleared(tmp_path: Path) -> None:
+    """A run that measures nothing must not report what an earlier run measured."""
+    stale = ("coverage.xml", "coverage-unit-data.xml", ".coverage", ".coverage.unit.data")
+    for name in stale:
+        (tmp_path / name).write_text("earlier run\n")
+    (tmp_path / "quality-summary.json").write_text("{}\n")
+
+    result = _bash('clear_coverage "$1"', str(tmp_path))
+
+    assert result.returncode == 0, result.stderr
+    assert [path.name for path in tmp_path.iterdir()] == ["quality-summary.json"]
+
+
+def test_clearing_coverage_from_an_empty_directory_succeeds(tmp_path: Path) -> None:
+    result = _bash('clear_coverage "$1"', str(tmp_path))
+    assert result.returncode == 0, result.stderr
+
+
+def test_the_gate_clears_coverage_before_any_check_runs() -> None:
+    source = GATE.read_text(encoding="utf-8")
+    clear = source.find('\nclear_coverage "$OUTPUT_DIR"\n')
+    assert -1 < clear < source.index("\nrecord_check() {")
+
+
 def test_packages_are_ordered_by_the_size_of_their_unit_suite(tmp_path: Path) -> None:
     """Integration tests run elsewhere, so they must not count towards the order."""
     for name, unit, integration in (("small", 10, 9000), ("large", 500, 0), ("mid", 90, 0)):
