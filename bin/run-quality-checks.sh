@@ -52,6 +52,8 @@ RUN_START=$(date +%s)
 
 # The pool the unit suites run through and the clock on the status lines.
 source "$PROJECT_ROOT/bin/gate-progress.sh"
+# How a Ctrl-C ends the run.
+source "$PROJECT_ROOT/bin/stop-on-signal.sh"
 
 # Default values
 PACKAGES=""
@@ -626,7 +628,7 @@ set_environment_vars() {
 
 # Function to cleanup resources
 #
-# Reached only through `trap cleanup EXIT INT TERM` below, which shellcheck does
+# Reached only through `trap cleanup EXIT` below, which shellcheck does
 # not read as a call site. Deleting it on the strength of the finding would
 # leave the service teardown unreferenced *and* the trap naming nothing.
 # shellcheck disable=SC2329
@@ -651,7 +653,8 @@ cleanup() {
 }
 
 # Set trap for cleanup on exit
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+stop_on_signals
 
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 case "$RUN_MODE" in

@@ -53,7 +53,14 @@ run_pool() {
             [ "$running" -ge "$limit" ] || break
             sleep 0.1
         done
-        "$job" "$item" &
+        # Job control for this one line, so the job gets a process group of its
+        # own: stop_on_signals (bin/stop-on-signal.sh) ends it by that group.
+        # Without it a job also starts with SIGINT ignored, and nothing it runs
+        # ever sees a Ctrl-C. No stdin, since a read of the terminal from
+        # outside its foreground group would stop the job for good.
+        set -m
+        "$job" "$item" < /dev/null &
+        set +m
         pids+=("$!")
     done
     # bash keeps the status of a job that has already ended, so this reads
