@@ -2,7 +2,6 @@
 
 import asyncio
 import concurrent.futures
-import time
 
 import pytest
 
@@ -52,9 +51,6 @@ class TestElasticsearchIntegration:
         id = db.create(record)
         assert id is not None
 
-        # Small delay for indexing (even with refresh=true)
-        time.sleep(0.5)
-
         # Read
         retrieved = db.read(id)
         assert retrieved is not None
@@ -79,8 +75,6 @@ class TestElasticsearchIntegration:
         success = db.update(id, updated_record)
         assert success is True
 
-        time.sleep(0.5)
-
         retrieved = db.read(id)
         assert retrieved.get_value("name") == "Updated User"
         assert retrieved.get_value("age") == 31
@@ -91,7 +85,6 @@ class TestElasticsearchIntegration:
         success = db.delete(id)
         assert success is True
 
-        time.sleep(0.5)
         assert db.read(id) is None
 
         db.close()
@@ -103,9 +96,6 @@ class TestElasticsearchIntegration:
         # Create batch
         ids = db.create_batch(sample_records)
         assert len(ids) == len(sample_records)
-
-        # Wait for indexing
-        time.sleep(1)
 
         # Verify all created
         for id in ids:
@@ -131,8 +121,6 @@ class TestElasticsearchIntegration:
         results = db.delete_batch(ids)
         assert all(results)
 
-        time.sleep(0.5)
-
         # Verify all deleted
         retrieved = db.read_batch(ids)
         assert all(r is None for r in retrieved)
@@ -144,7 +132,6 @@ class TestElasticsearchIntegration:
         db = SyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         try:
             db.create(Record({"name": "old"}, id="u1"))
-            time.sleep(1)
             ids = db.upsert_batch(
                 [
                     Record({"name": "new"}, id="u1"),  # overwrite
@@ -152,7 +139,6 @@ class TestElasticsearchIntegration:
                 ]
             )
             assert ids == ["u1", "u2"]
-            time.sleep(1)
             assert db.read("u1").get_value("name") == "new"
             assert db.read("u2").get_value("name") == "u2"
         finally:
@@ -164,9 +150,6 @@ class TestElasticsearchIntegration:
 
         # Insert sample data
         ids = db.create_batch(sample_records)
-
-        # Wait for indexing
-        time.sleep(1)
 
         # Test 1: Filter by department (term query)
         query = Query().filter("department", Operator.EQ, "Engineering")
@@ -215,7 +198,6 @@ class TestElasticsearchIntegration:
         # Add a record without email
         no_email_record = Record({"name": "No Email", "department": "IT"})
         no_email_id = db.create(no_email_record)
-        time.sleep(0.5)
 
         query = Query().filter("email", Operator.EXISTS)
         results = db.search(query)
@@ -237,9 +219,6 @@ class TestElasticsearchIntegration:
 
         # Insert sample data
         ids = db.create_batch(sample_records)
-
-        # Wait for indexing
-        time.sleep(1)
 
         # Test 1: Sort by age ascending
         query = Query().sort("age", SortOrder.ASC)
@@ -324,7 +303,6 @@ class TestElasticsearchIntegration:
         ]
 
         ids = db.create_batch(docs)
-        time.sleep(1)
 
         # Test wildcard search (SQL LIKE wildcard is %, not * — * is now literal)
         query = Query().filter("title", Operator.LIKE, "%Elasticsearch%")
@@ -358,8 +336,6 @@ class TestElasticsearchIntegration:
         )
         id = db.create(record)
 
-        time.sleep(0.5)
-
         # Retrieve and verify metadata
         retrieved = db.read(id)
 
@@ -378,8 +354,6 @@ class TestElasticsearchIntegration:
             metadata={"version": 3, "updated": True, "updater": "test_suite"},
         )
         db.update(id, updated_record)
-
-        time.sleep(0.5)
 
         retrieved = db.read(id)
         assert retrieved.metadata["version"] == 3
@@ -408,8 +382,6 @@ class TestElasticsearchIntegration:
 
         assert len(ids) == 10
         assert all(id is not None for id in ids)
-
-        time.sleep(1)
 
         # Read records concurrently
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
@@ -444,8 +416,6 @@ class TestElasticsearchIntegration:
         )
         id = db.create(record)
 
-        time.sleep(0.5)
-
         # Retrieve and verify
         retrieved = db.read(id)
         assert retrieved.get_value("name") == 'Test\'s "Special" Name'
@@ -474,8 +444,6 @@ class TestElasticsearchIntegration:
         # Insert sample data
         db.create_batch(sample_records)
 
-        time.sleep(1)
-
         # Count all
         assert db.count() == len(sample_records)
 
@@ -490,7 +458,6 @@ class TestElasticsearchIntegration:
         deleted = db.clear()
         assert deleted == len(sample_records)
 
-        time.sleep(0.5)
         assert db.count() == 0
 
         db.close()
@@ -525,7 +492,6 @@ class TestElasticsearchIntegration:
         ]
 
         ids = db.create_batch(records)
-        time.sleep(1)
 
         # Search by array element
         query = Query().filter("tags", Operator.EQ, "electronics")
@@ -563,9 +529,6 @@ class TestElasticsearchAsyncIntegration:
         id = await db.create(record)
         assert id is not None
 
-        # Small delay for indexing
-        await asyncio.sleep(0.5)
-
         # Read
         retrieved = await db.read(id)
         assert retrieved is not None
@@ -583,8 +546,6 @@ class TestElasticsearchAsyncIntegration:
         success = await db.update(id, updated)
         assert success is True
 
-        await asyncio.sleep(0.5)
-
         retrieved = await db.read(id)
         assert retrieved.get_value("value") == 84
 
@@ -592,7 +553,6 @@ class TestElasticsearchAsyncIntegration:
         success = await db.delete(id)
         assert success is True
 
-        await asyncio.sleep(0.5)
         assert await db.read(id) is None
 
         await db.close()
@@ -604,8 +564,6 @@ class TestElasticsearchAsyncIntegration:
         # Create batch
         ids = await db.create_batch(sample_records)
         assert len(ids) == len(sample_records)
-
-        await asyncio.sleep(1)
 
         # Read batch
         retrieved = await db.read_batch(ids)
@@ -622,7 +580,6 @@ class TestElasticsearchAsyncIntegration:
         db = await AsyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         try:
             await db.create(Record({"name": "old"}, id="u1"))
-            await asyncio.sleep(1)
             ids = await db.upsert_batch(
                 [
                     Record({"name": "new"}, id="u1"),  # overwrite
@@ -630,7 +587,6 @@ class TestElasticsearchAsyncIntegration:
                 ]
             )
             assert ids == ["u1", "u2"]
-            await asyncio.sleep(1)
             assert (await db.read("u1")).get_value("name") == "new"
             assert (await db.read("u2")).get_value("name") == "u2"
         finally:
@@ -648,8 +604,6 @@ class TestElasticsearchAsyncIntegration:
 
         ids = await asyncio.gather(*tasks)
         assert len(ids) == 10
-
-        await asyncio.sleep(1)
 
         # Read all concurrently
         tasks = [db.read(id) for id in ids]
@@ -670,8 +624,6 @@ class TestElasticsearchAsyncIntegration:
 
         # Insert data
         await db.create_batch(sample_records)
-
-        await asyncio.sleep(1)
 
         # Search
         query = Query().filter("department", Operator.EQ, "Engineering")

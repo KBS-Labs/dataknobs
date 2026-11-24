@@ -219,7 +219,7 @@ class TestNewFeature:
 
 1. **Use Fixtures**: Leverage provided fixtures for clean test databases
 2. **Clean Up**: Always clean up test data (fixtures handle this automatically)
-3. **Wait for Indexing**: Add delays after Elasticsearch writes (`time.sleep(0.5)`)
+3. **Do not sleep after Elasticsearch writes**: the `elasticsearch_test_index` config sets `refresh: True`, so a write is searchable when it returns
 4. **Test Isolation**: Each test should be independent
 5. **Meaningful Names**: Use descriptive test names
 6. **Documentation**: Add docstrings explaining what's being tested

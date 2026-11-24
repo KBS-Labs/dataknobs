@@ -1,6 +1,5 @@
 """Test sync Elasticsearch vector functionality."""
 
-import time
 import numpy as np
 
 from dataknobs_common.testing import requires_real_elasticsearch
@@ -37,9 +36,6 @@ def test_sync_vector_search(elasticsearch_test_index):
         for rec in records:
             id = db.create(rec)
             ids.append(id)
-
-        # Wait for indexing
-        time.sleep(2)
 
         # Search for similar vectors
         results = db.vector_search(
