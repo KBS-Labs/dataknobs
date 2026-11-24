@@ -284,6 +284,10 @@ at a time. Each duration is the time that check itself took, except that
 `unit_tests` spans the whole pool. Rows therefore overlap, and their sum
 can exceed `total_seconds`.
 
+Ctrl-C ends a run in any stage. Suites running in the pool are interrupted and
+given five seconds to tear down before they are killed. A run stopped before it
+writes `quality-summary.json` leaves `.run-in-progress` in its output directory.
+
 The guard suite is also run with `--durations=10`, because one number for a whole
 suite says it is expensive without saying which part of it is. The ten slowest
 guards are listed at the end of

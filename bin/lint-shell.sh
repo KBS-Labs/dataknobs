@@ -77,6 +77,7 @@ STRICT_SCRIPTS=(
     "bin/ensure-network.sh"
     "bin/setup-git-config.sh"
     "bin/gate-progress.sh"  # the unit-suite pool and the clock on gate output
+    "bin/stop-on-signal.sh"  # how a Ctrl-C ends a script that runs suites
     "bin/test-output-detail.sh"  # what the gate shows about a failed suite
     "bin/update-model-limits.sh"
     "setup-dk.sh"  # the installer four documentation pages tell you to run

@@ -803,7 +803,7 @@ SERVICES_STARTED=false
 
 # Function to cleanup services if we started them
 #
-# Reached only through `trap cleanup_services EXIT INT TERM` below, which the
+# Reached only through `trap cleanup_services EXIT` below, which the
 # linter does not read as a call site. (Do not begin a comment line with the
 # tool's name — it is parsed as a malformed directive.)
 # shellcheck disable=SC2329
@@ -817,7 +817,9 @@ cleanup_services() {
 }
 
 # Set trap for cleanup on exit
-trap cleanup_services EXIT INT TERM
+trap cleanup_services EXIT
+source "$ROOT_DIR/bin/stop-on-signal.sh"
+stop_on_signals
 
 # Run every named target. Each gets its own pytest process — packages have
 # always been run one at a time by the discovery path, and naming several
