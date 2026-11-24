@@ -1,11 +1,22 @@
 {
-  "timestamp": "2026-11-24T18:05:09Z",
+  "timestamp": "2026-11-24T18:29:43Z",
   "overall_status": "PASS",
-  "run_mode": "pr",
+  "run_mode": "all",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
-  "tested_packages": [],
-  "coverage_percent": null,
+  "packages": "all",
+  "tested_packages": [
+    "bots",
+    "common",
+    "config",
+    "data",
+    "fsm",
+    "legacy",
+    "llm",
+    "structures",
+    "utils",
+    "xization"
+  ],
+  "coverage_percent": 85.1,
   "package_hashes": {
     "bots": "a634b7a8d973693a4ed73b998015e21ea6ceb279421174f7fe45ffa265280b3b",
     "common": "e7e422368dfe27b82fde397dd9e832e2b9b608a0a1417bfb6e9080c53a226a91",
@@ -23,10 +34,10 @@
     "toolchain": "daa5b0cb397ff727a00dccbacfe4798fe65360633157bc78bd86084cbce704fd",
     "toolchain_test": "112bc414a0e8fb4221c01856a4265c6d46739f2229f24f50a0936790b70aa114",
     "toolchain_lint": "6bcbb34df9feb37c7eec4ca866cdcb1f006d710109517161e59a83019d12fbbd",
-    "workspace_tests": "e2e423fb54a6ea17e38710a04a28969c7a6bcce199cedd5115bfcf87afccdaf0",
-    "docs": "123e9656bae40cee547ff18ce6f405c76668d15272962640341a1bfc9f73ef2e"
+    "workspace_tests": "0f8b49f431037eb9e0b28a56fa59edc1b7aaaf9666126aaf76af68297236ca57",
+    "docs": "af6d10b220947d1edec9f56a9eab45e0f90541f601fa3db9b34d3dc2522c099b"
   },
-  "total_seconds": 177,
+  "total_seconds": 229,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -44,21 +55,34 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 0
+      "duration_seconds": 3
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 23
+      "duration_seconds": 25
+    },
+    "unit_tests": {
+      "status": "pass",
+      "exit_code": 0,
+      "skipped": false,
+      "duration_seconds": 135,
+      "workspace_guards_seconds": 135
+    },
+    "integration_tests": {
+      "status": "pass",
+      "exit_code": 0,
+      "skipped": false,
+      "duration_seconds": 54
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 29
+      "duration_seconds": 33
     },
     "documentation_versions": {
       "status": "pass",
@@ -73,19 +97,6 @@
       "skipped": false,
       "tool": "docs-mirror-check.py",
       "duration_seconds": 0
-    },
-    "unit_tests": {
-      "status": "pass",
-      "exit_code": 0,
-      "skipped": false,
-      "duration_seconds": 117,
-      "workspace_guards_seconds": 117
-    },
-    "integration_tests": {
-      "status": "pass",
-      "exit_code": 0,
-      "skipped": true,
-      "duration_seconds": null
     }
   }
 }
