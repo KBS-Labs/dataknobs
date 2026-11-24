@@ -137,6 +137,8 @@ init_random_seed() {
 # Build extra pytest args for parallel execution and verbosity
 # Args: $1=xdist distribution mode (default: loadscope), $2=worker count when
 # PYTEST_WORKERS names none (default: 4)
+#
+# loadscope keeps a class, or a module's functions, on one worker.
 build_extra_args() {
     local dist="${1:-loadscope}" default_workers="${2:-4}"
     local parts=()
@@ -157,6 +159,16 @@ build_extra_args() {
         parts+=("--randomly-seed=$RANDOMLY_SEED")
     fi
     echo "${parts[*]}"
+}
+
+# The xdist distribution mode for one package's unit suite. common's slowest
+# tests are two classes that wait on a live SQS queue, so keeping each class on
+# one worker sets the suite's floor.
+unit_dist_mode() {
+    case "$1" in
+        common) echo "worksteal" ;;
+        *)      echo "loadscope" ;;
+    esac
 }
 
 # Consolidated function to execute pytest with proper error handling
@@ -229,6 +241,11 @@ set_integration_env_vars() {
         export TEST_OLLAMA="${TEST_OLLAMA:-true}"
     fi
 }
+
+# Measure coverage through sys.monitoring rather than a C trace function: the
+# same lines for less time. It does not measure branches before Python 3.14;
+# nothing here asks for them.
+export COVERAGE_CORE="${COVERAGE_CORE:-sysmon}"
 
 # Function to show usage
 show_usage() {
@@ -575,7 +592,7 @@ run_unit_tests() {
 
     # Run tests
     local extra_args
-    extra_args=$(build_extra_args)
+    extra_args=$(build_extra_args "$(unit_dist_mode "$package")")
     local cmd="pytest $test_path $exclude_args $cov_args $extra_args $PYTEST_ARGS --color=yes"
     execute_pytest "$cmd" "unit tests for $package"
 }
