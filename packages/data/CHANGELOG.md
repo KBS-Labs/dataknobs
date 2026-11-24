@@ -1704,6 +1704,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`VectorMigration(retry_delay=...)` is the delay `add_vectors_to_existing`
+  waits** between embedding attempts. It was stored and never read, so every
+  retry waited one second. `MigrationConfig` gains `retry_delay` (default
+  `1.0`), and a negative value is refused with `ValueError`; a `config` passed
+  to `VectorMigration` still overrides the argument.
+- **`IncrementalVectorizer.stop()` does not wait for idle workers to poll.** A
+  worker waiting on an empty queue noticed the shutdown up to a second late,
+  which `run_batch` paid on every call.
+
 - **A failed Postgres batch insert finds the colliding id in one query.** The
   sync `create_batch`, and the batch insert behind `stream_write` on both
   twins, asked once per record until it reached the one already stored: 33,000

@@ -1,6 +1,7 @@
 """Tests for vector migration functionality."""
 
 import asyncio
+import itertools
 from datetime import datetime
 
 import numpy as np
@@ -121,6 +122,7 @@ class TestMigrationConfig:
         assert config.verify_migration is True
         assert config.retry_failed is True
         assert config.max_retries == 3
+        assert config.retry_delay == 1.0
 
     def test_config_validation(self):
         """Test configuration validation."""
@@ -128,6 +130,10 @@ class TestMigrationConfig:
         with pytest.raises(ValueError, match="Batch size must be positive"):
             config = MigrationConfig(batch_size=0)
             config.validate()
+
+        # Invalid retry delay
+        with pytest.raises(ValueError, match="Retry delay cannot be negative"):
+            MigrationConfig(retry_delay=-1.0).validate()
 
         # Invalid workers
         with pytest.raises(ValueError, match="Max workers must be positive"):
@@ -312,7 +318,7 @@ class TestVectorMigration:
         migration = VectorMigration(
             source_db=source_database,
             embedding_fn=failing_embedding,
-            config=MigrationConfig(enable_rollback=True, batch_size=2),
+            config=MigrationConfig(enable_rollback=True, batch_size=2, retry_delay=0.0),
         )
 
         with pytest.raises(Exception, match="Embedding service failed"):
@@ -323,6 +329,35 @@ class TestVectorMigration:
         # Check rollback occurred
         assert len(migration._rollback_data) > 0
         assert migration._rollback_data  # Should have stored original data
+
+    @pytest.mark.parametrize("via_config", [False, True], ids=["argument", "config"])
+    async def test_the_retry_delay_given_is_the_one_waited(self, via_config):
+        """``retry_delay`` was stored and never read, so every retry waited 1s."""
+        delay = 0.2
+        db = AsyncMemoryDatabase()
+        db.schema.add_vector_field("embedding", dimensions=3, source_field="content")
+        await db.create(Record(data={"content": "a document"}))
+        loop = asyncio.get_running_loop()
+        called_at: list[float] = []
+
+        async def failing_embedding(text: str) -> np.ndarray:
+            called_at.append(loop.time())
+            raise RuntimeError("Embedding service failed")
+
+        migration = VectorMigration(
+            source_db=db,
+            embedding_fn=failing_embedding,
+            **(
+                {"config": MigrationConfig(retry_delay=delay)}
+                if via_config
+                else {"retry_delay": delay}
+            ),
+        )
+        await migration.add_vectors_to_existing(vector_fields={"embedding": "content"})
+
+        waits = [later - earlier for earlier, later in itertools.pairwise(called_at)]
+        assert len(waits) == 2
+        assert all(delay * 0.9 <= wait < 0.9 for wait in waits), waits
 
     @pytest.mark.asyncio
     async def test_migrate_between_backends(self, source_database, target_database):

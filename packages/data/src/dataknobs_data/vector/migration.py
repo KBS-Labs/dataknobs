@@ -51,6 +51,7 @@ class MigrationConfig:
     retry_failed: bool = True
     max_retries: int = 3
     max_consecutive_failures: int = 5  # Fail fast after this many consecutive failures
+    retry_delay: float = 1.0  # Seconds between embedding attempts
 
     def validate(self) -> None:
         """Validate configuration parameters."""
@@ -58,6 +59,8 @@ class MigrationConfig:
             raise ValueError(f"Batch size must be positive, got {self.batch_size}")
         if self.max_workers <= 0:
             raise ValueError(f"Max workers must be positive, got {self.max_workers}")
+        if self.retry_delay < 0:
+            raise ValueError(f"Retry delay cannot be negative, got {self.retry_delay}")
 
 
 @dataclass
@@ -205,6 +208,7 @@ class VectorMigration:
             self.config = MigrationConfig(
                 batch_size=batch_size,
                 max_retries=max_retries,
+                retry_delay=retry_delay,
             )
         self.config.validate()
 
@@ -356,6 +360,7 @@ class VectorMigration:
             sync_config = SyncConfig(
                 batch_size=self.config.batch_size,
                 max_retries=self.config.max_retries,
+                retry_delay=self.config.retry_delay,
             )
 
             # Track the last embedding exception
@@ -893,11 +898,13 @@ class IncrementalVectorizer:
         logger.info(f"Worker {worker_id} started")
 
         while not self._shutdown_event.is_set():
-            # Get record from queue with timeout
-            try:
-                record = await asyncio.wait_for(self._queue.get(), timeout=1.0)
-            except TimeoutError:
-                continue
+            # Abandoning a `get` is safe: one cancelled before it finishes
+            # takes nothing off the queue, and one that has finished wins the
+            # race even when the shutdown is ready in the same step.
+            getting = asyncio.ensure_future(self._queue.get())
+            if not await self._until_shutdown(getting):
+                break
+            record = getting.result()
 
             try:
                 if await self._process_record(record):
