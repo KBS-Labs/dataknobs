@@ -263,7 +263,8 @@ def _carried_refusal_words(
       vouches for a link's text, not for its relation to the refusal under
       it: a marked error about something else, raised ``from`` a refusal,
       would replace the refusal's words beside a ``context`` still
-      describing the refusal;
+      describing the refusal. An empty recorded message names nothing --
+      every string contains it -- so it lets no link qualify;
     - **it is not a** :class:`NotFoundError`, which never carries a
       refusal, wherever on the chain it is;
     - **a registry did not raise it** (``raised_by_a_registry``, which the
@@ -290,6 +291,7 @@ def _carried_refusal_words(
                     not isinstance(link, NotFoundError)
                     and not raised_by_a_registry(link)
                     and _is_written_by_dataknobs(link)
+                    and message
                     and message in str(link)
                 ):
                     # The mark's snapshot holds a deep copy of this context

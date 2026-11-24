@@ -34,6 +34,8 @@ from dataknobs_common.exceptions import (
     ConfigFieldError,
     _is_written_by_dataknobs,
     _naming_refusals_as_dataknobs,
+    _value_free,
+    _value_free_words,
     _written_by_dataknobs,
 )
 from dataknobs_common.structured_config import StructuredConfig
@@ -255,6 +257,49 @@ class TestVouchedWordsAboveARefusalAreCarried:
 
         assert str(caught.value).startswith(
             "Failed to create plugin 'database': _Section does not accept 'pth'"
+        )
+
+    async def test_an_empty_refusal_message_vouches_for_no_link(self, lane: str) -> None:
+        """Every string contains the empty one, so an empty recorded message names nothing."""
+
+        def body() -> Any:
+            refusal = _value_free(ConfigFieldError("", context={"config_class": "_Section"}))
+            raise _written_by_dataknobs(ValueError("summary memory needs an llm")) from refusal
+
+        registry = _registry("sources", "database", body, lane=lane)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _build(lane, registry, "database")
+
+        assert "llm" not in str(caught.value)
+        assert str(caught.value) == "Failed to create plugin 'database': "
+
+    async def test_the_source_factorys_shape_over_an_amended_refusal_is_carried(
+        self, lane: str
+    ) -> None:
+        """The bots source factory's shape: its own words over a refusal a caller amended.
+
+        The refusal was amended with an origin nobody vouches for; the factory
+        repeats the words the refusal's mark recorded, not the amended text.
+        """
+
+        def body() -> Any:
+            try:
+                with naming_refusals(f"source at {DSN}", context={"dsn": DSN}):
+                    _refuse()
+            except ConfigFieldError as exc:
+                words = _value_free_words(exc)
+                assert words is not None
+                raise _written_by_dataknobs(ValueError(f"Source 'cases': {words[0]}")) from exc
+
+        registry = _registry("sources", "database", body, lane=lane)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _build(lane, registry, "database")
+
+        _assert_no_dsn(caught.value)
+        assert str(caught.value).startswith(
+            "Failed to create plugin 'database': Source 'cases': _Section does not accept 'pth'"
         )
 
     async def test_a_re_marked_refusal_is_carried_with_its_origin(self, lane: str) -> None:
