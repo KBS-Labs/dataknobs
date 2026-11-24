@@ -368,6 +368,10 @@ def bare_config(make_localstack_s3_bucket: Any, raw: Any) -> Iterator[dict[str, 
     bucket = f"dataknobs-bare-{uuid.uuid4().hex[:10]}"
     for base_cfg in make_localstack_s3_bucket(bucket):
         yield {**base_cfg, "prefix": ""}
+        # Emptied here rather than through the backend, so a test that failed
+        # because of where an object landed still cleans up after itself.
+        for obj in raw.list_objects_v2(Bucket=bucket).get("Contents", ()):
+            raw.delete_object(Bucket=bucket, Key=obj["Key"])
         raw.delete_bucket(Bucket=bucket)
 
 
@@ -381,6 +385,36 @@ async def test_async_listing_without_a_prefix_keeps_slashes(bare_config: dict[st
     finally:
         await db.clear()
         await db.close()
+
+
+@pytest.mark.parametrize("prefix", ["p", "p/", "", None], ids=["bare", "slash", "empty", "unset"])
+async def test_the_twins_read_each_others_records(
+    bare_config: dict[str, Any], raw: Any, prefix: str | None
+) -> None:
+    """One config is one key layout, whichever twin it builds."""
+    config = {k: v for k, v in bare_config.items() if k != "prefix"}
+    if prefix is not None:
+        config["prefix"] = prefix
+    sync = SyncS3Database(config)
+    sync.connect()
+    other = AsyncS3Database(config)
+    await other.connect()
+    try:
+        sync.create(Record({"n": 1}, id="a/from-sync"))
+        await other.create(Record({"n": 2}, id="b/from-async"))
+        both = ["a/from-sync", "b/from-async"]
+        assert sync.list_all() == both
+        assert await other.list_all() == both
+        assert (found := await other.read("a/from-sync")) is not None and found["n"] == 1
+        assert (found := sync.read("b/from-async")) is not None and found["n"] == 2
+        expected = {"p": "p/", "p/": "p/", "": "", None: "records/"}[prefix]
+        stored = raw.list_objects_v2(Bucket=config["bucket"])["Contents"]
+        assert [o["Key"] for o in stored] == [f"{expected}{i}.json" for i in both]
+    finally:
+        sync.clear()
+        await other.clear()
+        sync.close()
+        await other.close()
 
 
 # --- the pool bound -----------------------------------------------------------

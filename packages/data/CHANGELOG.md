@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: `SyncS3Database` and `AsyncS3Database` read `prefix` the same
+  way**, so one config is one key layout. Unset is `records/`, any other
+  value takes one trailing slash, and empty is the bucket root. A record `x`:
+
+  | `prefix` | sync before | async before | both now |
+  |---|---|---|---|
+  | unset | `records/x.json` | `x.json` | `records/x.json` |
+  | `"p"` | `p/x.json` | `p/x.json` | `p/x.json` |
+  | `"p/"` | `p/x.json` | `p//x.json` | `p/x.json` |
+  | `""` | `/x.json` | `x.json` | `x.json` |
+
+  Records at a key that changed read as absent, with no error. An async
+  database with no `prefix` keeps its location by setting `prefix: ""`. The
+  other two move their objects once: from `p//` to `p/` (`aws s3 mv
+  s3://bucket/p// s3://bucket/p/ --recursive`), or from `/` to the bucket root.
 - **BREAKING: an S3 read that fails raises.** `SyncS3Database.search` and
   `stream_read` logged and left out any record they could not fetch, decode or
   filter, and `AsyncS3Database.read`, `exists` and `delete` answered `None` or

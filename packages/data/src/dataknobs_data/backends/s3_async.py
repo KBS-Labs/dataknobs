@@ -98,6 +98,7 @@ class AsyncS3Database(
             aws_session_token=cfg.aws_session_token,
             endpoint_url=cfg.endpoint_url,
         )
+        self.prefix = cfg.prefix
         self._max_concurrency = cfg.max_pool_connections
         # Public, symmetric with ``SyncS3Database.region``: the resolved
         # region (``None`` when config relies on the boto default chain).
@@ -166,9 +167,7 @@ class AsyncS3Database(
 
     def _get_key(self, id: str) -> str:
         """Get the S3 key for a given record ID."""
-        if self._pool_config.prefix:
-            return f"{self._pool_config.prefix}/{id}.json"
-        return f"{id}.json"
+        return f"{self.prefix}{id}.json"
 
     def _client(self) -> Any:
         """A client context manager over the shared session, for one operation."""
@@ -180,24 +179,13 @@ class AsyncS3Database(
             config=AioConfig(max_pool_connections=self._max_concurrency),
         )
 
-    @property
-    def _key_prefix(self) -> str:
-        """What every key :meth:`_get_key` makes starts with.
-
-        With its separator: the bare prefix ``p`` also begins the keys of a
-        database at ``pq``.
-        """
-        return f"{self._pool_config.prefix}/" if self._pool_config.prefix else ""
-
     def _id_from_key(self, key: str) -> str:
         """The record id :meth:`_get_key` made ``key`` from."""
-        return key[len(self._key_prefix) : -len(".json")]
+        return key[len(self.prefix) : -len(".json")]
 
     async def _iter_keys(self, s3: Any, page_size: int | None = None) -> AsyncIterator[str]:
         """Every record's object key, in key order."""
-        params: dict[str, Any] = {"Bucket": self._pool_config.bucket}
-        if self._key_prefix:
-            params["Prefix"] = self._key_prefix
+        params: dict[str, Any] = {"Bucket": self._pool_config.bucket, "Prefix": self.prefix}
         if page_size is not None:
             params["MaxKeys"] = page_size
         async for page in s3.get_paginator("list_objects_v2").paginate(**params):
@@ -591,9 +579,7 @@ class AsyncS3Database(
             # List and delete all objects
             paginator = s3.get_paginator("list_objects_v2")
 
-            params = {"Bucket": self._pool_config.bucket}
-            if self._key_prefix:
-                params["Prefix"] = self._key_prefix
+            params = {"Bucket": self._pool_config.bucket, "Prefix": self.prefix}
 
             async for page in paginator.paginate(**params):
                 if "Contents" not in page:

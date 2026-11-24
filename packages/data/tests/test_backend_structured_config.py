@@ -770,10 +770,8 @@ class TestElasticsearchFactory:
 # ---------------------------------------------------------------------------
 #
 # Both S3 backends share ``S3DatabaseConfigBase`` (bucket + region/credential/
-# endpoint surface, alias mapping, and the non-empty-``bucket`` invariant).
-# ``prefix`` defaults differ (sync ``"records/"`` with trailing-slash
-# normalization; async ``""``), so it lives on the subclasses. Construction
-# only; no S3 service is contacted.
+# endpoint surface, prefix, alias mapping, and the non-empty-``bucket``
+# invariant). Construction only; no S3 service is contacted.
 
 
 class TestS3ConfigHierarchy:
@@ -814,13 +812,20 @@ class TestS3ConfigHierarchy:
         assert cfg.aws_secret_access_key == "SK"
         assert cfg.aws_session_token == "ST"
 
-    def test_sync_prefix_normalization(self) -> None:
-        assert SyncS3DatabaseConfig(bucket="b").prefix == "records/"
-        assert SyncS3DatabaseConfig(bucket="b", prefix="recs").prefix == "recs/"
-        assert SyncS3DatabaseConfig(bucket="b", prefix="recs/").prefix == "recs/"
-
-    def test_async_prefix_default_empty(self) -> None:
-        assert AsyncS3DatabaseConfig(bucket="b").prefix == ""
+    @pytest.mark.parametrize("config_cls", [SyncS3DatabaseConfig, AsyncS3DatabaseConfig])
+    @pytest.mark.parametrize(
+        ("written", "prefix"),
+        [
+            ({}, "records/"),
+            ({"prefix": "recs"}, "recs/"),
+            ({"prefix": "recs/"}, "recs/"),
+            ({"prefix": "a/b//"}, "a/b/"),
+            ({"prefix": ""}, ""),
+            ({"prefix": "/"}, ""),
+        ],
+    )
+    def test_one_prefix_rule_on_both_twins(self, config_cls, written, prefix) -> None:
+        assert config_cls(bucket="b", **written).prefix == prefix
 
     def test_sync_pool_retry_aliases_and_coercion(self) -> None:
         cfg = SyncS3DatabaseConfig.from_dict(
@@ -883,7 +888,8 @@ class TestS3ConstructionParity:
         )
         assert isinstance(db.config, AsyncS3DatabaseConfig)
         assert db._pool_config.bucket == "b"
-        assert db._pool_config.prefix == "p"
+        assert db._pool_config.prefix == "p/"
+        assert db.prefix == "p/"
         assert db._pool_config.region_name == "eu-1"
         assert db._pool_config.aws_access_key_id == "AK"
         assert db.region == "eu-1"

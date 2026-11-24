@@ -703,6 +703,9 @@ class S3DatabaseConfigBase(VectorBackendConfig):
 
     Attributes:
         bucket: S3 bucket name (required).
+        prefix: What every record's object key starts with, normalized to one
+            trailing slash (default ``"records/"``). Empty is the bucket root,
+            where the database covers every ``.json`` object in the bucket.
         region_name: AWS region (alias: ``region``).
         aws_access_key_id: AWS access key (alias: ``access_key_id``).
             Redacted from ``repr``.
@@ -717,6 +720,7 @@ class S3DatabaseConfigBase(VectorBackendConfig):
     """
 
     bucket: str | None = None
+    prefix: str = "records/"
     region_name: str | None = None
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
@@ -760,6 +764,8 @@ class S3DatabaseConfigBase(VectorBackendConfig):
         super().__post_init__()
         if not self.bucket:
             raise _written_by_dataknobs(ValueError("S3 backend requires 'bucket' in configuration"))
+        prefix = self.prefix.rstrip("/")
+        object.__setattr__(self, "prefix", f"{prefix}/" if prefix else "")
         # Coerced so YAML/env string values behave as they did when
         # ``AwsSessionConfig.from_dict`` applied ``int(...)``.
         object.__setattr__(self, "max_pool_connections", int(self.max_pool_connections))
@@ -777,12 +783,9 @@ class SyncS3DatabaseConfig(S3DatabaseConfigBase):
 
     Adds the sync-only client tuning knobs consumed by
     :class:`~dataknobs_common.aws.AwsSessionConfig` (``max_retries`` is
-    accepted as an alias for ``max_attempts``) plus the multipart thresholds. ``prefix`` defaults
-    to ``"records/"`` and is normalized to a single trailing slash, matching
-    the legacy backend.
+    accepted as an alias for ``max_attempts``) plus the multipart thresholds.
 
     Attributes:
-        prefix: Object key prefix (normalized to end with ``/``).
         multipart_threshold: Size threshold for multipart uploads.
         multipart_chunksize: Chunk size for multipart uploads.
         max_attempts: boto3 retry attempts (alias: ``max_retries``).
@@ -790,7 +793,6 @@ class SyncS3DatabaseConfig(S3DatabaseConfigBase):
         extra_client_kwargs: Extra kwargs forwarded to the boto3 client.
     """
 
-    prefix: str = "records/"
     multipart_threshold: int = 8 * 1024 * 1024
     multipart_chunksize: int = 8 * 1024 * 1024
     max_attempts: int = 3
@@ -812,26 +814,16 @@ class SyncS3DatabaseConfig(S3DatabaseConfigBase):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        # Normalize the prefix to a single trailing slash (legacy behavior).
-        object.__setattr__(self, "prefix", self.prefix.rstrip("/") + "/")
         object.__setattr__(self, "max_attempts", int(self.max_attempts))
 
 
 @dataclass(frozen=True)
 class AsyncS3DatabaseConfig(S3DatabaseConfigBase):
-    """Configuration for ``AsyncS3Database``.
+    """Configuration for ``AsyncS3Database`` (no extra fields).
 
-    Mirrors :class:`~dataknobs_data.pooling.s3.S3PoolConfig` (the pool
-    config is constructed directly from these fields in the backend's
-    ``_setup``). ``prefix`` defaults to ``""``; the backend joins keys as
-    ``"{prefix}/{id}.json"`` when a prefix is set and ``"{id}.json"`` when
-    it is empty (the default), matching the legacy async backend.
-
-    Attributes:
-        prefix: Object key prefix (empty by default).
+    The backend's ``_setup`` builds its
+    :class:`~dataknobs_data.pooling.s3.S3PoolConfig` from these.
     """
-
-    prefix: str = ""
 
 
 @dataclass(frozen=True)
