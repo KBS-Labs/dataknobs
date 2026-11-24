@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-11-24T00:20:19Z",
+  "timestamp": "2026-11-24T14:53:04Z",
   "overall_status": "PASS",
-  "run_mode": "pr",
+  "run_mode": "all",
   "environment": "host",
-  "packages": "bots common config data fsm legacy llm structures utils xization",
+  "packages": "all",
   "tested_packages": [
     "bots",
     "common",
@@ -31,7 +31,7 @@
     "_algorithm_version": 3
   },
   "workspace_hashes": {
-    "toolchain": "e4e793181787d743b9f37430b3b6bc729c29129ecf47131f3b62a08d6dd46b3d",
+    "toolchain": "daa5b0cb397ff727a00dccbacfe4798fe65360633157bc78bd86084cbce704fd",
     "toolchain_test": "112bc414a0e8fb4221c01856a4265c6d46739f2229f24f50a0936790b70aa114",
     "toolchain_lint": "8c87b12dc740b8c422b97477c27f60eb76ce759673674616c2f6152508f17437",
     "workspace_tests": "a7844171426387c3d5b779a495f3e170024e27bd753823cb34be9463e72d3288",
@@ -55,14 +55,14 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 3
+      "duration_seconds": 8
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 101
+      "duration_seconds": 98
     },
     "documentation": {
       "status": "pass",
@@ -76,7 +76,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-update-versions.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "documentation_mirrors": {
       "status": "pass",
@@ -89,8 +89,8 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 242,
-      "workspace_guards_seconds": 112
+      "duration_seconds": 240,
+      "workspace_guards_seconds": 111
     },
     "integration_tests": {
       "status": "pass",
