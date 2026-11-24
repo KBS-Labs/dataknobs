@@ -124,3 +124,70 @@ async def test_async_streaming_insert_fails_closed(
     assert (await async_pg.read("2")).get_value("v") == "old"
     assert (await async_pg.read("1")).get_value("v") == "src"
     assert (await async_pg.read("3")).get_value("v") == "src"
+
+
+# Naming the colliding id is a lookup over the whole batch. Asking once per
+# record made a failed batch cost one round trip per record before the one that
+# collided, so these put it last and count what was asked.
+
+_PRECEDING = 20
+
+
+class _CountingSyncPostgres(SyncPostgresDatabase):
+    """Counts the statements its reads run; every one still runs."""
+
+    reads = 0
+
+    def _rows(self, sql, params):
+        self.reads += 1
+        return super()._rows(sql, params)
+
+
+def _colliding_last() -> list[Record]:
+    """Records nothing has stored, one that mints its id, then the collision."""
+    fresh = [Record({"v": i}, id=f"new{i}") for i in range(_PRECEDING)]
+    return [Record({"v": "minted"}), *fresh, Record({"v": "src"}, id="dup")]
+
+
+@pytest.mark.parametrize("verb", ["create_batch", "_write_batch"])
+def test_sync_names_the_collision_in_one_lookup(make_postgres_test_db, verb: str) -> None:
+    for pg in make_postgres_test_db("test_create_batch_fc_count_"):
+        db = _CountingSyncPostgres(pg)
+        db.connect()
+        try:
+            db.create(Record({"v": "old"}, id="dup"))
+            db.reads = 0
+            with pytest.raises(DuplicateRecordError) as raised:
+                getattr(db, verb)(_colliding_last())
+            assert raised.value.id == "dup"
+            assert db.reads == 1
+        finally:
+            db.close()
+
+
+@pytest.mark.parametrize("verb", ["create_batch", "_write_batch"])
+async def test_async_names_the_collision_in_one_lookup(
+    async_pg: AsyncPostgresDatabase, verb: str
+) -> None:
+    await async_pg.create(Record({"v": "old"}, id="dup"))
+    batch = _colliding_last()
+
+    # asyncpg reports each statement a connection runs, so this counts what
+    # reached the server on whichever pooled connection ran it.
+    statements: list[str] = []
+
+    def _log(query) -> None:
+        statements.append(query.query)
+
+    pool = async_pg._require_pool()
+    held = [await pool.acquire() for _ in range(pool.get_max_size())]
+    for conn in held:
+        conn.add_query_logger(_log)
+    for conn in held:
+        await pool.release(conn)
+
+    with pytest.raises(DuplicateRecordError) as raised:
+        await getattr(async_pg, verb)(batch)
+    assert raised.value.id == "dup"
+    lookups = [s for s in statements if s.lstrip().upper().startswith("SELECT") and "pg_" not in s]
+    assert len(lookups) == 1, lookups
