@@ -42,7 +42,7 @@ def ensure_ollama_ready(ollama_connection_params: dict[str, Any]) -> None:
 def ollama_model(ollama_connection_params: dict[str, Any]) -> str:
     """Resolve an Ollama model that actually produces usable output.
 
-    Uses OLLAMA_MODEL (default ``llama3.1:8b``) as the preferred model, but goes
+    Uses OLLAMA_MODEL (default ``gemma3:1b``) as the preferred model, but goes
     beyond checking a model is merely *installed*: each candidate is canaried via
     :func:`~dataknobs_common.testing.is_ollama_model_usable` (a trivial
     generation) and the first that returns non-empty output is used. This makes
@@ -58,7 +58,7 @@ def ollama_model(ollama_connection_params: dict[str, Any]) -> str:
       silent skip (per the project's CI policy).
     - If no models are installed at all, it skips (nothing to test).
     """
-    preferred = os.environ.get("OLLAMA_MODEL", "llama3.1:8b")
+    preferred = os.environ.get("OLLAMA_MODEL", "gemma3:1b")
     host = ollama_connection_params["host"]
     port = ollama_connection_params["port"]
 
@@ -78,6 +78,9 @@ def ollama_model(ollama_connection_params: dict[str, Any]) -> str:
             candidates.append(name)
 
     if is_ollama_model_available(preferred, host, port):
+        if preferred in available:
+            # Before its family: another tag of it is a different model.
+            _add(preferred)
         base = preferred.split(":", maxsplit=1)[0]
         for model in available:
             if model in (preferred, base) or model.startswith(base + ":"):
@@ -97,7 +100,7 @@ def ollama_model(ollama_connection_params: dict[str, Any]) -> str:
         # Bounded canary: a slow reasoning model that returns empty (e.g.
         # qwen3-coder) is cut off at the timeout instead of stalling the run.
         if is_ollama_model_usable(model, host=host, port=port, num_predict=16, timeout=12.0):
-            if tried:
+            if model.removesuffix(":latest") != preferred.removesuffix(":latest"):
                 # A warning rather than a print, and not only because the print
                 # check reaches this directory now: stdout written during
                 # fixture setup is captured and replayed only for a test that
@@ -105,8 +108,8 @@ def ollama_model(ollama_connection_params: dict[str, Any]) -> str:
                 # everything then passes — was the one nobody saw. The warnings
                 # summary is printed at the end of every run.
                 warnings.warn(
-                    f"Ollama: preferred model unusable; recovered with "
-                    f"'{model}' (tried: {', '.join(tried)}).",
+                    f"Ollama: preferred model '{preferred}' is missing or unusable; "
+                    f"using '{model}' (tried: {', '.join(tried) or 'none'}).",
                     stacklevel=2,
                 )
             return model

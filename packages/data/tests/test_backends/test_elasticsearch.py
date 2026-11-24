@@ -1,8 +1,6 @@
 """Tests for Elasticsearch backend implementation."""
 
-import asyncio
 import os
-import time
 import uuid
 
 import pytest
@@ -165,9 +163,6 @@ class TestSyncElasticsearchDatabase:
         sync_db.create(Record({"name": "Charlie", "age": 35, "status": "inactive"}))
         sync_db.create(Record({"name": "David", "age": 28, "status": "active"}))
 
-        # Small delay for indexing (even with refresh=true)
-        time.sleep(0.5)
-
         # Test equality filter
         query = Query().filter("status", Operator.EQ, "active")
         results = sync_db.search(query)
@@ -207,9 +202,6 @@ class TestSyncElasticsearchDatabase:
         sync_db.create(Record({"name": "Bob", "age": 30}))
         sync_db.create(Record({"name": "Charlie", "age": 35}))
 
-        # Small delay for indexing
-        time.sleep(0.5)
-
         # Sort by age ascending
         query = Query().sort("age", SortOrder.ASC)
         results = sync_db.search(query)
@@ -233,9 +225,6 @@ class TestSyncElasticsearchDatabase:
         # Create test data
         for i in range(10):
             sync_db.create(Record({"index": i, "value": f"item_{i}"}))
-
-        # Small delay for indexing
-        time.sleep(0.5)
 
         # Test limit
         query = Query().limit(3)
@@ -262,9 +251,6 @@ class TestSyncElasticsearchDatabase:
         assert len(ids) == 5
         assert all(isinstance(id, str) for id in ids)
 
-        # Small delay for indexing
-        time.sleep(0.5)
-
         # Read batch
         retrieved = sync_db.read_batch(ids)
         assert len(retrieved) == 5
@@ -284,9 +270,6 @@ class TestSyncElasticsearchDatabase:
         for i in range(5):
             sync_db.create(Record({"index": i}))
 
-        # Small delay for indexing
-        time.sleep(0.5)
-
         # Test count all
         count = sync_db.count()
         assert count == 5
@@ -299,9 +282,6 @@ class TestSyncElasticsearchDatabase:
         # Test clear
         deleted_count = sync_db.clear()
         assert deleted_count == 5
-
-        # Small delay for deletion to propagate
-        time.sleep(0.5)
 
         # Verify cleared
         count = sync_db.count()
@@ -339,9 +319,6 @@ class TestSyncElasticsearchDatabase:
         sync_db.create(Record({"name": "Bob"}))  # No email
         sync_db.create(Record({"name": "Charlie", "email": "charlie@example.com", "phone": "123"}))
 
-        # Small delay for indexing
-        time.sleep(0.5)
-
         # Test EXISTS filter
         query = Query().filter("email", Operator.EXISTS)
         results = sync_db.search(query)
@@ -361,9 +338,6 @@ class TestSyncElasticsearchDatabase:
         sync_db.create(Record({"email": "alice@example.com"}))
         sync_db.create(Record({"email": "bob@test.org"}))
         sync_db.create(Record({"email": "charlie@example.org"}))
-
-        # Small delay for indexing
-        time.sleep(0.5)
 
         # Test regex filter
         query = Query().filter("email", Operator.REGEX, ".*@example\\.(com|org)")
@@ -410,11 +384,6 @@ class TestAsyncElasticsearchDatabase:
         await async_db.create(Record({"type": "async", "value": 1}))
         await async_db.create(Record({"type": "async", "value": 2}))
         await async_db.create(Record({"type": "sync", "value": 3}))
-
-        # Small delay for indexing. `await`, not `time.sleep`: the eight sync
-        # tests in this file sleep on their own thread, but this one is the only
-        # `async def` among them, so a synchronous sleep here stalls the loop.
-        await asyncio.sleep(0.5)
 
         # Search
         query = Query().filter("type", Operator.EQ, "async")

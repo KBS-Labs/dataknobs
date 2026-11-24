@@ -1,5 +1,7 @@
 """Tests for SchemaExtractor."""
 
+import json
+
 import pytest
 
 from dataknobs_llm.extraction import ExtractionResult, SchemaExtractor
@@ -312,9 +314,43 @@ class TestSchemaExtractor:
         )
 
         assert result.data == {"intent": "greeting"}
-        # Verify the prompt was built with context
+        # The model was sent both the user's text and the context
         last_call = echo_provider.get_last_call()
         assert last_call is not None
+        sent = "\n".join(message.content for message in last_call["messages"])
+        assert "Hello there" in sent
+        assert "welcome" in sent
+        assert "What does the user want?" in sent
+
+    @pytest.mark.asyncio
+    async def test_extract_keeps_the_types_the_model_returned(
+        self, extractor: SchemaExtractor, echo_provider: EchoProvider
+    ) -> None:
+        """Numbers, booleans, arrays and nested objects reach the caller as sent."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer"},
+                "price": {"type": "number"},
+                "active": {"type": "boolean"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "user": {"type": "object", "properties": {"name": {"type": "string"}}},
+            },
+        }
+        data = {
+            "count": 5,
+            "price": 19.99,
+            "active": True,
+            "tags": ["a", "b"],
+            "user": {"name": "John"},
+        }
+        echo_provider.set_responses([json.dumps(data)])
+
+        result = await extractor.extract(text="Order 5 items at $19.99", schema=schema)
+
+        assert result.data == data
+        # True == 1 and 5 == 5.0, so equality alone would pass either way.
+        assert {k: type(v) for k, v in result.data.items()} == {k: type(v) for k, v in data.items()}
 
     @pytest.mark.asyncio
     async def test_extract_with_model_override(
