@@ -527,6 +527,24 @@ def test_the_row_layout_is_unchanged() -> None:
     ]
 
 
+def test_a_row_says_how_long_its_check_took() -> None:
+    rows = _rendered(
+        {
+            "documentation": _entry(skipped=True, duration_seconds=None),
+            "validation": _entry(duration_seconds=98),
+            "unit_tests": _entry(skipped=False, duration_seconds=240),
+            "integration_tests": _entry("fail", skipped=False, duration_seconds=0),
+        }
+    )
+
+    assert rows == [
+        "  Documentation:      ⊘ SKIPPED",
+        "  Code Validation:    ✓ PASSED  (1m38s)",
+        "  Unit Tests:        ✓ PASSED  (4m00s)",
+        "  Integration Tests: ✗ FAILED  (0s)",
+    ]
+
+
 def test_the_documentation_rows_are_shown_only_where_they_could_have_run() -> None:
     """A dev run does not offer them, so it does not report on them."""
     checks = {"documentation": _entry(skipped=True), "shell_lint": _entry()}
@@ -644,4 +662,51 @@ def test_the_banner_derives_no_verdict_of_its_own() -> None:
         f"quality-summary.json: {derived}. The two derivations disagreed once "
         "already — three documentation checks printed as passing on every pull "
         "request that changed no documentation."
+    )
+
+
+# --------------------------------------------------------------------------
+# the coverage reader
+# --------------------------------------------------------------------------
+
+
+def _coverage(tmp_path: Path, document: str) -> float | None:
+    report = tmp_path / "coverage.xml"
+    report.write_text(document, encoding="utf-8")
+    percent: float | None = writer.coverage_percent(str(report))
+    return percent
+
+
+def test_the_line_coverage_is_read_from_the_report(tmp_path: Path) -> None:
+    """The gate recorded ``null`` for every run while this was an inline program."""
+    assert _coverage(tmp_path, '<coverage lines-valid="81953" line-rate="0.8513"/>') == 85.1
+
+
+def test_no_lines_covered_is_a_measurement(tmp_path: Path) -> None:
+    assert _coverage(tmp_path, '<coverage lines-valid="10" line-rate="0"/>') == 0.0
+
+
+def test_a_report_that_measured_nothing_is_not_zero_percent(tmp_path: Path) -> None:
+    """The stub the gate writes when no package was tested, copied from it."""
+    stub = re.search(r"echo '(<\?xml[^']*<coverage [^']*)'", GATE.read_text(encoding="utf-8"))
+    assert stub is not None, "the gate no longer writes a stub coverage report"
+    assert _coverage(tmp_path, stub[1]) is None
+
+
+def test_an_absent_report_is_no_measurement(tmp_path: Path) -> None:
+    assert writer.coverage_percent(str(tmp_path / "coverage.xml")) is None
+
+
+@pytest.mark.parametrize(
+    "document", ["<coverage", '<coverage lines-valid="3"/>', '<coverage lines-valid="x"/>']
+)
+def test_an_unreadable_report_is_an_error_and_not_an_absence(tmp_path: Path, document: str) -> None:
+    with pytest.raises(SystemExit, match=r"coverage\.xml is not a readable"):
+        _coverage(tmp_path, document)
+
+
+def test_the_gate_takes_its_coverage_from_this_reader() -> None:
+    source = GATE.read_text(encoding="utf-8")
+    assert re.search(
+        r'COVERAGE_PERCENT=\$\(uv run python "[^"]*quality-summary\.py" coverage', source
     )

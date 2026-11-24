@@ -33,6 +33,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR" || exit 1
 
+# How long each check took, as a reader would say it.
+source "$ROOT_DIR/bin/gate-progress.sh"
+
 # Colors (disabled when stdout is not a TTY)
 if [ -t 1 ]; then
     RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -74,7 +77,7 @@ run_doc_check() {
     shift 3
     [ "${1:-}" = "--" ] && shift
 
-    echo -e "${CYAN}Checking ${label}...${NC}"
+    echo -e "${CYAN}[$(date '+%H:%M:%S')] Checking ${label}...${NC}"
     local rc=0 start
     # Whole seconds: `date +%s` is the portable stamp. bash 3.2 has no
     # EPOCHREALTIME and macOS `date` has no %N, so sub-second resolution would
@@ -88,12 +91,13 @@ run_doc_check() {
 
     STATUS_NAMES+=("$name")
     STATUS_CODES+=("$rc")
-    STATUS_SECONDS+=("$(( $(date +%s) - start ))")
+    local seconds=$(( $(date +%s) - start ))
+    STATUS_SECONDS+=("$seconds")
     if [ "$rc" -eq 0 ]; then
-        echo -e "  ${GREEN}✓${NC} ${label} passed"
+        echo -e "  ${GREEN}✓${NC} ${label} passed ($(format_elapsed "$seconds"))"
     else
         OVERALL=1
-        echo -e "  ${RED}✗${NC} ${label} FAILED"
+        echo -e "  ${RED}✗${NC} ${label} FAILED ($(format_elapsed "$seconds"))"
         if [ -n "$ARTIFACTS_DIR" ]; then
             echo -e "    see ${CYAN}$ARTIFACTS_DIR/$log${NC}"
         fi

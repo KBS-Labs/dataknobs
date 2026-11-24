@@ -15,7 +15,7 @@ documentation checks on every run that did not perform them. The duration
 fields escaped only by the accident of defaulting to ``null``: the absence of a
 measurement rather than a passing one.
 
-Three commands, and the split is the fix:
+Four commands, and the split between the first three is the fix:
 
 ``record``
     Append one check's outcome, called from the site that ran it (or from the
@@ -33,6 +33,10 @@ Three commands, and the split is the fix:
     banner and the artifact cannot disagree about what happened. They did: a
     run that skipped code validation because no package changed printed
     ``Code Validation: ✓ PASSED`` beside a summary recording ``skipped: true``.
+
+``coverage``
+    Print the line coverage a coverage.py XML report holds, for ``build`` to
+    record, or ``null`` when the report measured nothing.
 
 Records are JSON Lines, one object per check, written to a file under the run's
 output directory. It is a file rather than an in-shell accumulation so that the
@@ -55,6 +59,7 @@ import json
 import os
 import sys
 from typing import Any
+from xml.etree import ElementTree
 
 #: The document's top-level fields, in the order they are written.
 #:
@@ -242,6 +247,39 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+# coverage
+# --------------------------------------------------------------------------
+
+
+def coverage_percent(path: str) -> float | None:
+    """The line coverage in a report, or ``None`` when it measured nothing.
+
+    A run that tested no package writes a stub with ``line-rate="0"`` and no
+    lines. That is the absence of a measurement, and reporting it as 0% would
+    raise CI's low-coverage warning about code nothing ran. A report that is
+    not there is the same absence; one that cannot be read is an error.
+    """
+    try:
+        root = ElementTree.parse(path).getroot()
+    except FileNotFoundError:
+        return None
+    except ElementTree.ParseError as exc:
+        raise SystemExit(f"{path} is not a readable coverage report: {exc}") from exc
+    try:
+        if int(root.attrib.get("lines-valid", "0")) == 0:
+            return None
+        return round(float(root.attrib["line-rate"]) * 100, 1)
+    except (KeyError, ValueError) as exc:
+        raise SystemExit(f"{path} is not a readable coverage report: {exc!r}") from exc
+
+
+def cmd_coverage(args: argparse.Namespace) -> int:
+    """Print the line coverage as JSON: a number, or ``null``."""
+    print(json.dumps(coverage_percent(args.xml)))
+    return 0
+
+
+# --------------------------------------------------------------------------
 # render
 # --------------------------------------------------------------------------
 
@@ -307,8 +345,31 @@ class Palette:
         return f"{self.red}✗ FAILED{self.off}"
 
 
-def _row(label: str, width: int, verdict: str) -> str:
-    return f"  {label:<{width}}{verdict}"
+def format_elapsed(seconds: int) -> str:
+    """Whole seconds as a reader would say them: ``42s``, ``7m26s``, ``1h02m05s``.
+
+    ``format_elapsed`` in ``bin/gate-progress.sh`` is the same function for the
+    lines the shell prints; ``tests/test_gate_progress.py`` compares the two.
+    """
+    minutes, rest = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{rest:02d}s"
+    if minutes:
+        return f"{minutes}m{rest:02d}s"
+    return f"{rest}s"
+
+
+def _row(label: str, width: int, verdict: str, *timed: Any) -> str:
+    """One banner row, with how long the entries in ``timed`` took together.
+
+    No time is shown for a check that has none: one that was skipped, or one
+    whose entry is not a shape the writer produces.
+    """
+    durations = [entry.get("duration_seconds") for entry in timed if isinstance(entry, dict)]
+    measured = [value for value in durations if type(value) is int]
+    elapsed = f"  ({format_elapsed(sum(measured))})" if measured else ""
+    return f"  {label:<{width}}{verdict}{elapsed}"
 
 
 def render(
@@ -336,7 +397,7 @@ def render(
         entry = checks.get(name)
         if entry is None or (pr_only and mode != "pr"):
             continue
-        lines.append(_row(label, width, palette.verdict(entry)))
+        lines.append(_row(label, width, palette.verdict(entry), entry))
 
     # Every check the gate recorded that has no row above and is not one of the
     # test entries grouped below. Shown rather than dropped: the banner is the
@@ -346,7 +407,7 @@ def render(
         if name in ROWS or name in TEST_CHECKS:
             continue
         label = f"{name.replace('_', ' ').capitalize()}:"
-        lines.append(_row(label, 20, palette.verdict(entry)))
+        lines.append(_row(label, 20, palette.verdict(entry), entry))
 
     unit = checks.get("unit_tests")
     integration = checks.get("integration_tests")
@@ -359,8 +420,10 @@ def render(
         # a non-mapping entry would raise before reaching it. Same disposition
         # as verdict() — reported, not raised, not dropped — with the rows going
         # out ungrouped, which is the most the document supports.
-        lines.append(_row("Unit Tests:", TEST_WIDTH, palette.verdict(unit)))
-        lines.append(_row("Integration Tests:", TEST_WIDTH, palette.verdict(integration)))
+        lines.append(_row("Unit Tests:", TEST_WIDTH, palette.verdict(unit), unit))
+        lines.append(
+            _row("Integration Tests:", TEST_WIDTH, palette.verdict(integration), integration)
+        )
         return lines
 
     if mode != "pr":
@@ -372,15 +435,17 @@ def render(
             combined["status"] = "fail"
         if not (unit.get("skipped") and integration.get("skipped")):
             combined["skipped"] = False
-        lines.append(_row("Tests:", TEST_WIDTH, palette.verdict(combined)))
+        lines.append(_row("Tests:", TEST_WIDTH, palette.verdict(combined), unit, integration))
     elif unit.get("skipped") and integration.get("skipped"):
-        lines.append(_row("Unit Tests:", TEST_WIDTH, palette.verdict(unit)))
-        lines.append(_row("Integration Tests:", TEST_WIDTH, palette.verdict(integration)))
+        lines.append(_row("Unit Tests:", TEST_WIDTH, palette.verdict(unit), unit))
+        lines.append(
+            _row("Integration Tests:", TEST_WIDTH, palette.verdict(integration), integration)
+        )
     elif package_tests_skipped:
         # No package suite ran, so "Unit Tests: PASSED" would be green for work
         # not done. The workspace guards did run, and their status is what the
         # unit entry carries here.
-        lines.append(_row("Workspace Guards:", TEST_WIDTH, palette.verdict(unit)))
+        lines.append(_row("Workspace Guards:", TEST_WIDTH, palette.verdict(unit), unit))
         lines.append(
             _row(
                 "Package Tests:",
@@ -389,8 +454,10 @@ def render(
             )
         )
     else:
-        lines.append(_row("Unit Tests:", TEST_WIDTH, palette.verdict(unit)))
-        lines.append(_row("Integration Tests:", TEST_WIDTH, palette.verdict(integration)))
+        lines.append(_row("Unit Tests:", TEST_WIDTH, palette.verdict(unit), unit))
+        lines.append(
+            _row("Integration Tests:", TEST_WIDTH, palette.verdict(integration), integration)
+        )
     return lines
 
 
@@ -464,6 +531,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="a top-level field whose value is parsed as JSON",
     )
     builder.set_defaults(run=cmd_build)
+
+    coverer = commands.add_parser("coverage", help="print a report's line coverage")
+    coverer.add_argument("--xml", required=True, help="a coverage.py XML report")
+    coverer.set_defaults(run=cmd_coverage)
 
     renderer = commands.add_parser("render", help="print the console status lines")
     renderer.add_argument("--summary", required=True)
