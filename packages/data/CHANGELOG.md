@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: `SyncS3Database` and `AsyncS3Database` read `prefix` the same
+  way**, so one config is one key layout. Unset is `records/`, any other
+  value takes one trailing slash, and empty is the bucket root. A record `x`:
+
+  | `prefix` | sync before | async before | both now |
+  |---|---|---|---|
+  | unset | `records/x.json` | `x.json` | `records/x.json` |
+  | `"p"` | `p/x.json` | `p/x.json` | `p/x.json` |
+  | `"p/"` | `p/x.json` | `p//x.json` | `p/x.json` |
+  | `""` | `/x.json` | `x.json` | `x.json` |
+
+  Records at a key that changed read as absent, with no error. An async
+  database with no `prefix` keeps its location by setting `prefix: ""`. The
+  other two move their objects once: from `p//` to `p/` (`aws s3 mv
+  s3://bucket/p// s3://bucket/p/ --recursive`), or from `/` to the bucket root.
+- **BREAKING: an S3 read that fails raises.** `SyncS3Database.search` and
+  `stream_read` logged and left out any record they could not fetch, decode or
+  filter, and `AsyncS3Database.read`, `exists` and `delete` answered `None` or
+  `False` for any error. All of them now raise it. A missing object is still
+  `None` or `False`, and on both twins an object deleted between the listing
+  and the fetch is absent from the result; the async twin raised `NoSuchKey`
+  for one.
+- **S3 `search` and `stream_read` fetch concurrently on both twins**, up to
+  `max_pool_connections` objects at once, and return records in key order
+  unless the query sorts. `max_pool_connections` (alias `max_workers`) is now
+  accepted by `AsyncS3Database` too, where it also sizes the client's
+  connection pool. A value below 1 is refused.
 - **Every aware timestamp the data package writes reads
   `dataknobs_common.clock`**, so `use_clock` fixes it in a test: the S3
   backends' `created_at` / `updated_at`, the in-process vector stores'
@@ -1704,6 +1731,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`AsyncS3Database` lists its own prefix and no other.** A database at
+  prefix `p` also listed, counted and searched the records of one at `pq`, and
+  its `clear()` deleted them.
+- **`AsyncS3Database.search` and `list_all` report the id a record was stored
+  under.** An id containing `.json` lost it, and with no prefix an id
+  containing `/` lost its slashes.
+- **`SyncS3Database.search` and `stream_read` return a record with no fields**,
+  which they left out.
 - **`VectorMigration(retry_delay=...)` is the delay `add_vectors_to_existing`
   waits** between embedding attempts. It was stored and never read, so every
   retry waited one second. `MigrationConfig` gains `retry_delay` (default

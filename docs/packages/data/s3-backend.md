@@ -52,6 +52,11 @@ db = SyncS3Database.from_config({
 })
 ```
 
+`prefix` means the same on `SyncS3Database` and `AsyncS3Database`: unset is
+`records/`, any other value takes one trailing slash, and `""` is the bucket
+root. At the root the database covers every `.json` object in the bucket, so
+`clear()` deletes all of them.
+
 ### With Environment Variables
 ```yaml
 # config.yaml

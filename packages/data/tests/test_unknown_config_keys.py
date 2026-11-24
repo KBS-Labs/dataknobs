@@ -229,6 +229,7 @@ ALIAS_MAPPINGS = [
     ("SyncS3DatabaseConfig", "max_workers", "max_pool_connections", 3, 3),
     ("SyncS3DatabaseConfig", "max_retries", "max_attempts", 7, 7),
     ("AsyncS3DatabaseConfig", "region", "region_name", "eu-west-1", "eu-west-1"),
+    ("AsyncS3DatabaseConfig", "max_workers", "max_pool_connections", 3, 3),
 ]
 
 #: Keys each class needs before it will construct at all.

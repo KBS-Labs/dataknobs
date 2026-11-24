@@ -188,6 +188,7 @@ module = [
     "psycopg2.*",
     "boto3.*",
     "aioboto3.*",
+    "aiobotocore.*",
     "elasticsearch.*",
     "moto.*",
     "testcontainers.*",
