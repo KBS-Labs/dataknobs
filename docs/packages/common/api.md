@@ -384,9 +384,11 @@ Any other exception passes through untouched.
 
 The origin is the caller's text, so it is never vouched for as dataknobs'
 own. Raised to a caller directly, the amended error reads as above. Behind a
-`PluginRegistry`, the refusal's own words arrive without the origin, bounded
-under the outer key, because an origin can hold what the caller tried — a
-connection URL included.
+`PluginRegistry` the origin never arrives, because it can hold what the caller
+tried — a connection URL included. A refusal `StructuredConfig` wrote arrives
+as its own words, bounded under the outer key
+(`Failed to create plugin '<key>': <refusal>`); any other refusal is named by
+its type alone (`Failed to create plugin '<key>' (ValidationError)`).
 
 **Example:**
 ```python

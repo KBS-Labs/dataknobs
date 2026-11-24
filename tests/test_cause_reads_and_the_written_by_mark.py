@@ -146,6 +146,21 @@ MARK_SITES: dict[tuple[str, str], int] = {
     ("dataknobs_bots/knowledge/sources/factory.py", "_create_database_source"): 3,
 }
 
+#: Every caller of ``_naming_refusals_as_dataknobs``, by file and enclosing
+#: function. The marking site above is one line inside the private core; the
+#: vouching *decision* is made here, by whoever chooses the origin text. A new
+#: caller is a claim that its origin and ``context`` name only what a config's
+#: author wrote -- never a value a factory, driver or service supplied -- and
+#: it needs reading before it joins this list.
+VOUCHING_NAMERS: dict[tuple[str, str], int] = {
+    # Origin: the grounded source's name, from the bot config.
+    ("dataknobs_bots/knowledge/sources/factory.py", "_create_database_source"): 1,
+    # Origin: the ontology's and the binding's ids, from the ontology document.
+    ("dataknobs_data/ontology/registry.py", "OntologyRegistry._bind_record_source"): 1,
+}
+VOUCHING_NAMER = "_naming_refusals_as_dataknobs"
+
+
 SETTER = "_written_by_dataknobs"
 ATTRIBUTE = "_WRITTEN_BY_DATAKNOBS"
 #: The two marks' attribute names on an instance, each owned by one module.
@@ -258,3 +273,22 @@ def test_neither_mark_is_set_by_a_route_the_census_cannot_see() -> None:
                     evasions.append(f"{where} reaches the mark attribute {node.attr!r} directly")
 
     assert evasions == []
+
+
+def test_only_the_reviewed_callers_name_refusals_as_dataknobs() -> None:
+    """A caller passing a factory-supplied origin would vouch for it past every registry."""
+    found: Counter[tuple[str, str]] = Counter()
+    for source in SOURCES:
+        for path in sorted(source.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            owners = _owners(tree)
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name | ast.Attribute)
+                    and (node.func.id if isinstance(node.func, ast.Name) else node.func.attr)
+                    == VOUCHING_NAMER
+                ):
+                    found[(_module_path(path), owners.get(node, "<module>"))] += 1
+
+    assert dict(found) == VOUCHING_NAMERS

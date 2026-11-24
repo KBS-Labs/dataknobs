@@ -161,6 +161,126 @@ class TestVouchedWordsAboveARefusalAreCarried:
         assert not isinstance(caught.value, PluginConfigError)
         assert str(caught.value) == "Failed to create plugin 'database' (NotFoundError)"
 
+    async def test_a_marked_error_not_naming_the_refusal_is_not_carried(self, lane: str) -> None:
+        """A mark vouches for text, not for its relation to the refusal under it.
+
+        Carrying it would replace the refusal's words with a message about
+        something else, beside a ``context`` still describing the refusal.
+        """
+
+        def body() -> Any:
+            try:
+                return _refuse()
+            except ConfigFieldError as exc:
+                raise _written_by_dataknobs(ValueError("summary memory needs an llm")) from exc
+
+        registry = _registry("sources", "database", body, lane=lane)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _build(lane, registry, "database")
+
+        assert str(caught.value).startswith(
+            "Failed to create plugin 'database': _Section does not accept 'pth'"
+        )
+        assert "llm" not in str(caught.value)
+
+    async def test_a_registrys_miss_raised_from_a_refusal_is_not_carried(self, lane: str) -> None:
+        """A registry's miss names a key the factory chose, which may be a URL."""
+        lookups: PluginRegistry[Any] = PluginRegistry("vr", not_found_exception=ValueError)
+
+        def body() -> Any:
+            try:
+                return _refuse()
+            except ConfigFieldError as exc:
+                try:
+                    lookups.create(key=DSN)
+                except ValueError as miss:
+                    raise miss from exc
+
+        registry = _registry("sources", "database", body, lane=lane)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _build(lane, registry, "database")
+
+        _assert_no_dsn(caught.value)
+        assert str(caught.value).startswith(
+            "Failed to create plugin 'database': _Section does not accept 'pth'"
+        )
+
+    async def test_a_not_found_error_below_the_top_is_not_carried(self, lane: str) -> None:
+        """ "A NotFoundError never carries a refusal", wherever on the chain it is."""
+        inner: PluginRegistry[Any] = PluginRegistry("gadgets")
+
+        def inner_factory(config: Any, **_: Any) -> Any:
+            try:
+                return _refuse()
+            except ConfigFieldError as exc:
+                raise NotFoundError("no table") from exc
+
+        inner.register("i", inner_factory)
+
+        def body() -> Any:
+            try:
+                return inner.create(key="i")
+            except NotFoundError as nf:
+                raise RuntimeError("wrapped") from nf
+
+        registry = _registry("sources", "database", body, lane=lane)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _build(lane, registry, "database")
+
+        assert "NotFoundError" not in str(caught.value)
+        assert str(caught.value).startswith(
+            "Failed to create plugin 'database': _Section does not accept 'pth'"
+        )
+
+    async def test_a_nested_registrys_carried_refusal_is_not_carried_in_its_place(
+        self, lane: str
+    ) -> None:
+        """The outer key names the failure; the inner registry's wording is not stacked on it."""
+        inner: PluginRegistry[Any] = PluginRegistry("gadgets")
+        inner.register("closed", lambda config, **_: _refuse())
+
+        def body() -> Any:
+            try:
+                return inner.create(key="closed")
+            except PluginConfigError as exc:
+                raise RuntimeError("wrapped") from exc
+
+        registry = _registry("sources", "database", body, lane=lane)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _build(lane, registry, "database")
+
+        assert str(caught.value).startswith(
+            "Failed to create plugin 'database': _Section does not accept 'pth'"
+        )
+
+    async def test_a_re_marked_refusal_is_carried_with_its_origin(self, lane: str) -> None:
+        """The refusal itself, named by dataknobs' own ``naming_refusals``, is its own link."""
+
+        def body() -> Any:
+            refusal: ConfigFieldError | None = None
+            try:
+                _refuse()
+            except ConfigFieldError as exc:
+                refusal = exc
+            assert refusal is not None
+            _written_by_dataknobs(refusal)
+            with _naming_refusals_as_dataknobs("source 'cases'", context={"source": "cases"}):
+                raise refusal
+
+        registry = _registry("sources", "database", body, lane=lane)
+
+        with pytest.raises(PluginConfigError) as caught:
+            await _build(lane, registry, "database")
+
+        assert str(caught.value).startswith(
+            "Failed to create plugin 'database': source 'cases': _Section does not accept"
+        )
+        assert caught.value.context["source"] == "cases"
+
 
 # ---------------------------------------------------------------------------
 # The public naming_refusals never vouches for its caller's origin
@@ -206,6 +326,23 @@ class TestAConsumersOriginIsNotVouchedFor:
 
         assert str(caught.value).startswith("source 'cases': Failed to create plugin 'closed'")
         assert caught.value.context["registry"] == "gadgets"
+
+
+@pytest.mark.parametrize("lane", LANES)
+async def test_a_consumers_origin_on_another_refusal_leaves_only_its_type(lane: str) -> None:
+    """Only a ``StructuredConfig`` refusal's words are carried; another is named by type."""
+
+    def body() -> Any:
+        with naming_refusals(f"source at {DSN}", context={"dsn": DSN}):
+            raise _written_by_dataknobs(ValidationError("unknown field type 'money'"))
+
+    registry = _registry("widgets", "composite", body, lane=lane)
+
+    with pytest.raises(OperationError) as caught:
+        await _build(lane, registry, "composite")
+
+    _assert_no_dsn(caught.value)
+    assert str(caught.value) == "Failed to create plugin 'composite' (ValidationError)"
 
 
 @pytest.mark.parametrize("lane", ["create", "create_async"])

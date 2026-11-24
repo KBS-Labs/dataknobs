@@ -317,10 +317,13 @@ logs. The origin is the factory's text, and it can hold the connection URL the
 factory tried, so `naming_refusals` never vouches for it.
 
 The one exception is text dataknobs itself wrote above the refusal. An
-in-tree factory that names the refusal it re-raises, in an error dataknobs
-marks as its own and raises `from` the refusal, has that error's words
-carried instead, with its `context` merged over the refusal's. That is how a
-bot's grounded `database` source reports which source refused a backend key:
+in-tree factory that names the refusal it re-raises — an error dataknobs
+marks as its own, raised `from` the refusal and repeating its words — has
+that error's words carried instead, with its `context` merged over the
+refusal's. A marked error that does not repeat the refusal's words, a
+`NotFoundError`, and an error a registry raised are never carried this way.
+That is how a bot's grounded `database` source reports which source refused a
+backend key:
 
 ```text
 PluginConfigError: Failed to create plugin 'database': Source 'cases':

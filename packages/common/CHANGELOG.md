@@ -595,12 +595,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lane. It is both a `NotFoundError`, which a registry raises for a key it
   cannot create, and a `ValueError`, which the helpers in front of
   registries promise for a configuration problem, so an `except` of either
-  kind keeps catching it. `get` raises it even on a registry with a
-  `default_factory`, rather than building the default in place of the plugin
-  it was named; an unknown key still gets the default. On `create`, a
-  registry with its own `not_found_exception` keeps raising that type. The
-  metadata `declare_unavailable` attaches is the plugin's: a later
-  `register` with no metadata keeps it.
+  kind keeps catching it. On `create`, a registry with its own
+  `not_found_exception` keeps raising that type. The metadata
+  `declare_unavailable` attaches is the plugin's: a later `register` with no
+  metadata keeps it.
 
 - **`surfaced_cause`, `create_surfacing` and `create_surfacing_async`: the one
   answer to "may a caller see this factory's error?".** A `PluginRegistry`
@@ -877,8 +875,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own, so its type and attributes survive and an existing handler for a
   subclass still catches it. Any other exception passes through. The origin
   is the caller's text and can hold what the caller tried, so it is never
-  vouched for as dataknobs' own: behind a `PluginRegistry` the refusal's own
-  words arrive without it, bounded under the outer key.
+  vouched for as dataknobs' own: behind a `PluginRegistry` it never arrives.
+  A refusal `StructuredConfig` wrote arrives as its own words, bounded under
+  the outer key; any other refusal is named by its type alone.
 
 - **An entity's aliases can be indexed in its own row.** `aliases` joins
   `TEXT_FIELDS`, so `EntitySourceIndexSource(onto, fields=("name",
@@ -2460,6 +2459,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than going quiet.
 
 ### Changed
+
+- **`PluginRegistry.get` and `get_async` refuse a key declared unavailable,
+  even with a `default_factory`.** They reported such a key as `"Plugin
+  '<key>' not registered and no default available"`, and on a registry with
+  a `default_factory` built the default in its place -- a different plugin
+  from the one named, while `create` refused it. They now raise
+  `PluginUnavailableError` with the declared reason, as `create` does, before
+  the default is tried. It is a `NotFoundError`, so an existing `except
+  NotFoundError` keeps catching it; a caller that relied on the default
+  standing in for an unavailable key now gets the refusal. An unknown key
+  still gets the default, and its message is unchanged.
 
 - **`sanitize_for_json` and `validate_json_safe` take only their documented
   parameters.** `sanitize_for_json` also accepted `_path` and `_dropped`,

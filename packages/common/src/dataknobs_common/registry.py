@@ -123,6 +123,11 @@ _Raised = TypeVar("_Raised", bound=BaseException)
 _RAISED_BY_A_REGISTRY = "_dataknobs_raised_by_a_registry"
 
 
+def _raised_by_a_registry(exc: BaseException) -> bool:
+    """Whether a registry raised ``exc`` -- the boolean mark :func:`_ours` sets."""
+    return bool(getattr(exc, _RAISED_BY_A_REGISTRY, False))
+
+
 def _ours(exc: _Raised) -> _Raised:
     """Mark ``exc`` as raised by a registry in this module, and return it.
 
@@ -2321,11 +2326,15 @@ class PluginRegistry(Generic[T]):
         recorded them, so a factory that amended the refusal before raising
         it (with :func:`~dataknobs_common.exceptions.naming_refusals`, say)
         adds none of its own text -- unless dataknobs wrote what was added:
-        an error marked as dataknobs' own text, raised ``from`` the refusal
-        and still saying what it said when marked, is carried in its place,
-        its ``context`` merged over the refusal's. That is how a source
-        factory's "Source 'cases': <the refusal's words>" reaches the
-        caller with the source's name in it. The outermost such error wins.
+        an error marked as dataknobs' own text, raised ``from`` the refusal,
+        still saying what it said when marked, and repeating the refusal's
+        words, is carried in its place, its ``context`` merged over the
+        refusal's. That is how a source factory's "Source 'cases': <the
+        refusal's words>" reaches the caller with the source's name in it.
+        The outermost such error wins. A ``NotFoundError`` and an error a
+        registry raised never qualify: a registry's error names a key its
+        caller chose, and is shown by a plain ``create`` or ``get`` no more
+        when a refusal sits beneath it than when none does.
 
         A ``NotFoundError`` never carries a refusal: one raised ``from`` a
         refusal stays a bounded ``NotFoundError``, so a caller catching that
@@ -2354,7 +2363,7 @@ class PluginRegistry(Generic[T]):
         ):
             raise exc
         if not isinstance(exc, NotFoundError):
-            words = _carried_refusal_words(exc)
+            words = _carried_refusal_words(exc, raised_by_a_registry=_raised_by_a_registry)
             if words is not None:
                 message, context = words
                 raise _ours(

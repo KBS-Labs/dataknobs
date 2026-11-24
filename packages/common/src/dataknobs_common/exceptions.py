@@ -54,7 +54,7 @@ Package-Specific Extensions:
 """
 
 import copy
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from enum import StrEnum
 from typing import Any, Dict, TypeVar
@@ -235,7 +235,11 @@ def _value_free_words(exc: BaseException) -> tuple[str, dict[str, Any]] | None:
     return message, copy.deepcopy(context)
 
 
-def _carried_refusal_words(exc: BaseException) -> tuple[str, dict[str, Any]] | None:
+def _carried_refusal_words(
+    exc: BaseException,
+    *,
+    raised_by_a_registry: Callable[[BaseException], bool],
+) -> tuple[str, dict[str, Any]] | None:
     """What a registry may carry of the value-free refusal ``exc`` is, or was raised ``from``.
 
     Follows ``__cause__`` only. A ``raise ... from refusal`` is the raiser
@@ -243,35 +247,58 @@ def _carried_refusal_words(exc: BaseException) -> tuple[str, dict[str, Any]] | N
     accurate. ``__context__`` says only that an error was raised while one
     was being handled, and following it would report a refusal the raiser
     caught and recovered from. A ``__cause__`` cycle ends the walk.
+    ``None`` when no refusal is on the chain.
 
-    **The words are the outermost vouched link's, at or above the refusal,
+    **The words are those of the outermost link that names the refusal,
     else the refusal's own as marked.** A factory that names the refusal it
-    re-raises -- ``"Source 'cases': <the refusal's words>"`` -- in an error
-    marked as text dataknobs wrote (:func:`_is_written_by_dataknobs`) has
-    said more than the refusal could, and the mark vouches that what it said
-    names no value. Its message is carried, with its ``context`` merged over
-    the refusal's. A link amended since it was marked fails the mark, so the
-    walk goes on past it; with no vouched link the refusal's words are the
-    ones its mark recorded, never the instance's current text, so nobody
-    else's text comes along. ``None`` when no refusal is on the chain.
+    re-raises -- ``"Source 'cases': <the refusal's words>"`` -- has said
+    more than the refusal could, and it may be carried in the refusal's
+    place, its ``context`` merged over the refusal's. A link qualifies only
+    when all of these hold, each closing a way a mark alone would mislead:
+
+    - **it is marked as text dataknobs wrote and still says what it said
+      when marked** (:func:`_is_written_by_dataknobs`), so an amended link
+      fails and the walk goes on past it;
+    - **its message contains the refusal's recorded words.** The mark
+      vouches for a link's text, not for its relation to the refusal under
+      it: a marked error about something else, raised ``from`` a refusal,
+      would replace the refusal's words beside a ``context`` still
+      describing the refusal;
+    - **it is not a** :class:`NotFoundError`, which never carries a
+      refusal, wherever on the chain it is;
+    - **a registry did not raise it** (``raised_by_a_registry``, which the
+      registry module supplies, since the mark is its own). A registry's
+      error names a key its caller chose -- a lookup of a connection URL
+      that missed, say -- and a nested registry's carried refusal would
+      stack its own wording on the outer one's. Neither is reached by a
+      plain ``create`` or ``get`` without a refusal beneath it, and a
+      refusal beneath it must not change that.
+
+    With no such link the refusal's words are the ones its mark recorded,
+    never the instance's current text, so nobody else's text comes along.
     """
     seen: set[int] = set()
-    vouched: BaseException | None = None
+    above: list[BaseException] = []
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
-        if vouched is None and _is_written_by_dataknobs(current):
-            vouched = current
+        above.append(current)
         words = _value_free_words(current)
         if words is not None:
-            if vouched is None:
-                return words
-            context = words[1]
-            # The mark's snapshot holds a deep copy of this context and just
-            # compared equal to it, so it can be copied here too.
-            link_context = getattr(vouched, "context", None)
-            if isinstance(link_context, Mapping):
-                context = {**context, **copy.deepcopy(dict(link_context))}
-            return str(vouched), context
+            message, context = words
+            for link in above:
+                if (
+                    not isinstance(link, NotFoundError)
+                    and not raised_by_a_registry(link)
+                    and _is_written_by_dataknobs(link)
+                    and message in str(link)
+                ):
+                    # The mark's snapshot holds a deep copy of this context
+                    # and just compared equal to it, so it can be copied too.
+                    link_context = getattr(link, "context", None)
+                    if isinstance(link_context, Mapping):
+                        context = {**context, **copy.deepcopy(dict(link_context))}
+                    return str(link), context
+            return words
         seen.add(id(current))
         current = current.__cause__
     return None
@@ -915,11 +942,12 @@ def naming_refusals(origin: str, *, context: Mapping[str, Any] | None = None) ->
     **The origin is never vouched for.** It is the caller's text, and it can
     hold what the caller tried -- a connection URL included. So an amended
     refusal is no longer marked as text dataknobs wrote, even one that was
-    when it arrived: behind a
-    :class:`~dataknobs_common.registry.PluginRegistry` the refusal's own
-    words arrive without the origin, bounded under the outer key, and a
-    helper in front of one names it by its type. Raised to a caller with no
-    registry in between, the amended error is shown as it is.
+    when it arrived. Behind a
+    :class:`~dataknobs_common.registry.PluginRegistry` the origin never
+    arrives: a refusal ``StructuredConfig`` wrote arrives as its own words,
+    as they were when it was raised, bounded under the outer key; any other
+    refusal is named by its type alone. Raised to a caller with no registry
+    in between, the amended error is shown as it is.
 
     Args:
         origin: Where the configuration came from, as its reader would name
@@ -948,8 +976,9 @@ def _naming_refusals_as_dataknobs(
     again once amended, so a helper in front of a registry still shows it, now
     naming its origin. Only for an in-tree caller whose ``origin`` and
     ``context`` name what a config's author wrote -- a source, an ontology
-    binding -- and nothing a factory or service supplied: it is a marking site,
-    and the source-scan census lists its callers' reason by listing it. An
+    binding -- and nothing a factory or service supplied. Each caller is a
+    vouching decision, so a source-scan test lists them by file and function,
+    with what their origin names; a new one fails it until it is read. An
     unmarked refusal stays unmarked.
     """
     with _naming_refusals(origin, context=context, vouch=True):
