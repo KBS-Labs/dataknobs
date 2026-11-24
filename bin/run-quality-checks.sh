@@ -50,6 +50,9 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # decision anyone makes from these numbers.
 RUN_START=$(date +%s)
 
+# The pool the unit suites run through and the clock on the status lines.
+source "$PROJECT_ROOT/bin/gate-progress.sh"
+
 # Default values
 PACKAGES=""
 SKIP_STYLE="no"
@@ -176,21 +179,22 @@ EOF
     exit 0
 }
 
-# Function to print status
+# The status lines. Each is stamped with the time of day and the time since the
+# run started, so a stage that is slow -- or stuck -- can be seen while it runs.
 print_status() {
-    echo -e "${BLUE}▶${NC} $1"
+    echo -e "${CYAN}$(progress_stamp "$RUN_START")${NC} ${BLUE}▶${NC} $1"
 }
 
 print_success() {
-    echo -e "${GREEN}✓${NC} $1"
+    echo -e "${CYAN}$(progress_stamp "$RUN_START")${NC} ${GREEN}✓${NC} $1"
 }
 
 print_error() {
-    echo -e "${RED}✗${NC} $1"
+    echo -e "${CYAN}$(progress_stamp "$RUN_START")${NC} ${RED}✗${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}⚠${NC} $1"
+    echo -e "${CYAN}$(progress_stamp "$RUN_START")${NC} ${YELLOW}⚠${NC} $1"
 }
 
 # Parse command line arguments
@@ -1223,10 +1227,12 @@ if [ "$SKIP_TESTS" != "yes" ]; then
 
         # Helper: run unit tests for a single package, saving artifacts.
         # Uses per-package coverage filenames to avoid race conditions in concurrent mode.
-        # Args: $1=package name, $2=cov_report_type (optional override)
+        # Args: $1=package name. UNIT_COV_REPORT is the coverage report type.
         run_unit_for_pkg() {
             local pkg=$1
-            local cov_report="${2:-$TEST_COV_REPORT}"
+            local cov_report="$UNIT_COV_REPORT"
+            local suite_start
+            suite_start=$(date +%s)
             print_status "Running unit tests for $pkg..."
             local test_exit=0
 
@@ -1257,11 +1263,11 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             unset COVERAGE_FILE
 
             if [ $test_exit -ne 0 ] && [ $test_exit -ne 5 ]; then
-                print_error "Unit tests failed for $pkg"
+                print_error "Unit tests failed for $pkg ($(format_elapsed "$(elapsed_since "$suite_start")"))"
                 report_failed_suite "$OUTPUT_DIR/unit-test-output-$pkg.txt" "$FAILED_SUITES_FILE"
                 return $test_exit
             else
-                print_success "Unit tests passed for $pkg"
+                print_success "Unit tests passed for $pkg ($(format_elapsed "$(elapsed_since "$suite_start")"))"
                 return 0
             fi
         }
@@ -1304,6 +1310,7 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         _unit_start=$(date +%s)
         if [ "$RUN_MODE" = "full" ]; then
             # Full mode: sequential execution
+            UNIT_COV_REPORT="$TEST_COV_REPORT"
             for pkg in $PACKAGES_TO_TEST; do
                 if [ -d "packages/$pkg" ]; then
                     run_unit_for_pkg "$pkg" || UNIT_TEST_STATUS=$?
@@ -1316,32 +1323,22 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             # from combined .coverage data in the coverage combining phase.
             # Limit concurrency to avoid CPU contention breaking timing-sensitive tests.
             MAX_CONCURRENT=3
-            unit_pids=()
-            unit_pkgs=()
-            for pkg in $PACKAGES_TO_TEST; do
-                if [ -d "packages/$pkg" ]; then
-                    run_unit_for_pkg "$pkg" "none" &
-                    unit_pids+=($!)
-                    unit_pkgs+=("$pkg")
-
-                    # Throttle: when we hit MAX_CONCURRENT, wait for one to finish
-                    if [ ${#unit_pids[@]} -ge $MAX_CONCURRENT ]; then
-                        # Wait for the oldest job
-                        wait "${unit_pids[0]}" 2>/dev/null || {
-                            UNIT_TEST_STATUS=1
-                        }
-                        unit_pids=("${unit_pids[@]:1}")
-                        unit_pkgs=("${unit_pkgs[@]:1}")
-                    fi
-                fi
-            done
-
-            # Wait for remaining jobs
-            for idx in "${!unit_pids[@]}"; do
-                wait "${unit_pids[$idx]}" 2>/dev/null || {
-                    UNIT_TEST_STATUS=1
-                }
-            done
+            UNIT_COV_REPORT="none"
+            # Largest first, so the longest suite is not left to run alone at
+            # the end. An order only: PACKAGES_TO_TEST stays as it was for the
+            # integration loop and the recorded tested_packages.
+            #
+            # Counted, because an order that came back short would skip suites
+            # and still report success.
+            # Deliberate word splitting — a space-separated set of package names.
+            # shellcheck disable=SC2086
+            UNIT_ORDER=$(largest_suite_first "$PROJECT_ROOT" $PACKAGES_TO_TEST)
+            if [ "$(echo "$UNIT_ORDER" | wc -w)" -ne "$(echo "$PACKAGES_TO_TEST" | wc -w)" ]; then
+                print_error "Could not order the unit suites: '$PACKAGES_TO_TEST' became '$UNIT_ORDER'"
+                exit 1
+            fi
+            # shellcheck disable=SC2086  # the same list, one name per line
+            run_pool "$MAX_CONCURRENT" run_unit_for_pkg $UNIT_ORDER || UNIT_TEST_STATUS=1
         fi
 
         # Workspace guards (see the note by TEST_CMD above). Folded into the
@@ -1369,10 +1366,10 @@ if [ "$SKIP_TESTS" != "yes" ]; then
 
             if [ $workspace_exit -ne 0 ] && [ $workspace_exit -ne 5 ]; then
                 UNIT_TEST_STATUS=$workspace_exit
-                print_error "Workspace tests failed"
+                print_error "Workspace tests failed ($(format_elapsed "$(elapsed_since "$_guards_start")"))"
                 report_failed_suite "$OUTPUT_DIR/unit-test-output-workspace.txt" "$FAILED_SUITES_FILE"
             else
-                print_success "Workspace tests passed"
+                print_success "Workspace tests passed ($(format_elapsed "$(elapsed_since "$_guards_start")"))"
             fi
             WORKSPACE_GUARD_SECONDS=$(elapsed_since "$_guards_start")
         }
@@ -1393,6 +1390,7 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             if [ -d "packages/$pkg" ] && [ -d "packages/$pkg/tests/integration" ]; then
                 print_status "Running integration tests for $pkg..."
                 local_exit=0
+                _suite_start=$(date +%s)
 
                 # Use per-package coverage file
                 export COVERAGE_FILE="$PROJECT_ROOT/.coverage.integration.$pkg"
@@ -1411,10 +1409,10 @@ if [ "$SKIP_TESTS" != "yes" ]; then
 
                 if [ $local_exit -ne 0 ] && [ $local_exit -ne 5 ]; then
                     INTEGRATION_TEST_STATUS=$local_exit
-                    print_error "Integration tests failed for $pkg"
+                    print_error "Integration tests failed for $pkg ($(format_elapsed "$(elapsed_since "$_suite_start")"))"
                     report_failed_suite "$OUTPUT_DIR/integration-test-output-$pkg.txt" "$FAILED_SUITES_FILE"
                 else
-                    print_success "Integration tests passed for $pkg"
+                    print_success "Integration tests passed for $pkg ($(format_elapsed "$(elapsed_since "$_suite_start")"))"
                 fi
 
                 if [ -f "coverage.xml" ]; then
@@ -1694,17 +1692,15 @@ fi
 # generated file that changed on nearly every run, and the single thing the
 # gate ever took from it was this number — which it reports as a warning and
 # never fails on. A float belongs in the summary; the report belongs on disk.
-COVERAGE_PERCENT=$(uv run python -c "
-import xml.etree.ElementTree as ET
-try:
-root = ET.parse('$OUTPUT_DIR/coverage.xml').getroot()
-print(f\"{float(root.attrib.get('line-rate', 0)) * 100:.1f}\")
-except Exception:
-print('null')
-" 2>/dev/null || echo "null")
-# A blank would emit invalid JSON, which would fail the gate for a reason
-# that has nothing to do with the code under test.
-COVERAGE_PERCENT=${COVERAGE_PERCENT:-null}
+#
+# Not an inline program, and nothing hides its stderr: that was one, it stopped
+# parsing, and a swallowed IndentationError read as "no coverage recorded".
+# It prints null itself when the report holds no measurement.
+if ! COVERAGE_PERCENT=$(uv run python "$SCRIPT_DIR/quality-summary.py" coverage \
+    --xml "$OUTPUT_DIR/coverage.xml"); then
+    print_error "Could not read the coverage report — see the error above"
+    exit 1
+fi
 
 # Generate quality summary and signature immediately after coverage.xml is ready.
 # These are the files CI validates and that must be committed — they must not be
@@ -1939,6 +1935,7 @@ uv run python "$SCRIPT_DIR/quality-summary.py" render \
     --summary "$OUTPUT_DIR/quality-summary.json" \
     --mode "$([ "$PR_MODE" = "yes" ] && echo pr || echo dev)" $_render_args
 echo ""
+echo -e "  Total:              $(format_elapsed "$(elapsed_since "$RUN_START")") (finished $(date '+%H:%M:%S'))"
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 
 # Determine overall status (same helper as the quality-summary.json computation,
