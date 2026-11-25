@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: an Elasticsearch filter or sort reaches a field by how the index
+  maps it**, on both twins, instead of by guessing.
+
+  | Query | Before | Now |
+  |---|---|---|
+  | sort on a number field | sync raised unless its name was on a list | sorts |
+  | sort on a text field | async raised | sorts |
+  | sort on a field no record has | raised | the value is missing from each |
+  | range with a string bound on a text field | compared lowercased words | compares the value |
+  | string equality or pattern on a field mapped `keyword` | matched nothing | matches |
+  | string equality on a field mapped `date` or `ip` | matched nothing | compares the value; raises for a string that is not one |
+  | number equality on a text field | matched any word | matches the whole value |
+
+  The first query naming a field asks the index about it, one request per query
+  until the field is known. The functions in `backends.elasticsearch_query` that
+  build a clause take a `FieldTypes`.
+- **BREAKING: an index the Elasticsearch backends create maps strings the same
+  way whatever it first holds.** A data string is `text` with a `keyword`
+  sub-field of up to 8191 characters, where it was 256, and `date_detection` is
+  off, so an ISO date string is no longer mapped as a date and a later string
+  that is not one is no longer refused. A `datetime` bound compares as ISO 8601
+  text. Map a field as `date` in `mappings` to compare it as time. An existing
+  index keeps its mapping: reindex to change it.
+- **BREAKING: an Elasticsearch `mappings` config is laid over the declared
+  mapping** rather than replacing it, so naming one field keeps the rest. The
+  async backend takes `mappings` and `settings` too; it refused both.
 - **BREAKING: an Elasticsearch request that fails raises.** Only a missing
   record is `None` or `False`; a rejected query, a closed, blocked or missing
   index, and an unreachable server raise the client's own error, the same one

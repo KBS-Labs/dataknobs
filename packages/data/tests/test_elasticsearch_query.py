@@ -11,9 +11,9 @@ Contract pinned here:
 * ``Filter("id", …)`` targets the top-level ``id`` keyword (a full query
   target: term/terms/range/prefix/wildcard/regexp/exists), never ``_id`` or
   ``data.id``.
-* Other string fields use the ``.keyword`` sub-field wherever matching is
-  against the full un-analyzed value (equality, membership, wildcard, prefix,
-  regex); numeric range/exists use the analyzed ``data.<field>`` path.
+* A field mapped as analyzed text is matched through its keyword sub-field by
+  every operator but existence; any other field is matched directly. Which it is
+  comes from the index mapping, as :class:`FieldTypes` has learned it.
 * ``LIKE``/``NOT_LIKE`` translate SQL wildcards (``%``→``*``, ``_``→``?``),
   escape literal Lucene metacharacters (``*``/``?``/backslash), and match
   case-insensitively, matching the in-memory and SQL backends.
@@ -31,40 +31,75 @@ from typing import Any
 
 import pytest
 
-from dataknobs_data import Filter, Operator
+from dataknobs_data import Filter, Operator, Query
 from dataknobs_data.backends.elasticsearch_query import (
+    FieldTypes,
     _field_path,
     _sql_wildcard_to_es,
     build_bool_query,
     build_complex_es_query,
     build_filter_es_query,
+    build_query,
+    build_sort,
+    query_fields,
 )
-from dataknobs_data.query_logic import FilterCondition, LogicCondition, LogicOperator
+from dataknobs_data.query import SortOrder, SortSpec
+from dataknobs_data.query_logic import (
+    ComplexQuery,
+    FilterCondition,
+    LogicCondition,
+    LogicOperator,
+)
+
+
+def _learned(**mapped: str) -> FieldTypes:
+    """What a field-capabilities response over ``mapped`` teaches.
+
+    ``text`` is what dynamic mapping makes of a string: with a ``.keyword``.
+    """
+    capabilities: dict[str, dict[str, Any]] = {"data": {"object": {}}}
+    for name, kind in mapped.items():
+        capabilities[f"data.{name}"] = {kind: {}}
+        if kind == "text":
+            capabilities[f"data.{name}.keyword"] = {"keyword": {}}
+    types = FieldTypes()
+    types.learn(mapped, capabilities)
+    return types
+
+
+TYPES = _learned(
+    **dict.fromkeys(("name", "f", "status", "a", "b"), "text"),
+    age="long",
+    n="long",
+    active="boolean",
+)
 
 
 # --- equality / inequality -------------------------------------------------
 
 
 def test_eq_string_uses_keyword() -> None:
-    assert build_filter_es_query(Filter("name", Operator.EQ, "alice")) == {
+    assert build_filter_es_query(Filter("name", Operator.EQ, "alice"), TYPES) == {
         "term": {"data.name.keyword": "alice"}
     }
 
 
 def test_eq_int_uses_base_field() -> None:
-    assert build_filter_es_query(Filter("age", Operator.EQ, 30)) == {"term": {"data.age": 30}}
+    assert build_filter_es_query(Filter("age", Operator.EQ, 30), TYPES) == {
+        "term": {"data.age": 30}
+    }
 
 
 def test_eq_bool_passes_native_value() -> None:
     # No str(v).lower() stringification — a native bool term matches the
     # dynamically-mapped ES boolean field.
-    assert build_filter_es_query(Filter("active", Operator.EQ, True)) == {
+    assert build_filter_es_query(Filter("active", Operator.EQ, True), TYPES) == {
         "term": {"data.active": True}
     }
 
 
 def test_neq_wraps_in_must_not() -> None:
-    assert build_filter_es_query(Filter("name", Operator.NEQ, "alice")) == {
+    assert build_filter_es_query(Filter("name", Operator.NEQ, "alice"), TYPES) == {
         "bool": {"must_not": {"term": {"data.name.keyword": "alice"}}}
     }
 
@@ -82,17 +117,19 @@ def test_neq_wraps_in_must_not() -> None:
     ],
 )
 def test_range_operators(op: Operator, es_op: str) -> None:
-    assert build_filter_es_query(Filter("age", op, 21)) == {"range": {"data.age": {es_op: 21}}}
+    assert build_filter_es_query(Filter("age", op, 21), TYPES) == {
+        "range": {"data.age": {es_op: 21}}
+    }
 
 
 def test_between() -> None:
-    assert build_filter_es_query(Filter("age", Operator.BETWEEN, [18, 65])) == {
+    assert build_filter_es_query(Filter("age", Operator.BETWEEN, [18, 65]), TYPES) == {
         "range": {"data.age": {"gte": 18, "lte": 65}}
     }
 
 
 def test_not_between_wraps_in_must_not() -> None:
-    assert build_filter_es_query(Filter("age", Operator.NOT_BETWEEN, [18, 65])) == {
+    assert build_filter_es_query(Filter("age", Operator.NOT_BETWEEN, [18, 65]), TYPES) == {
         "bool": {"must_not": {"range": {"data.age": {"gte": 18, "lte": 65}}}}
     }
 
@@ -104,13 +141,13 @@ def test_like_translates_sql_wildcards_case_insensitive() -> None:
     # % -> *, _ -> ?, on the .keyword sub-field, case-insensitive — matching
     # the in-memory (re.IGNORECASE, anchored) and SQL LIKE backends. NOT the
     # async substring form (*val*), NOT case-sensitive.
-    assert build_filter_es_query(Filter("f", Operator.LIKE, "a_b%")) == {
+    assert build_filter_es_query(Filter("f", Operator.LIKE, "a_b%"), TYPES) == {
         "wildcard": {"data.f.keyword": {"value": "a?b*", "case_insensitive": True}}
     }
 
 
 def test_not_like_wraps_case_insensitive_wildcard() -> None:
-    assert build_filter_es_query(Filter("f", Operator.NOT_LIKE, "a_b%")) == {
+    assert build_filter_es_query(Filter("f", Operator.NOT_LIKE, "a_b%"), TYPES) == {
         "bool": {
             "must_not": {
                 "wildcard": {"data.f.keyword": {"value": "a?b*", "case_insensitive": True}}
@@ -134,7 +171,7 @@ def test_not_like_wraps_case_insensitive_wildcard() -> None:
 def test_like_escapes_literal_lucene_metacharacters(sql_pattern: str, es_value: str) -> None:
     # Reproduce-first for the escaping gap: without escaping, a literal '*' in
     # a SQL LIKE pattern became an ES wildcard matching anything.
-    assert build_filter_es_query(Filter("f", Operator.LIKE, sql_pattern)) == {
+    assert build_filter_es_query(Filter("f", Operator.LIKE, sql_pattern), TYPES) == {
         "wildcard": {"data.f.keyword": {"value": es_value, "case_insensitive": True}}
     }
 
@@ -143,24 +180,26 @@ def test_like_non_string_pattern_raises() -> None:
     # A non-string LIKE pattern fails loud with a clear message rather than an
     # opaque AttributeError from .replace on a non-str.
     with pytest.raises(ValueError, match="must be a string"):
-        build_filter_es_query(Filter("f", Operator.LIKE, 123))  # type: ignore[arg-type]
+        build_filter_es_query(Filter("f", Operator.LIKE, 123), TYPES)  # type: ignore[arg-type]
 
 
 # --- membership ------------------------------------------------------------
 
 
 def test_in_string_list_uses_keyword() -> None:
-    assert build_filter_es_query(Filter("status", Operator.IN, ["a", "b"])) == {
+    assert build_filter_es_query(Filter("status", Operator.IN, ["a", "b"]), TYPES) == {
         "terms": {"data.status.keyword": ["a", "b"]}
     }
 
 
 def test_in_int_list_uses_base_field() -> None:
-    assert build_filter_es_query(Filter("n", Operator.IN, [1, 2])) == {"terms": {"data.n": [1, 2]}}
+    assert build_filter_es_query(Filter("n", Operator.IN, [1, 2]), TYPES) == {
+        "terms": {"data.n": [1, 2]}
+    }
 
 
 def test_not_in_wraps_in_must_not() -> None:
-    assert build_filter_es_query(Filter("status", Operator.NOT_IN, ["a", "b"])) == {
+    assert build_filter_es_query(Filter("status", Operator.NOT_IN, ["a", "b"]), TYPES) == {
         "bool": {"must_not": {"terms": {"data.status.keyword": ["a", "b"]}}}
     }
 
@@ -169,11 +208,13 @@ def test_not_in_wraps_in_must_not() -> None:
 
 
 def test_exists() -> None:
-    assert build_filter_es_query(Filter("f", Operator.EXISTS)) == {"exists": {"field": "data.f"}}
+    assert build_filter_es_query(Filter("f", Operator.EXISTS), TYPES) == {
+        "exists": {"field": "data.f"}
+    }
 
 
 def test_not_exists_wraps_in_must_not() -> None:
-    assert build_filter_es_query(Filter("f", Operator.NOT_EXISTS)) == {
+    assert build_filter_es_query(Filter("f", Operator.NOT_EXISTS), TYPES) == {
         "bool": {"must_not": {"exists": {"field": "data.f"}}}
     }
 
@@ -184,7 +225,7 @@ def test_not_exists_wraps_in_must_not() -> None:
 def test_regex_uses_keyword_full_value() -> None:
     # REGEX targets the .keyword sub-field (full, un-analyzed value), NOT the
     # analyzed base path where a regexp would match a single lowercased token.
-    assert build_filter_es_query(Filter("f", Operator.REGEX, "a.*z")) == {
+    assert build_filter_es_query(Filter("f", Operator.REGEX, "a.*z"), TYPES) == {
         "regexp": {"data.f.keyword": "a.*z"}
     }
 
@@ -195,14 +236,14 @@ def test_regex_multi_token_pattern_targets_full_value() -> None:
     # but matches the full value ``"alice smith"`` on the keyword sub-field.
     # Pin that REGEX resolves to .keyword so cross-token patterns work like the
     # in-memory (re.search) and SQL backends, not the old per-token data.name.
-    assert build_filter_es_query(Filter("name", Operator.REGEX, "alice.*smith")) == {
+    assert build_filter_es_query(Filter("name", Operator.REGEX, "alice.*smith"), TYPES) == {
         "regexp": {"data.name.keyword": "alice.*smith"}
     }
 
 
 def test_starts_with_is_case_sensitive_prefix() -> None:
     # prefix on the .keyword sub-field, NO case_insensitive flag.
-    assert build_filter_es_query(Filter("f", Operator.STARTS_WITH, "pre")) == {
+    assert build_filter_es_query(Filter("f", Operator.STARTS_WITH, "pre"), TYPES) == {
         "prefix": {"data.f.keyword": "pre"}
     }
 
@@ -240,19 +281,19 @@ def test_starts_with_is_case_sensitive_prefix() -> None:
 )
 def test_id_targets_top_level_keyword(filter_obj: Filter, expected: dict) -> None:
     # Never _id, never data.id — the top-level ``id`` keyword uniformly.
-    assert build_filter_es_query(filter_obj) == expected
+    assert build_filter_es_query(filter_obj, TYPES) == expected
 
 
 # --- outer bool wrapper ----------------------------------------------------
 
 
 def test_bool_query_empty_is_match_all() -> None:
-    assert build_bool_query([]) == {"match_all": {}}
+    assert build_bool_query([], TYPES) == {"match_all": {}}
 
 
 def test_bool_query_wraps_clauses_in_must() -> None:
     filters = [Filter("a", Operator.EQ, "x"), Filter("age", Operator.GT, 1)]
-    assert build_bool_query(filters) == {
+    assert build_bool_query(filters, TYPES) == {
         "bool": {
             "must": [
                 {"term": {"data.a.keyword": "x"}},
@@ -283,7 +324,7 @@ def test_complex_and_or_not_tree() -> None:
             ),
         ],
     )
-    assert build_complex_es_query(condition) == {
+    assert build_complex_es_query(condition, TYPES) == {
         "bool": {
             "must": [
                 {"term": {"data.a.keyword": "x"}},
@@ -304,7 +345,7 @@ def test_complex_and_or_not_tree() -> None:
 
 def test_complex_single_filter_condition() -> None:
     condition = FilterCondition(Filter("id", Operator.STARTS_WITH, "orders/"))
-    assert build_complex_es_query(condition) == {"prefix": {"id": "orders/"}}
+    assert build_complex_es_query(condition, TYPES) == {"prefix": {"id": "orders/"}}
 
 
 def test_complex_single_clause_and_collapses() -> None:
@@ -313,7 +354,7 @@ def test_complex_single_clause_and_collapses() -> None:
         operator=LogicOperator.AND,
         conditions=[FilterCondition(Filter("a", Operator.EQ, "x"))],
     )
-    assert build_complex_es_query(condition) == {"term": {"data.a.keyword": "x"}}
+    assert build_complex_es_query(condition, TYPES) == {"term": {"data.a.keyword": "x"}}
 
 
 def test_complex_single_clause_or_collapses() -> None:
@@ -322,7 +363,7 @@ def test_complex_single_clause_or_collapses() -> None:
         operator=LogicOperator.OR,
         conditions=[FilterCondition(Filter("a", Operator.EQ, "x"))],
     )
-    assert build_complex_es_query(condition) == {"term": {"data.a.keyword": "x"}}
+    assert build_complex_es_query(condition, TYPES) == {"term": {"data.a.keyword": "x"}}
 
 
 @pytest.mark.parametrize(
@@ -337,7 +378,9 @@ def test_complex_empty_branch_answers_as_matches_does(
 ) -> None:
     # Every condition of an empty AND holds; none of an empty OR does, so it
     # matches nothing -- and constrains a parent AND rather than vanishing.
-    assert build_complex_es_query(LogicCondition(operator=logic_op, conditions=[])) == expected
+    assert (
+        build_complex_es_query(LogicCondition(operator=logic_op, conditions=[]), TYPES) == expected
+    )
 
 
 def test_complex_not_negates_every_condition() -> None:
@@ -349,7 +392,7 @@ def test_complex_not_negates_every_condition() -> None:
             FilterCondition(Filter("b", Operator.EQ, "y")),
         ],
     )
-    assert build_complex_es_query(condition) == {
+    assert build_complex_es_query(condition, TYPES) == {
         "bool": {
             "must_not": [
                 {"term": {"data.a.keyword": "x"}},
@@ -361,9 +404,9 @@ def test_complex_not_negates_every_condition() -> None:
 
 def test_complex_empty_not_is_match_all() -> None:
     # A NOT with no inner condition has nothing to negate -> match_all.
-    assert build_complex_es_query(LogicCondition(operator=LogicOperator.NOT, conditions=[])) == {
-        "match_all": {}
-    }
+    assert build_complex_es_query(
+        LogicCondition(operator=LogicOperator.NOT, conditions=[]), TYPES
+    ) == {"match_all": {}}
 
 
 # --- unsupported operator / malformed value fail loud ----------------------
@@ -374,7 +417,7 @@ def test_unsupported_operator_raises() -> None:
     # fall back to match_all (which is how a dropped filter returns everything).
     bogus = SimpleNamespace(field="f", operator="not-an-operator", value=1)
     with pytest.raises(ValueError, match="Unsupported operator"):
-        build_filter_es_query(bogus)  # type: ignore[arg-type]
+        build_filter_es_query(bogus, TYPES)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("op", [Operator.BETWEEN, Operator.NOT_BETWEEN])
@@ -384,7 +427,7 @@ def test_between_malformed_bounds_raise(op: Operator, bad_value: object) -> None
     # rather than emitting a malformed range clause. The refusal is the
     # Filter's own, so no translator ever receives such a value.
     with pytest.raises(ValueError, match="needs two bounds"):
-        build_filter_es_query(Filter("age", op, bad_value))
+        build_filter_es_query(Filter("age", op, bad_value), TYPES)
 
 
 # --- helper functions in isolation -----------------------------------------
@@ -432,34 +475,172 @@ def test_field_path_id_is_always_unsuffixed(op: Operator) -> None:
     # The id short-circuit runs before any operator check, so every operator
     # resolves id to the bare top-level keyword — never id.keyword, never _id.
     value = ["x"] if op in (Operator.IN,) else "x"
-    assert _field_path(Filter("id", op, value)) == "id"
+    assert _field_path(Filter("id", op, value), TYPES) == "id"
 
 
-@pytest.mark.parametrize(
-    "op",
-    [Operator.LIKE, Operator.NOT_LIKE, Operator.STARTS_WITH, Operator.REGEX],
-)
-def test_field_path_pattern_ops_use_keyword_regardless_of_value(
-    op: Operator,
+ALL_OPERATORS = [
+    (Operator.EQ, "s"),
+    (Operator.EQ, 30),
+    (Operator.IN, ["a", "b"]),
+    (Operator.GT, "s"),
+    (Operator.BETWEEN, ["a", "b"]),
+    (Operator.LIKE, "p"),
+    (Operator.STARTS_WITH, "p"),
+    (Operator.REGEX, "p"),
+]
+
+
+@pytest.mark.parametrize(("op", "value"), ALL_OPERATORS)
+def test_a_text_field_is_reached_through_its_keyword(op: Operator, value: object) -> None:
+    assert _field_path(Filter("f", op, value), TYPES) == "data.f.keyword"
+
+
+@pytest.mark.parametrize("kind", ["keyword", "wildcard", "flattened", "constant_keyword"])
+@pytest.mark.parametrize(("op", "value"), ALL_OPERATORS)
+def test_a_field_holding_whole_strings_is_reached_directly(
+    op: Operator, value: object, kind: str
 ) -> None:
-    # Pattern operators always match the full un-analyzed value, so they target
-    # .keyword unconditionally (patterns are strings anyway).
-    assert _field_path(Filter("f", op, "p")) == "data.f.keyword"
+    assert _field_path(Filter("k", op, value), _learned(k=kind)) == "data.k"
 
 
-def test_field_path_string_equality_uses_keyword() -> None:
-    assert _field_path(Filter("f", Operator.EQ, "s")) == "data.f.keyword"
-    assert _field_path(Filter("f", Operator.IN, ["a", "b"])) == "data.f.keyword"
+@pytest.mark.parametrize("op", [Operator.EXISTS, Operator.NOT_EXISTS])
+def test_existence_asks_the_field_itself(op: Operator) -> None:
+    assert _field_path(Filter("f", op), TYPES) == "data.f"
 
 
+@pytest.mark.parametrize("kind", ["long", "double", "date", "boolean"])
+class TestAFieldThatHoldsNoStrings:
+    @pytest.mark.parametrize(
+        ("op", "value"), [(Operator.EQ, 5), (Operator.GT, 5), (Operator.GT, "5")]
+    )
+    def test_is_compared_directly(self, kind: str, op: Operator, value: object) -> None:
+        assert _field_path(Filter("x", op, value), _learned(x=kind)) == "data.x"
+
+    @pytest.mark.parametrize("op", [Operator.LIKE, Operator.STARTS_WITH, Operator.REGEX])
+    def test_matches_no_pattern(self, kind: str, op: Operator) -> None:
+        # Elasticsearch refuses these on the field itself.
+        assert _field_path(Filter("x", op, "p"), _learned(x=kind)) == "data.x.keyword"
+
+
+STRING_EQUALITIES = [
+    (Operator.EQ, "s"),
+    (Operator.NEQ, "s"),
+    (Operator.IN, ["s"]),
+    (Operator.NOT_IN, ["s"]),
+]
+
+
+@pytest.mark.parametrize(("op", "value"), STRING_EQUALITIES)
 @pytest.mark.parametrize(
-    ("op", "value"),
+    "kind",
     [
-        (Operator.EQ, 30),  # non-string equality stays on the analyzed path
-        (Operator.IN, [1, 2]),  # non-string membership too
-        (Operator.GT, 5),  # range never uses .keyword
-        (Operator.EXISTS, None),  # existence targets the base field
+        "byte",
+        "short",
+        "integer",
+        "long",
+        "unsigned_long",
+        "half_float",
+        "float",
+        "double",
+        "scaled_float",
+        "boolean",
     ],
 )
-def test_field_path_non_string_and_range_use_base(op: Operator, value: object) -> None:
-    assert _field_path(Filter("f", op, value)) == "data.f"
+def test_no_string_equals_a_number_or_boolean(kind: str, op: Operator, value: object) -> None:
+    assert _field_path(Filter("x", op, value), _learned(x=kind)) == "data.x.keyword"
+
+
+@pytest.mark.parametrize(("op", "value"), STRING_EQUALITIES)
+@pytest.mark.parametrize("kind", ["date", "date_nanos", "ip", "version", "date_range"])
+def test_a_string_is_how_other_values_are_written(kind: str, op: Operator, value: object) -> None:
+    assert _field_path(Filter("x", op, value), _learned(x=kind)) == "data.x"
+
+
+@pytest.mark.parametrize(("op", "value"), STRING_EQUALITIES)
+@pytest.mark.parametrize("kind", ["text", "match_only_text"])
+def test_no_string_equals_text_with_no_full_value(kind: str, op: Operator, value: object) -> None:
+    types = FieldTypes()
+    types.learn(["x"], {"data.x": {kind: {}}})
+    assert _field_path(Filter("x", op, value), types) == "data.x.keyword"
+
+
+def test_an_alias_over_indices_that_map_a_field_both_ways_asks_the_field() -> None:
+    types = FieldTypes()
+    types.learn(["x"], {"data.x": {"long": {}, "date": {}}})
+    assert _field_path(Filter("x", Operator.EQ, "2024"), types) == "data.x"
+
+
+@pytest.mark.parametrize(("op", "value"), ALL_OPERATORS)
+def test_a_field_nothing_maps_is_reached_directly(op: Operator, value: object) -> None:
+    assert _field_path(Filter("zz", op, value), TYPES) == "data.zz"
+
+
+# --- learning the mapping --------------------------------------------------
+
+
+def test_a_keyword_sub_field_of_any_name_serves() -> None:
+    types = FieldTypes()
+    types.learn(
+        ["t"],
+        {"data.t": {"text": {}}, "data.t.words": {"text": {}}, "data.t.raw": {"keyword": {}}},
+    )
+    assert types.value_path("t") == "data.t.raw"
+
+
+def test_a_sub_field_called_keyword_is_preferred() -> None:
+    types = FieldTypes()
+    types.learn(
+        ["t"],
+        {"data.t": {"text": {}}, "data.t.a": {"keyword": {}}, "data.t.keyword": {"keyword": {}}},
+    )
+    assert types.value_path("t") == "data.t.keyword"
+
+
+def test_a_field_whose_name_starts_anothers_is_not_its_sub_field() -> None:
+    types = FieldTypes()
+    types.learn(["t"], {"data.t": {"text": {}}, "data.tag": {"keyword": {}}})
+    assert types.value_path("t") == "data.t"
+
+
+def test_an_unmapped_field_is_asked_about_again() -> None:
+    types = FieldTypes()
+    types.learn(["a", "b", "c"], {"data.a": {"long": {}}, "data.c": {"unmapped": {}}})
+    assert types.unknown(["id", "a", "b", "c"]) == ["b", "c"]
+
+
+def test_a_query_names_the_fields_it_filters_and_sorts_by() -> None:
+    plain = Query(filters=[Filter("a", Operator.EQ, 1)]).sort_by("b")
+    assert query_fields(plain) == {"a", "b"}
+    nested = LogicCondition(
+        operator=LogicOperator.NOT,
+        conditions=[
+            LogicCondition(
+                operator=LogicOperator.OR,
+                conditions=[
+                    FilterCondition(Filter("c", Operator.EQ, 1)),
+                    FilterCondition(Filter("d", Operator.EQ, 1)),
+                ],
+            )
+        ],
+    )
+    assert query_fields(ComplexQuery(condition=nested, sort_specs=[SortSpec("e")])) == {
+        "c",
+        "d",
+        "e",
+    }
+    assert query_fields(None) == set()
+
+
+def test_a_complex_query_with_no_condition_matches_everything() -> None:
+    assert build_query(ComplexQuery(), TYPES) == {"match_all": {}}
+
+
+def test_a_sort_reaches_each_fields_full_value() -> None:
+    specs = [SortSpec("name", SortOrder.DESC), SortSpec("age"), SortSpec("id")]
+    assert [
+        (path, body["order"]) for c in build_sort(specs, TYPES) for path, body in c.items()
+    ] == [
+        ("data.name.keyword", "desc"),
+        ("data.age", "asc"),
+        ("id", "asc"),
+    ]

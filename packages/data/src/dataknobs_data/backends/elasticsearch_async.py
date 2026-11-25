@@ -19,7 +19,7 @@ from ..pooling.elasticsearch import (
     create_async_elasticsearch_client,
     validate_elasticsearch_client,
 )
-from ..query import Query, SortOrder, is_storage_key_field
+from ..query import Query
 from ..query_logic import ComplexQuery
 from ..streaming import (
     StreamConfig,
@@ -47,10 +47,12 @@ from .elasticsearch_mixins import (
 from .elasticsearch_query import (
     PIT_KEEP_ALIVE,
     arun_search_plan,
-    build_bool_query,
-    build_complex_es_query,
+    FieldTypes,
+    build_query,
+    build_sort,
     client_search_kwargs,
     plan_search,
+    query_fields,
 )
 
 if TYPE_CHECKING:
@@ -138,6 +140,7 @@ class AsyncElasticsearchDatabase(
         self.search_page_size = cfg.search_page_size
         self._client: AsyncElasticsearch | None = None
         self._connected = False
+        self._known_types = FieldTypes()
 
     async def connect(self) -> None:
         """Connect to the Elasticsearch database."""
@@ -183,6 +186,7 @@ class AsyncElasticsearchDatabase(
                 logger.warning("Error releasing Elasticsearch client: %s", e)
             self._client = None
             self._connected = False
+            self._known_types = FieldTypes()
 
     def _initialize(self) -> None:
         """Initialize is handled in connect."""
@@ -211,19 +215,9 @@ class AsyncElasticsearchDatabase(
         if await self._index_exists():
             return
 
-        # Get mappings with vector field support
-        mappings = self.get_index_mappings(self.vector_fields)
-
-        # Get settings optimized for KNN if we have vector fields
-        settings = (
-            self.get_knn_index_settings()
-            if self.vector_fields
-            else {
-                "number_of_shards": 1,
-                "number_of_replicas": 0,
-            }
+        mappings, settings = self.index_definition(
+            self.config.mappings, self.config.settings, self.vector_fields
         )
-
         if await self._create_index(mappings, settings) and self.vector_fields:
             self.vector_enabled = True
             logger.info(f"Created index '{self.index_name}' with vector support")
@@ -614,34 +608,24 @@ class AsyncElasticsearchDatabase(
         ]
         return await self._bulk(actions, "delete_batch")
 
+    async def _field_types(self, query: Query | ComplexQuery | None) -> FieldTypes:
+        """How the index maps the fields ``query`` names, asking for those not known yet."""
+        unknown = self._known_types.unknown(query_fields(query))
+        if unknown:
+            response = await self._require_client().field_caps(
+                index=self.index_name, fields=FieldTypes.request_fields(unknown)
+            )
+            self._known_types.learn(unknown, response["fields"])
+        return self._known_types
+
     async def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching the query."""
         self._check_connection()
 
-        # Translate through the shared filter->DSL functions so the async path
-        # stays at parity with the sync backend and the vector pre-filter.
-        if isinstance(query, ComplexQuery):
-            es_query = (
-                build_complex_es_query(query.condition) if query.condition else {"match_all": {}}
-            )
-        else:
-            es_query = build_bool_query(query.filters)
-
-        # Build sort
-        sort = []
-        if query.sort_specs:
-            for sort_spec in query.sort_specs:
-                direction = "desc" if sort_spec.order == SortOrder.DESC else "asc"
-                # The 'id' field is the storage key: sort on the top-level ``id``
-                # keyword (mirroring ``_id``), not a data field named ``id``,
-                # matching the sync backend. ``_id`` itself is unsortable
-                # (fielddata disabled by default), so the keyword mirror is used.
-                sort_path = (
-                    "id" if is_storage_key_field(sort_spec.field) else f"data.{sort_spec.field}"
-                )
-                # A record with no value sorts last in either direction, as on
-                # every backend; stated rather than left to the default.
-                sort.append({sort_path: {"order": direction, "missing": "_last"}})
+        # Translated by functions the twins share, so they cannot drift apart.
+        types = await self._field_types(query)
+        es_query = build_query(query, types)
+        sort = build_sort(query.sort_specs, types)
 
         # One request inside the result window, ``search_after`` pages past
         # it or for an unbounded read; the plan is shared with the sync twin.
@@ -699,7 +683,7 @@ class AsyncElasticsearchDatabase(
 
         # Same shared translator as search(), so count() honors the full
         # operator set and cannot drift from the sync backend.
-        es_query = build_bool_query(query.filters)
+        es_query = build_query(query, await self._field_types(query))
 
         client = self._require_client()
         response = await client.count(index=self.index_name, query=es_query)
@@ -729,7 +713,8 @@ class AsyncElasticsearchDatabase(
 
         # Same shared translator as search()/count(), so streamed reads honor
         # the full operator set instead of only equality.
-        es_query = build_bool_query(query.filters) if query and query.filters else {"match_all": {}}
+        query = query or Query()
+        es_query = build_query(query, await self._field_types(query))
 
         # Initial search with scroll
         response = await self._require_client().search(
@@ -743,7 +728,7 @@ class AsyncElasticsearchDatabase(
             while hits:
                 for hit in hits:
                     record = self._doc_to_record(hit)
-                    if query and query.fields:
+                    if query.fields:
                         record = record.project(query.fields)
                     yield record
 
@@ -786,6 +771,18 @@ class AsyncElasticsearchDatabase(
             skip_on_duplicate=skip_on_duplicate,
             config=config,
         )
+
+    async def _pre_filter(self, filter: Query | None) -> dict[str, Any] | None:
+        """The clause a vector or hybrid search filters by first, if any.
+
+        Asking for the mapping can fail as the search itself can, and is
+        reported the same way.
+        """
+        try:
+            types = await self._field_types(filter)
+        except Exception as e:
+            self._handle_elasticsearch_error(e, "vector pre-filter")
+        return self._build_filter_query(filter, types)
 
     async def _vector_search(
         self,
@@ -840,7 +837,7 @@ class AsyncElasticsearchDatabase(
         )
 
         # Build filter query if provided
-        filter_query = self._build_filter_query(filter) if filter else None
+        filter_query = await self._pre_filter(filter)
 
         # Build KNN query
         query = build_knn_query(
@@ -1023,7 +1020,7 @@ class AsyncElasticsearchDatabase(
         search_text_fields = config.text_fields or text_fields or ["content", "title", "text"]
 
         # Build filter query if provided
-        filter_query = self._build_filter_query(filter) if filter else None
+        filter_query = await self._pre_filter(filter)
 
         # Build text search query with multi_match
         text_query: dict[str, Any] = {
@@ -1159,7 +1156,7 @@ class AsyncElasticsearchDatabase(
         }
 
         # Build filter if provided
-        filter_query = self._build_filter_query(filter) if filter else None
+        filter_query = await self._pre_filter(filter)
 
         body: dict[str, Any] = {
             "query": query

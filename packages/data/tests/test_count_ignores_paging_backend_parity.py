@@ -55,9 +55,7 @@ BACKENDS = [
 
 #: Three records that all match the filter below, so a page of one and the
 #: whole match are distinguishable, and so is an offset past two of them.
-#: Sorted by ``score``: the sync Elasticsearch backend knows a numeric field by
-#: its name, and refuses to sort one called anything else.
-RECORDS = [{"kind": "a", "score": n} for n in range(3)]
+RECORDS = [{"kind": "a", "n": n} for n in range(3)]
 
 _MATCH = Filter("kind", Operator.EQ, "a")
 
@@ -67,7 +65,7 @@ CASES: list[tuple[str, Query]] = [
     ("filter-and-offset", Query(filters=[_MATCH], offset_value=2)),
     (
         "filter-limit-offset-sort",
-        Query(filters=[_MATCH], limit_value=1, offset_value=1).sort_by("score"),
+        Query(filters=[_MATCH], limit_value=1, offset_value=1).sort_by("n"),
     ),
 ]
 
@@ -204,11 +202,11 @@ class TestACountLeavesTheCallersQueryAlone:
     """Counting a paged query does not clear the caller's paging."""
 
     def test_sync(self, sync_db: Any) -> None:
-        query = Query(filters=[_MATCH], limit_value=1, offset_value=1).sort_by("score")
+        query = Query(filters=[_MATCH], limit_value=1, offset_value=1).sort_by("n")
         sync_db.count(query)
         assert (query.limit_value, query.offset_value, len(query.sort_specs)) == (1, 1, 1)
 
     async def test_async(self, async_db: Any) -> None:
-        query = Query(filters=[_MATCH], limit_value=1, offset_value=1).sort_by("score")
+        query = Query(filters=[_MATCH], limit_value=1, offset_value=1).sort_by("n")
         await async_db.count(query)
         assert (query.limit_value, query.offset_value, len(query.sort_specs)) == (1, 1, 1)

@@ -12,7 +12,7 @@ from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from ..database import SyncDatabase, version_conflict_error
 from ..exceptions import DuplicateRecordError
-from ..query import Query, SortOrder, is_storage_key_field
+from ..query import Query
 from ..query_logic import ComplexQuery
 from ..streaming import StreamConfig, StreamingMixin, StreamResult
 from ..vector import SyncVectorOperationsMixin
@@ -34,10 +34,12 @@ from .elasticsearch_mixins import (
 )
 from .elasticsearch_query import (
     PIT_KEEP_ALIVE,
-    build_bool_query,
-    build_complex_es_query,
+    FieldTypes,
+    build_query,
+    build_sort,
     client_search_kwargs,
     plan_search,
+    query_fields,
     run_search_plan,
 )
 from .vector_config_mixin import VectorConfigMixin
@@ -126,6 +128,7 @@ class SyncElasticsearchDatabase(
 
         self._client: Elasticsearch | None = None
         self._connected = False
+        self._known_types = FieldTypes()
 
     def connect(self) -> None:
         """Connect to the Elasticsearch database."""
@@ -138,23 +141,7 @@ class SyncElasticsearchDatabase(
         if self._vector_enabled and not self.vector_fields:
             self.vector_fields[cfg.default_vector_field] = cfg.vector_dimensions
 
-        # Get mappings with vector field support
-        base_mappings = self.get_index_mappings(self.vector_fields)
-
-        # Allow custom mappings to override
-        mappings = cfg.mappings if cfg.mappings else base_mappings
-
-        # Get settings optimized for KNN if we have vector fields
-        settings = cfg.settings
-        if not settings:
-            settings = (
-                self.get_knn_index_settings()
-                if (self.vector_fields or self._vector_enabled)
-                else {
-                    "number_of_shards": 1,
-                    "number_of_replicas": 0,
-                }
-            )
+        mappings, settings = self.index_definition(cfg.mappings, cfg.settings, self.vector_fields)
 
         from elasticsearch import Elasticsearch
 
@@ -174,6 +161,7 @@ class SyncElasticsearchDatabase(
             self._client.close()
             self._client = None
         self._connected = False
+        self._known_types = FieldTypes()
 
     def _initialize(self) -> None:
         """Initialize method - connection setup moved to connect()."""
@@ -576,54 +564,22 @@ class SyncElasticsearchDatabase(
         ]
         return self._bulk(actions, "update_batch")
 
+    def _field_types(self, query: Query | ComplexQuery | None) -> FieldTypes:
+        """How the index maps the fields ``query`` names, asking for those not known yet."""
+        unknown = self._known_types.unknown(query_fields(query))
+        if unknown:
+            response = self._require_client().field_caps(
+                index=self.index_name, fields=FieldTypes.request_fields(unknown)
+            )
+            self._known_types.learn(unknown, response["fields"])
+        return self._known_types
+
     def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching a query."""
-        # Translate through the shared filter->DSL functions so the sync,
-        # async and vector-pre-filter sites cannot drift apart.
-        if isinstance(query, ComplexQuery):
-            es_query = (
-                build_complex_es_query(query.condition) if query.condition else {"match_all": {}}
-            )
-        else:
-            es_query = build_bool_query(query.filters)
-
-        # Build sort
-        sort = []
-        if query.sort_specs:
-            for sort_spec in query.sort_specs:
-                # Special handling for 'id' field - sort by the id field in source data
-                # We can't sort by _id directly as it requires fielddata which is disabled by default
-                # The id field is already of type keyword, so no .keyword suffix needed
-                if is_storage_key_field(sort_spec.field):
-                    field_path = "id"
-                else:
-                    field_path = f"data.{sort_spec.field}"
-                    # Don't add .keyword if user already specified it or for common numeric fields
-                    # This is a heuristic - ideally we'd check the mapping
-                    numeric_fields = [
-                        "age",
-                        "salary",
-                        "balance",
-                        "count",
-                        "score",
-                        "amount",
-                        "price",
-                        "index",
-                        "number",
-                        "total",
-                        "quantity",
-                    ]
-                    if (
-                        not sort_spec.field.endswith(".keyword")
-                        and not sort_spec.field.endswith(".raw")
-                        and sort_spec.field.lower() not in numeric_fields
-                    ):
-                        # Likely a text field, add .keyword for sorting
-                        field_path = f"data.{sort_spec.field}.keyword"
-                order = "desc" if sort_spec.order == SortOrder.DESC else "asc"
-                # A record with no value sorts last in either direction, as on
-                # every backend; stated rather than left to the default.
-                sort.append({field_path: {"order": order, "missing": "_last"}})
+        # Translated by functions the twins share, so they cannot drift apart.
+        types = self._field_types(query)
+        es_query = build_query(query, types)
+        sort = build_sort(query.sort_specs, types)
 
         # One request inside the result window, ``search_after`` pages past
         # it or for an unbounded read; the plan is shared with the async twin.
@@ -680,7 +636,7 @@ class SyncElasticsearchDatabase(
 
         # Same shared translator as search()/ComplexQuery, so count() cannot
         # drift from them (e.g. drop an operator and fall back to match_all).
-        es_query = build_bool_query(query.filters)
+        es_query = build_query(query, self._field_types(query))
         client = self._require_client()
         response = client.count(index=self.index_name, query=es_query)
         return int(response["count"])
@@ -756,6 +712,18 @@ class SyncElasticsearchDatabase(
             config=config,
         )
 
+    def _pre_filter(self, filter: Query | None) -> dict[str, Any] | None:
+        """The clause a vector or hybrid search filters by first, if any.
+
+        Asking for the mapping can fail as the search itself can, and is
+        reported the same way.
+        """
+        try:
+            types = self._field_types(filter)
+        except Exception as e:
+            self._handle_elasticsearch_error(e, "vector pre-filter")
+        return self._build_filter_query(filter, types)
+
     def _vector_search(
         self,
         query_vector: np.ndarray | list[float],
@@ -809,7 +777,7 @@ class SyncElasticsearchDatabase(
         )
 
         # Build filter query if provided
-        filter_query = self._build_filter_query(filter) if filter else None
+        filter_query = self._pre_filter(filter)
 
         # Build KNN query
         query = build_knn_query(

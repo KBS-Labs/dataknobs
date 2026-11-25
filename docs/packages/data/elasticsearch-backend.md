@@ -65,19 +65,49 @@ Two keys, shared by both backends, tune this:
 
 ## Index Mapping
 
+Both backends create a missing index with this mapping, plus a `dense_vector`
+field for each configured vector field:
+
 ```json
 {
-  "mappings": {
-    "properties": {
-      "id": {"type": "keyword"},
-      "fields": {"type": "object", "dynamic": true},
-      "metadata": {"type": "object", "dynamic": true},
-      "created_at": {"type": "date"},
-      "updated_at": {"type": "date"}
+  "date_detection": false,
+  "dynamic_templates": [
+    {
+      "data_strings": {
+        "path_match": "data.*",
+        "match_mapping_type": "string",
+        "mapping": {
+          "type": "text",
+          "fields": {"keyword": {"type": "keyword", "ignore_above": 8191}}
+        }
+      }
     }
+  ],
+  "properties": {
+    "id": {"type": "keyword"},
+    "data": {"type": "object", "properties": {}},
+    "metadata": {"type": "object", "enabled": true},
+    "created_at": {"type": "date"},
+    "updated_at": {"type": "date"}
   }
 }
 ```
+
+Both configs take `mappings`, laid over this one, and `settings`, in place of the
+default settings. To have a field compared as time, map it as a date:
+
+```python
+db = AsyncElasticsearchDatabase({
+    "hosts": ["http://localhost:9200"],
+    "index": "records",
+    "mappings": {"properties": {"data": {"properties": {"due": {"type": "date"}}}}},
+})
+```
+
+An index that already exists is used as it is, however it is mapped. How a filter
+or sort reaches a field under each mapping, and what an index created by an
+earlier version keeps, are in the
+[API reference](https://kbs-labs.github.io/dataknobs/packages/data/api-reference/#elasticsearch-backend).
 
 ## Usage Examples
 

@@ -6,10 +6,10 @@
 The sync and async Elasticsearch backends and the vector-pre-filter mixin all
 translate a :class:`~dataknobs_data.query.Filter` into Elasticsearch Query DSL
 through the functions here, so the translation lives in exactly one place. The
-functions are pure — they take query objects and return ``dict`` clauses with
-no I/O and no backend state — so every operator's emitted DSL can be pinned in
-fast offline unit tests that run wherever CI runs, not only against a live
-Elasticsearch.
+functions are pure — they take query objects and how the index maps the fields
+they name (:class:`FieldTypes`) and return ``dict`` clauses with no I/O — so
+every operator's emitted DSL can be pinned in fast offline unit tests that run
+wherever CI runs, not only against a live Elasticsearch.
 
 Field-path rules:
 
@@ -25,10 +25,14 @@ Field-path rules:
 * A record data field literally named ``id`` (``record.data["id"]``) is not
   reachable through the query API — ``Filter("id", …)`` always means the storage
   key. Query such a field under a different name.
-* Other fields live under ``data.<field>``. The ``.keyword`` sub-field is used
-  wherever matching is against the **full, un-analyzed** value — equality,
-  membership, wildcard, prefix, and regex on string values; the analyzed base
-  path is used only for range and existence.
+* Other fields live under ``data.<field>``. A field mapped as analyzed text is
+  reached through its keyword sub-field by every operator but existence, and by
+  a sort, so a comparison is against the **full, un-analyzed** value. Any other
+  field (keyword, number, date, boolean) is reached directly. A string equality
+  or a pattern on a field that holds no strings matches nothing.
+* A text field with no keyword sub-field (a custom mapping) has no full value to
+  reach: an equality or pattern on it matches nothing, a range compares its
+  analyzed terms, and Elasticsearch refuses to sort by it.
 
 Semantics:
 
@@ -40,7 +44,7 @@ Semantics:
   matches literally, mirroring SQL ``LIKE`` where only ``%`` and ``_`` are
   wildcards. The case-insensitive ``wildcard`` form requires Elasticsearch
   ≥ 7.10.
-* ``REGEX`` runs against the **full field value** via the ``.keyword`` sub-field
+* ``REGEX`` runs against the **full field value** via the keyword sub-field
   (case-sensitive), so a pattern matches the whole string — matching the
   in-memory (``re.search``) and SQL backends. Against the analyzed base path a
   ``regexp`` would match per-token (and lowercased), which is why the keyword
@@ -64,24 +68,176 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..query import Operator, is_storage_key_field
+from ..query import Operator, SortOrder, is_storage_key_field
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Generator, Sequence
+    from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping, Sequence
 
-    from ..query import Filter
-    from ..query_logic import Condition
+    from ..query import Filter, Query, SortSpec
+    from ..query_logic import ComplexQuery, Condition
 
 
-# Operators that use the ``.keyword`` sub-field for exact matching on strings.
+# Operators that match a string exactly.
 _KEYWORD_EQUALITY_OPS = frozenset({Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN})
-# Pattern operators always match against the full, un-analyzed value, so they
-# unconditionally target the ``.keyword`` sub-field. ``REGEX`` is here (not on
-# the analyzed base path) so a pattern matches the whole string rather than a
-# single analyzed token — see the module Semantics note.
+# Operators whose operand is a pattern over the full, un-analyzed string.
 _KEYWORD_PATTERN_OPS = frozenset(
     {Operator.LIKE, Operator.NOT_LIKE, Operator.STARTS_WITH, Operator.REGEX}
 )
+
+
+_EXISTENCE_OPS = frozenset({Operator.EXISTS, Operator.NOT_EXISTS})
+
+#: Elasticsearch types whose terms are words rather than the stored value.
+_ANALYZED_TYPES = frozenset({"text", "match_only_text"})
+#: Elasticsearch types that hold a string's full value.
+_EXACT_STRING_TYPES = frozenset({"keyword", "constant_keyword", "wildcard", "flattened"})
+#: Elasticsearch types for which a string is not a value but a spelling of one:
+#: it reads ``"3"`` as the number and refuses a string that spells none.
+_NOT_STRING_TYPES = frozenset(
+    {
+        "byte",
+        "short",
+        "integer",
+        "long",
+        "unsigned_long",
+        "half_float",
+        "float",
+        "double",
+        "scaled_float",
+        "boolean",
+    }
+)
+
+
+class FieldTypes:
+    """How one index maps the fields queries name, learned as they are named.
+
+    The I/O is the backend's. It asks :meth:`unknown` which fields a query names
+    that are not known yet, requests the field capabilities of
+    :meth:`request_fields`, and hands the response to :meth:`learn`. A field the
+    index does not map yet is not remembered, so it is asked about again: a later
+    write may map it. A mapped field's type never changes within an index, so it
+    is kept for as long as this object is.
+    """
+
+    def __init__(self) -> None:
+        self._types: dict[str, frozenset[str]] = {}
+        self._exact: dict[str, str] = {}
+
+    def unknown(self, names: Iterable[str]) -> list[str]:
+        """The data fields among ``names`` whose mapping is not known."""
+        return sorted({n for n in names if not is_storage_key_field(n) and n not in self._types})
+
+    @staticmethod
+    def request_fields(names: Iterable[str]) -> list[str]:
+        """The field patterns to request capabilities for: each field and its sub-fields."""
+        return [path for n in names for path in (f"data.{n}", f"data.{n}.*")]
+
+    def learn(self, names: Iterable[str], capabilities: Mapping[str, Mapping[str, Any]]) -> None:
+        """Record what a field-capabilities response says of ``names``.
+
+        Args:
+            names: The fields that were asked about.
+            capabilities: The response's ``fields``: path to its types.
+        """
+        for name in names:
+            path = f"data.{name}"
+            # An index alias may span indices that do not all map the field.
+            types = frozenset(capabilities.get(path, {})) - {"unmapped"}
+            if not types:
+                continue
+            self._types[name] = types
+            if types & _ANALYZED_TYPES:
+                exact = sorted(
+                    sub
+                    for sub, sub_types in capabilities.items()
+                    if sub.startswith(f"{path}.") and _EXACT_STRING_TYPES & set(sub_types)
+                )
+                if exact:
+                    preferred = f"{path}.keyword"
+                    self._exact[name] = preferred if preferred in exact else exact[0]
+
+    def value_path(self, name: str) -> str:
+        """The path holding a field's full value; the field itself when nothing else does."""
+        if is_storage_key_field(name):
+            # A top-level keyword mirroring ``_id``, which cannot itself be sorted.
+            return "id"
+        return self._exact.get(name, f"data.{name}")
+
+    def holds_exact_strings(self, name: str) -> bool:
+        """Whether :meth:`value_path` can be matched against a pattern.
+
+        True for a field that is not mapped, which no document has a value for.
+        """
+        if is_storage_key_field(name) or name in self._exact or name not in self._types:
+            return True
+        return bool(self._types[name] & _EXACT_STRING_TYPES)
+
+    def equals_no_string(self, name: str) -> bool:
+        """Whether no string equals a field's value, by how it is mapped.
+
+        True for a number or a boolean, and for text whose full value nothing
+        holds: its own terms are words, and a word is not the value. False for a
+        date, an IP address or any other type a string is the way to write:
+        Elasticsearch reads the operand as the type, as it does a range's.
+        """
+        if name in self._exact or name not in self._types:
+            return False
+        return self._types[name] <= _NOT_STRING_TYPES | _ANALYZED_TYPES
+
+
+def condition_fields(condition: Condition | None) -> set[str]:
+    """The fields a condition tree's filters name."""
+    from ..query_logic import FilterCondition, LogicCondition
+
+    if isinstance(condition, FilterCondition):
+        return {condition.filter.field}
+    if isinstance(condition, LogicCondition):
+        return {name for sub in condition.conditions for name in condition_fields(sub)}
+    return set()
+
+
+def query_fields(query: Query | ComplexQuery | None) -> set[str]:
+    """The fields a query filters or sorts by, whose mapping its translation needs."""
+    from ..query_logic import ComplexQuery
+
+    if query is None:
+        return set()
+    if isinstance(query, ComplexQuery):
+        named = condition_fields(query.condition)
+    else:
+        named = {f.field for f in query.filters}
+    return named | {s.field for s in query.sort_specs}
+
+
+def build_query(query: Query | ComplexQuery, types: FieldTypes) -> dict[str, Any]:
+    """Translate either kind of query's filters; ``match_all`` when it has none."""
+    from ..query_logic import ComplexQuery
+
+    if not isinstance(query, ComplexQuery):
+        return build_bool_query(query.filters, types)
+    if query.condition is None:
+        return {"match_all": {}}
+    return build_complex_es_query(query.condition, types)
+
+
+def build_sort(sort_specs: Sequence[SortSpec], types: FieldTypes) -> list[dict[str, Any]]:
+    """Translate a query's sort, reaching each field's full value.
+
+    A record with no value sorts last in either direction, as on every backend.
+    ``unmapped_type`` says the same of a field no record has, which Elasticsearch
+    otherwise refuses to sort by.
+    """
+    return [
+        {
+            types.value_path(spec.field): {
+                "order": "desc" if spec.order == SortOrder.DESC else "asc",
+                "missing": "_last",
+                "unmapped_type": "keyword",
+            }
+        }
+        for spec in sort_specs
+    ]
 
 
 def _is_string_value(value: Any) -> bool:
@@ -95,24 +251,23 @@ def _is_string_value(value: Any) -> bool:
     return bool(value) and isinstance(value, list) and isinstance(value[0], str)
 
 
-def _field_path(filter_obj: Filter) -> str:
-    """The document path an operator's clause should target for this filter.
-
-    ``id`` resolves to the top-level ``id`` keyword; other fields to
-    ``data.<field>`` with the ``.keyword`` suffix appended where exact matching
-    on a string applies.
-    """
-    if is_storage_key_field(filter_obj.field):
-        # Already a keyword — never suffixed.
-        return "id"
-
-    base = f"data.{filter_obj.field}"
+def _field_path(filter_obj: Filter, types: FieldTypes) -> str:
+    """The document path an operator's clause should target for this filter."""
+    name = filter_obj.field
     op = filter_obj.operator
+    if op in _EXISTENCE_OPS and not is_storage_key_field(name):
+        # A sub-field leaves out a value past its ``ignore_above``.
+        return f"data.{name}"
     if op in _KEYWORD_PATTERN_OPS:
-        return f"{base}.keyword"
-    if op in _KEYWORD_EQUALITY_OPS and _is_string_value(filter_obj.value):
-        return f"{base}.keyword"
-    return base
+        matches_nothing = not types.holds_exact_strings(name)
+    elif op in _KEYWORD_EQUALITY_OPS and _is_string_value(filter_obj.value):
+        matches_nothing = types.equals_no_string(name)
+    else:
+        matches_nothing = False
+    if matches_nothing:
+        # No string is there to match, and a path nothing maps says so.
+        return f"data.{name}.keyword"
+    return types.value_path(name)
 
 
 def _sql_wildcard_to_es(pattern: str) -> str:
@@ -134,7 +289,7 @@ def _sql_wildcard_to_es(pattern: str) -> str:
     return escaped.replace("%", "*").replace("_", "?")
 
 
-def build_filter_es_query(filter_obj: Filter) -> dict[str, Any]:
+def build_filter_es_query(filter_obj: Filter, types: FieldTypes) -> dict[str, Any]:
     """Translate one :class:`Filter` into an Elasticsearch Query-DSL clause.
 
     Pure and self-contained: negations wrap themselves in ``bool``/``must_not``,
@@ -142,7 +297,7 @@ def build_filter_es_query(filter_obj: Filter) -> dict[str, Any]:
     Raises ``ValueError`` for an operator this translator cannot express.
     """
     op = filter_obj.operator
-    field_path = _field_path(filter_obj)
+    field_path = _field_path(filter_obj, types)
     value = filter_obj.value
 
     if op == Operator.EQ:
@@ -188,8 +343,7 @@ def build_filter_es_query(filter_obj: Filter) -> dict[str, Any]:
     if op == Operator.NOT_EXISTS:
         return {"bool": {"must_not": {"exists": {"field": field_path}}}}
     if op == Operator.REGEX:
-        # ``field_path`` is the ``.keyword`` sub-field (or ``id``), so the
-        # regexp matches the full value, not a single analyzed token.
+        # ``field_path`` holds the full value, not a single analyzed token.
         return {"regexp": {field_path: value}}
     if op == Operator.STARTS_WITH:
         # Literal, case-sensitive prefix — no case_insensitive flag.
@@ -205,17 +359,17 @@ def build_filter_es_query(filter_obj: Filter) -> dict[str, Any]:
     raise ValueError(f"Unsupported operator: {op}")
 
 
-def build_bool_query(filters: Sequence[Filter]) -> dict[str, Any]:
+def build_bool_query(filters: Sequence[Filter], types: FieldTypes) -> dict[str, Any]:
     """Wrap per-filter clauses in a single ``bool``/``must`` query.
 
     Returns ``{"match_all": {}}`` for an empty filter sequence. This is the
     outer wrapper both backends use for the plain ``Query`` path.
     """
-    must = [build_filter_es_query(f) for f in filters]
+    must = [build_filter_es_query(f, types) for f in filters]
     return {"bool": {"must": must}} if must else {"match_all": {}}
 
 
-def build_complex_es_query(condition: Condition) -> dict[str, Any]:
+def build_complex_es_query(condition: Condition, types: FieldTypes) -> dict[str, Any]:
     """Translate a ``ComplexQuery`` condition tree into a nested ``bool`` query.
 
     ``AND`` → ``must``, ``OR`` → ``should`` (``minimum_should_match: 1``),
@@ -231,10 +385,10 @@ def build_complex_es_query(condition: Condition) -> dict[str, Any]:
     from ..query_logic import FilterCondition, LogicCondition, LogicOperator
 
     if isinstance(condition, FilterCondition):
-        return build_filter_es_query(condition.filter)
+        return build_filter_es_query(condition.filter, types)
 
     if isinstance(condition, LogicCondition):
-        clauses = [build_complex_es_query(sub) for sub in condition.conditions]
+        clauses = [build_complex_es_query(sub, types) for sub in condition.conditions]
 
         if condition.operator == LogicOperator.AND:
             if not clauses:
