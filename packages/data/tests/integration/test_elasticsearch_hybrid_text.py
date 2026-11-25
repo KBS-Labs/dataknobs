@@ -126,6 +126,49 @@ async def test_a_hybrid_search_on_plain_text(db: Database, strategy: FusionStrat
     assert {result.record.storage_id for result in results} == set(ROWS)
 
 
+#: Fields a word cannot be looked up in, each with a value a record can hold.
+NOT_TEXT: dict[str, tuple[dict[str, Any], Any]] = {
+    "long": ({"type": "long"}, 5),
+    "date": ({"type": "date"}, "2024-01-01"),
+    "boolean": ({"type": "boolean"}, True),
+    "ip": ({"type": "ip"}, "10.0.0.1"),
+    "integer_range": ({"type": "integer_range"}, {"gte": 1, "lte": 5}),
+    "geo_point": ({"type": "geo_point"}, {"lat": 1.0, "lon": 1.0}),
+}
+
+
+async def _with_field(db: Database, name: str, kind: str) -> None:
+    """Map ``name`` as ``kind``, and have a record that holds a value there."""
+    mapping, value = NOT_TEXT[kind]
+    client = db._require_client()
+    properties = {"data": {"properties": {name: mapping}}}
+    await settle(client.indices.put_mapping(index=db.index_name, properties=properties))
+    row = {"title": "grey fox", name: value, "v": [1.0, 0.0, 0.0]}
+    await settle(db.create(Record(data=row, id="d")))
+
+
+@pytest.mark.parametrize("kind", NOT_TEXT)
+async def test_a_field_that_holds_no_words_matches_none(db: Database, kind: str) -> None:
+    await _with_field(db, "other", kind)
+    assert await found(db, "fox", ["other"]) == []
+    assert set(await found(db, "fox", ["title", "other"])) == {"a", "d"}
+
+
+async def test_a_vector_field_matches_no_word(db: Database) -> None:
+    assert await found(db, "fox", ["title", "v"]) == ["a"]
+
+
+async def test_a_default_field_that_holds_no_words(db: Database) -> None:
+    """``text`` is searched when no field is named, whatever the index holds there."""
+    await _with_field(db, "text", "boolean")
+    assert set(await found(db, "fox", None)) == {"a", "b", "d"}
+
+
+async def test_a_value_a_number_field_holds_is_found(db: Database) -> None:
+    await _with_field(db, "other", "long")
+    assert await found(db, "5", ["title", "other"]) == ["d"]
+
+
 UNANSWERABLE = Query(filters=[Filter("title", Operator.NEQ, "red fox")])
 
 

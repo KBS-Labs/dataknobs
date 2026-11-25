@@ -158,7 +158,7 @@ async def test_a_stream_missing_a_shard_raises(short: Database) -> None:
 async def test_a_text_search_missing_a_shard_raises(short: Database) -> None:
     """The text half of a hybrid search, whose vector half would raise for it."""
     with pytest.raises(DatabaseError, match="no_shard_available"):
-        await short._text_search_for_hybrid("x", ["s"], k=2)
+        await settle(short._text_search_for_hybrid("x", ["s"], k=2))
 
 
 async def test_a_record_that_is_there_is_still_read(short: Database) -> None:

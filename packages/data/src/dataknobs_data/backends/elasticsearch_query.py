@@ -309,13 +309,18 @@ def build_sort(sort_specs: Sequence[SortSpec], types: FieldTypes) -> list[dict[s
 
 
 def build_text_query(query_text: str, text_fields: Sequence[str] | None) -> dict[str, Any]:
-    """The clause a hybrid search's text half matches: any word, in any field."""
+    """The clause a hybrid search's text half matches: any word, in any field.
+
+    ``lenient`` has a field that cannot hold the text match nothing. Without it
+    one number or vector field among them fails the whole search.
+    """
     return {
         "multi_match": {
             "query": query_text,
             "fields": [f"data.{f}" for f in text_fields or ("content", "title", "text")],
             "type": "best_fields",
             "operator": "or",
+            "lenient": True,
         }
     }
 

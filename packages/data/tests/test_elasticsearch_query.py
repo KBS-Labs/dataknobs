@@ -32,7 +32,7 @@ from typing import Any
 
 import pytest
 
-from dataknobs_data import Filter, Operator, Query
+from dataknobs_data import Filter, Operator, Query, Record
 from dataknobs_data.backends.elasticsearch_query import (
     FieldTypes,
     _field_path,
@@ -42,7 +42,10 @@ from dataknobs_data.backends.elasticsearch_query import (
     build_filter_es_query,
     build_query,
     build_sort,
+    build_text_query,
+    build_text_search,
     query_fields,
+    text_search_results,
 )
 from dataknobs_data.query import SortOrder, SortSpec
 from dataknobs_data.query_logic import (
@@ -839,3 +842,51 @@ def test_a_sort_reaches_each_fields_full_value() -> None:
 def test_a_type_says_which_bounds_it_can_hold(kind: str, bound: Any, relates: bool) -> None:
     """A date holds epoch milliseconds, and any field can hold a list."""
     assert _learned(x=kind).relates("x", bound) is relates
+
+
+class TestTextSearch:
+    """The text half of a hybrid search, which both twins send."""
+
+    @pytest.mark.parametrize("unnamed", [None, []])
+    def test_the_fields_searched_when_none_are_named(self, unnamed: list[str] | None) -> None:
+        fields = build_text_query("fox", unnamed)["multi_match"]["fields"]
+        assert fields == ["data.content", "data.title", "data.text"]
+
+    def test_the_clause(self) -> None:
+        assert build_text_query("red fox", ["a", "b"]) == {
+            "multi_match": {
+                "query": "red fox",
+                "fields": ["data.a", "data.b"],
+                "type": "best_fields",
+                "operator": "or",
+                "lenient": True,
+            }
+        }
+
+    def test_without_a_filter(self) -> None:
+        body = build_text_search("fox", ["a"], 3, None)
+        assert body == {"query": build_text_query("fox", ["a"]), "size": 3}
+
+    def test_a_filter_does_not_score(self) -> None:
+        kept = {"term": {"data.kind": "x"}}
+        assert build_text_search("fox", ["a"], 3, kept)["query"] == {
+            "bool": {"must": build_text_query("fox", ["a"]), "filter": kept}
+        }
+
+    def test_each_score_is_a_share_of_the_best(self) -> None:
+        hits = [{"_id": "x", "_score": 4.0}, {"_id": "y", "_score": 1.0}]
+        results = text_search_results({"max_score": 4.0, "hits": hits}, lambda hit: Record({}))
+        assert [(r.storage_id, score) for r, score in results] == [("x", 1.0), ("y", 0.25)]
+
+    def test_a_record_keeps_the_storage_id_it_has(self) -> None:
+        found = {"max_score": 1.0, "hits": [{"_id": "x", "_score": 1.0}]}
+        ((record, _),) = text_search_results(found, lambda hit: Record({}, storage_id="own"))
+        assert record.storage_id == "own"
+
+    def test_no_hits_have_no_best(self) -> None:
+        assert text_search_results({"max_score": None, "hits": []}, lambda hit: Record({})) == []
+
+    def test_a_best_score_of_zero_divides_nothing(self) -> None:
+        found = {"max_score": 0.0, "hits": [{"_id": "x", "_score": 0.0}]}
+        ((_, score),) = text_search_results(found, lambda hit: Record({}))
+        assert score == 0.0

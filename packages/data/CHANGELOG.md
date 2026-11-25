@@ -55,6 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was a substring of the first field, or every record when none were named, and
   found nothing in a `text` field with no keyword sub-field. A missing index is
   `ValueError` there too, where it was `NotFoundError`.
+- **An Elasticsearch `hybrid_search` whose `text_fields` include one that cannot
+  hold the text** (a number, date, boolean, ip, range, geo or vector field)
+  matches nothing in that field, on both backends. The async backend raised
+  `ValueError`, even when another field matched, and also when no field was named
+  and the index mapped `content`, `title` or `text` that way.
 - **BREAKING: an index the Elasticsearch backends create maps strings the same
   way whatever it first holds.** A data string is `text` with a `keyword`
   sub-field of up to 8191 characters, where it was 256, and `date_detection` is

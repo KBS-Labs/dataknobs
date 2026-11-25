@@ -261,7 +261,8 @@ results = await backend.hybrid_search(
 **Implementation:**
 - Text: BM25 multi_match query, on both backends: any word in any of
   `text_fields` (`content`, `title` and `text` when none are named). A `keyword`
-  field matches only as a whole value
+  field matches only as a whole value, and a field that cannot hold the text (a
+  number field, for a word) matches nothing
 - Vector: kNN search on dense_vector field
 - Fusion: Native RRF retriever on the async backend, else client-side
 
