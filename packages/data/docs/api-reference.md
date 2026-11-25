@@ -1423,8 +1423,9 @@ pre-filters agree:
   a value matches the negation.
 - **A `*` in a field name** is part of the name, as on every backend. Elasticsearch's
   `exists` reads it as any characters, so `EXISTS`, `NOT_EXISTS` and the negated
-  operators raise `ValueError` on a field named with one (`p*`) while the index maps
-  another that matches (`price`). Such a name is asked about by every query.
+  operators raise `ValueError` when the index maps both a field of that exact name
+  (`p*`) and another that matches (`price`). If it maps no field of that name, no
+  record has a value. Such a name is asked about by every query.
 - **`REGEX`** finds a Python pattern anywhere in the **full field value**
   (case-sensitive), as `re.search` does, except that `\d` and `\w` are ASCII.
   The pattern is translated to Lucene's syntax

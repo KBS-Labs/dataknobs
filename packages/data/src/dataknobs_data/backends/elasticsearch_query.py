@@ -40,9 +40,10 @@ Field-path rules:
   then used for all of them, and an index without it has nothing there: no
   record of its own matches, and every one with a value matches the negation.
 * A ``*`` in a name is part of the name, and no other field answers for it.
-  ``exists`` reads one as a pattern, so whether a field whose name has one has a
-  value (``EXISTS``, ``NOT_EXISTS`` and the negated operators) raises
-  ``ValueError`` while another field matches that pattern.
+  ``exists`` reads one as a pattern, so asking whether such a field has a value
+  (``EXISTS``, ``NOT_EXISTS`` and the negated operators) raises ``ValueError``
+  when the index maps both a field of that exact name and another that matches.
+  If it maps none of that name, no record has a value.
 
 Semantics:
 

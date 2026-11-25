@@ -12,11 +12,14 @@ from typing import Any
 
 import pytest
 from dataknobs_common.testing import requires_real_elasticsearch
+from elasticsearch import Elasticsearch
 
 from dataknobs_data import Filter, Operator, Query, Record
 from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 from dataknobs_data.backends.memory import SyncMemoryDatabase
+
+BACKENDS = [SyncElasticsearchDatabase, AsyncElasticsearchDatabase]
 
 pytestmark = [pytest.mark.integration, requires_real_elasticsearch]
 
@@ -52,7 +55,7 @@ async def settle(value: Any) -> Any:
     return await value if inspect.isawaitable(value) else value
 
 
-@pytest.fixture(params=[SyncElasticsearchDatabase, AsyncElasticsearchDatabase])
+@pytest.fixture(params=BACKENDS)
 async def db(
     request: pytest.FixtureRequest, make_elasticsearch_test_index: Any
 ) -> AsyncIterator[Any]:
@@ -101,3 +104,36 @@ async def test_a_field_mapped_later_is_seen(db: Any) -> None:
     await settle(db.upsert("f", Record({"price": 1})))
     with pytest.raises(ValueError, match="cannot answer EXISTS"):
         await _found(db, "p*", Operator.EXISTS, None)
+
+
+async def test_a_field_matched_only_by_its_keyword_sub_field_is_refused(db: Any) -> None:
+    """``exists`` on ``d*d`` finds ``day`` through ``day.keyword``."""
+    await settle(db.upsert("f", Record({"d*d": "x"})))
+    for op, value in ASK_FOR_A_VALUE:
+        with pytest.raises(ValueError, match="reads the"):
+            await _found(db, "d*d", op, value)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+async def test_fields_in_separate_indices_of_an_alias_are_refused(
+    backend: Any, make_elasticsearch_test_index: Any
+) -> None:
+    """The index without ``d*`` would answer for its ``day``."""
+    for config in make_elasticsearch_test_index("test_starred_alias_"):
+        starred, other, alias = (config["index"] + suffix for suffix in ("", "_other", "_alias"))
+        with Elasticsearch(f"http://{config['host']}:{config['port']}") as admin:
+            try:
+                for index, row in ((starred, {"d*": "x"}), (other, {"day": "x"})):
+                    with SyncElasticsearchDatabase({**config, "index": index}) as database:
+                        database.upsert(index, Record(row))
+                admin.indices.put_alias(index=[starred, other], name=alias)
+                db = backend({**config, "index": alias})
+                await settle(db.connect())
+                try:
+                    for op, value in ASK_FOR_A_VALUE:
+                        with pytest.raises(ValueError, match="reads the"):
+                            await _found(db, "d*", op, value)
+                finally:
+                    await settle(db.close())
+            finally:
+                admin.indices.delete(index=other, ignore_unavailable=True)
