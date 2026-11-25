@@ -175,9 +175,11 @@ class SurfaceFormLookup:
             in this table carries -- one for ``(beagle)`` or ``C.D.C.`` --
             ``0`` where no form has punctuation at either end, or None where
             the binding declares nothing. Declared for ``longest_form_tokens``'s
-            reason. Unlike that key, its absence is not refused: a scan told
-            nothing extends a window over every run of punctuation beside it,
-            which costs lookups and loses no answer
+            reason, and refused alike: a scan told nothing extends a window
+            over every run of punctuation beside it, which loses no answer but
+            costs a round trip per extension, and the run is the caller's
+            text -- so a declared scan is refused at load over a binding that
+            declares none, unless the rung sets ``max_edge``
     """
 
     table: str
@@ -781,7 +783,9 @@ class RecordEntitySource(DynamicCapabilityMixin):
         ``form_edge`` is the ``surface_forms.form_edge:`` the binding
         declared, for the reason :meth:`longest_form_tokens` is declared
         rather than counted -- or None where it declared none, which a scan
-        reads as *extend over the whole run* and answers in full.
+        reads as *extend over the whole run* and answers in full. A document
+        declaring a scan over such a binding is refused at load unless the
+        rung's own answer says its spec caps that run.
         """
         return SourceDescription(
             source_id=self._source_id,

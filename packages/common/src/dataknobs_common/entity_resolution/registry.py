@@ -163,7 +163,8 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
 
     ``bounded_by_longest_form`` is here for the same reason and answers a
     different door's question: whether this rung's cost depends on a number
-    the source may not be able to supply. Both are derived rather than
+    the source may not be able to supply, and ``bounded_by_form_edge`` asks
+    it about the second such number. All three are derived rather than
     restated, because two spellings of one fact drift and the drift is
     silent: a rung marked here and not on the class refuses nothing, and a
     rung marked on the class and not here is not refused early.
@@ -196,17 +197,32 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
     that configuration (a ``max_window`` caps it, a tokenizer stops it
     trusting the count), and the class is the only place that rule can live
     without a door restating it. A rung that defines no such classmethod
-    gets no entry, so its metadata is what it was, and a door reading the
-    key falls back to *bounded exactly when the source declares a count*.
+    and inherits none gets no entry, so its metadata is what it was, and a
+    door reading the key falls back to *bounded exactly when the source
+    declares a count*.
 
-    **Unlike the two facts, it is not inherited.** The answer reads a spec
+    ``edge_bounded``, ``(spec, form_edge) -> bool``, is the same question about
+    the second bound, beside the third fact, ``bounded_by_form_edge``: whether
+    the rung widens its probes over punctuation as far as the source's
+    ``form_edge`` allows -- see
+    :meth:`~dataknobs_common.entity_resolution.ScanningSignal.edge_bounded`.
+    A rung with the fact and no answer of its own or its parents' falls back to
+    *bounded exactly when the source declares an edge*.
+
+    **Unlike the facts, the answers are not inherited.** The answer reads a spec
     the way the class's own factory does, and a subclass is usually
     registered with a factory of its own -- one that fixes a tokenizer in
     code, say, which no spec names -- so an inherited answer could accept a
     scan that enumerates every window. Only a class whose own body defines
-    ``window_bounded`` publishes it; a subclass that reads its spec as its
-    parent's factory does says so by defining it and delegating to
-    ``super()``.
+    ``window_bounded`` or ``edge_bounded`` publishes it. A class that only
+    inherits one publishes ``False`` under that key: it runs its parent's
+    enumeration, which stops trusting a declared number when the tokenizer or
+    the fold is its own, and nothing says whether this factory sets one, so a
+    door reads it as unbounded whatever the source declares. Setting the name
+    to ``None`` does not withdraw it: the parent's enumeration still runs, so
+    that is published as ``False`` too. A subclass that
+    reads its spec as its parent's factory does says so by defining the
+    classmethod and delegating to ``super()``.
     Signal metadata is read through ``get_metadata`` and never serialised,
     so a callable here travels nowhere.
 
@@ -219,16 +235,22 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
 
     Returns:
         A new dict: ``base``, plus each fact read off ``rung``, plus
-        ``window_bounded`` where ``rung``'s own body defines it.
+        ``window_bounded`` and ``edge_bounded``: the classmethod where
+        ``rung``'s own body defines it, ``False`` where only a base class
+        does, and no entry where neither does.
     """
     metadata = dict(
         base,
         reads_surface_forms=getattr(rung, "reads_surface_forms", False),
         bounded_by_longest_form=getattr(rung, "bounded_by_longest_form", False),
+        bounded_by_form_edge=getattr(rung, "bounded_by_form_edge", False),
     )
-    window_bounded = getattr(rung, "window_bounded", None)
-    if "window_bounded" in vars(rung) and callable(window_bounded):
-        metadata["window_bounded"] = window_bounded
+    for question in ("window_bounded", "edge_bounded"):
+        answer = getattr(rung, question, None)
+        if callable(answer) and question in vars(rung):
+            metadata[question] = answer
+        elif any(callable(getattr(base_class, question, None)) for base_class in rung.__mro__):
+            metadata[question] = False
     return metadata
 
 
@@ -344,6 +366,7 @@ SEMANTIC_ASYNC_MARK_METADATA = {
     "requires_install": "pip install dataknobs-data",
     "reads_surface_forms": False,
     "bounded_by_longest_form": False,
+    "bounded_by_form_edge": False,
 }
 async_signal_backends.declare_unavailable(
     "semantic",

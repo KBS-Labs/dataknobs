@@ -143,6 +143,10 @@ class SemanticSignal:
     #: declared form.
     bounded_by_longest_form = False
 
+    #: ``False``, for the same reason: no windows, so no punctuation beside
+    #: one to widen over.
+    bounded_by_form_edge = False
+
     #: A neighbourhood rather than a form the vocabulary carries.
     kind = EvidenceKind.INFERRED
 

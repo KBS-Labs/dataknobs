@@ -60,7 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the original on `__cause__`. Every refusal a built-in tokenizer,
   variant rule or rung writes still reaches the author word for word: a
   parameter typo such as `{name: words, apostrophe: keep}` reads exactly as
-  before. A factory returning something not callable is named by its type
+  before. The two `*_from_config` functions raise `ValidationError` for every
+  way a name cannot be built: a factory's own `NotFoundError` included, and a
+  name declared with `declare_unavailable`, which is refused as `tokenizer 'x'
+  is not available here: <reason>` rather than as unknown. A factory returning
+  something not callable is named by its type
   rather than its `repr`, and so is a value in one of these refusals that a
   configuration document could not have written: a live object handed to
   `tokenizer_from_config`, `rules_from_config`, a rung's count, threshold or
@@ -2402,7 +2406,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a hit with no alphanumeric character keeps the empty core at its start and
   stays apart from its neighbours. Generic over the hit type: `ScanningSignal`
   calls it over `FormHit`s, and a second scanner over `probe_spans` calls it
-  over its own.
+  over its own. A hit whose span is not inside the text (`0 <= start <= end <=
+  len(text)`) is refused with `ValueError` naming the hit, as `probe_spans`
+  refuses a caller's token.
 
 - **A tokenizer for the scanning rungs: `tokenizer=` on `ScanningSignal`,
   `LexicalSignal` and their async twins, with `Tokenizer`, `TOKENIZERS` and
@@ -2411,13 +2417,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   windows start and end on its tokens. A document names one under
   `tokenizer:` on a `kind: scan` or `kind: lexical` rung — a name in
   `TOKENIZERS`, or `{name: ..., <params>}` — and an unknown name is refused
-  with `ValidationError` listing the registered ones. `default` is registered
+  with `ValidationError` listing the registered ones, at the document doors;
+  through `signal_backends.create` it arrives as the `OperationError` wrapping
+  it. `default` is registered
   and is `token_spans` itself. A scan with any other tokenizer does not take
   its window or edge bound from the source, whose counts are in default
   tokens, so `max_window` and `max_edge` are its only caps — as for a rung with
   its own `normalizer`. `LexicalSignal`'s bound is in characters and is
   unchanged by a tokenizer; its `max_query_tokens` counts the tokenizer's
-  tokens.
+  tokens. The async twins call any tokenizer except `token_spans` off the
+  event loop, through `asyncio.to_thread`, because a tokenizer may load a
+  dictionary or call a service — so a tokenizer must be thread-safe, since
+  concurrent queries call one instance from several threads. Both lexical rungs
+  count a query's tokens before they read the catalogue.
 
 - **`ScanningSignal.window_bounded(spec, longest_form_tokens)`** and its async
   twin's: whether a rung built from a configuration spec bounds its window
@@ -2428,7 +2440,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumer's rung declaring `bounded_by_longest_form` opts in by defining the
   same classmethod on its own class: the answer is not inherited, because a
   subclass's factory may read the spec differently, so a subclass that wants
-  to be asked defines it and delegates to `super()`.
+  to be asked defines it and delegates to `super()`. One that does not, or that
+  sets the name to `None`, is published as `False`, and a door reads it as
+  unbounded.
+  `ScanningSignal.edge_bounded(spec, form_edge)` is the same question about
+  the second bound, how far a probe widens over punctuation, published as
+  `edge_bounded` on the same terms beside a third class fact,
+  `bounded_by_form_edge` (true on the two scan twins only). Each answer reads
+  its cap first (`max_window`, `max_edge`), so a capped spec builds no
+  tokenizer to answer.
 
 - **`SourceDescription.form_edge: int | None`, with no default**, for the
   reason `declares` has none. How many punctuation characters the widest edge
@@ -2741,11 +2761,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`declared_signal_metadata(rung, base)`**, exported from
   `dataknobs_common.entity_resolution`: the registered metadata for a rung,
-  with `reads_surface_forms` and `bounded_by_longest_form` read off the class
-  rather than restated beside it. Registering a rung is the extension point,
-  and both keys are read at *load* time by doors that hold a composition and
-  no instances — so a registration that omits one is not refused, it is never
-  asked about, while the rung's own construction-time guard still fires. The
+  with `reads_surface_forms`, `bounded_by_longest_form` and
+  `bounded_by_form_edge` read off the class rather than restated beside it, and
+  the class's `window_bounded` and `edge_bounded` answers published with them.
+  Registering a rung is the extension point, and these keys are read at *load*
+  time by doors that hold a composition and no instances — so a registration
+  that omits one is not refused, it is never asked about, while the rung's own construction-time guard still fires. The
   facts are read with a default, so a rung written against the bare
   `MatchSignal` protocol rather than against `DeclaredSignal` can use it too;
   the class attribute is the single spelling in either case.

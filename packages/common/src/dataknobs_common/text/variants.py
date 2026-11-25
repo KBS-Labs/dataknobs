@@ -52,13 +52,13 @@ from types import MappingProxyType
 from typing import Any, Generic, TypeVar
 
 from dataknobs_common.exceptions import (
-    OperationError,
     ValidationError,
     _given,
     _given_value,
     _written_by_dataknobs,
 )
-from dataknobs_common.registry import PluginRegistry, _shown_failure
+from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.text._named import NamedSeam, built_from_config
 from dataknobs_common.text.scan import default_normalizer, token_spans
 
 __all__ = [
@@ -633,6 +633,16 @@ VARIANT_RULES.register("split", _split_factory)
 VARIANT_RULES.register("strip_prefix", _strip_prefix_factory)
 del _name, _rule
 
+_SEAM = NamedSeam(
+    registry=VARIANT_RULES,
+    key="rule",
+    noun="variant rule",
+    plural="rules",
+    result="rule",
+    shape="a rule name or a mapping with a 'rule' naming one",
+    context_key="rule",
+)
+
 
 def rules_from_config(specs: Sequence[str | Mapping[str, Any]]) -> tuple[Rule, ...]:
     """The rules a configuration names, built, in the order given.
@@ -650,8 +660,12 @@ def rules_from_config(specs: Sequence[str | Mapping[str, Any]]) -> tuple[Rule, .
 
     Raises:
         ValidationError: For a spec that is neither a name nor a mapping with a
-            ``rule``, a name :data:`VARIANT_RULES` does not hold, or parameters
-            the named rule refuses. The message names the rule.
+            ``rule``, a name :data:`VARIANT_RULES` does not hold or holds as
+            unavailable, a factory that fails, or one that returns something
+            not callable. The message names the rule, and an unavailable one
+            gives its reason. A factory's own words are repeated only when
+            dataknobs wrote them; otherwise its error is named by type and
+            kept under ``__cause__``.
     """
     if isinstance(specs, str | bytes) or not isinstance(specs, Sequence):
         raise _written_by_dataknobs(
@@ -662,53 +676,9 @@ def rules_from_config(specs: Sequence[str | Mapping[str, Any]]) -> tuple[Rule, .
         )
     built: list[Rule] = []
     for position, spec in enumerate(specs):
-        config = {"rule": spec} if isinstance(spec, str) else spec
-        name = config.get("rule") if isinstance(config, Mapping) else None
-        if not isinstance(name, str) or not name:
-            raise _written_by_dataknobs(
-                ValidationError(
-                    f"variant rule {position} must be a rule name or a mapping with a "
-                    f"'rule' naming one; given {_given(spec)}",
-                    context={"position": position, "spec": _given_value(spec)},
-                )
-            )
-        if not VARIANT_RULES.is_registered(name):
-            raise _written_by_dataknobs(
-                ValidationError(
-                    f"unknown variant rule {name!r}. Registered rules: "
-                    f"{sorted(VARIANT_RULES.list_keys())}",
-                    context={"rule": name, "position": position},
-                )
-            )
-        try:
-            rule = VARIANT_RULES.create(config=dict(config))
-        except OperationError as error:
-            # A consumer factory's text may carry what it was handed, so unless
-            # dataknobs wrote it, it is named by type and kept on ``__cause__``.
-            reason = _shown_failure(error)
-            if reason is None:
-                # Names only the rule and the error's type, so it is ours.
-                raise _written_by_dataknobs(
-                    ValidationError(
-                        f"variant rule {name!r} could not be built "
-                        f"({type(error.__cause__).__name__})",
-                        context={"rule": name, "position": position},
-                    )
-                ) from error
-            raise _written_by_dataknobs(
-                ValidationError(
-                    f"variant rule {name!r} {reason}",
-                    context={"rule": name, "position": position},
-                )
-            ) from error
-        if not callable(rule):
-            raise _written_by_dataknobs(
-                ValidationError(
-                    f"variant rule {name!r}'s factory returned a {type(rule).__name__}, "
-                    f"which is not callable; a factory returns a rule",
-                    context={"rule": name, "position": position},
-                )
-            )
+        name, rule = built_from_config(
+            _SEAM, spec, subject=f"variant rule {position}", context={"position": position}
+        )
         built.append(rule if _rule_name(rule) == name else _Named(rule, name))
     return tuple(built)
 

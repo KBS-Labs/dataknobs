@@ -2205,14 +2205,15 @@ async def test_a_declared_scan_over_a_binding_that_cannot_bound_it_is_refused() 
 
 
 async def test_a_declared_scan_loads_where_the_binding_declares_its_bound() -> None:
-    """The refusal's door out is the key it names."""
+    """The refusal's doors out are the keys it names: a count and an edge."""
     registry = OntologyRegistry.from_components(
-        config=OntologyConfig(**_scanning_document(longest_form_tokens=4)),
+        config=OntologyConfig(**_scanning_document(longest_form_tokens=4, form_edge=0)),
         database=AsyncMemoryDatabase(),
     )
     try:
         ontology = await registry.load()
         assert ontology.entities.longest_form_tokens() == 4
+        assert ontology.entities.describe().form_edge == 0
     finally:
         await registry.close()
 
@@ -2249,10 +2250,12 @@ async def _loads(document: dict[str, Any]) -> None:
 async def test_a_declared_scan_that_caps_its_own_window_loads_without_a_count() -> None:
     """``max_window`` bounds every probe, so the binding owes no count.
 
+    And ``max_edge`` bounds how far each probe widens, so it owes no edge.
+
     The refusal read the rung kind and never the spec, so it turned this away
     although the rung would probe at most four tokens per window.
     """
-    await _loads(_scanning_document(rung={"kind": "scan", "max_window": 4}))
+    await _loads(_scanning_document(rung={"kind": "scan", "max_window": 4, "max_edge": 0}))
 
 
 @pytest.fixture
@@ -2285,7 +2288,9 @@ async def test_a_declared_scan_with_its_own_tokenizer_does_not_lean_on_the_count
         await _loads(document)
 
     capped = _scanning_document(
-        rung={"kind": "scan", "tokenizer": "segmenter", "max_window": 4}, longest_form_tokens=4
+        rung={"kind": "scan", "tokenizer": "segmenter", "max_window": 4, "max_edge": 0},
+        longest_form_tokens=4,
+        form_edge=0,
     )
     await _loads(capped)
 
@@ -2306,12 +2311,14 @@ async def test_the_remedy_offers_only_what_would_bound_this_rung() -> None:
     assert "max_window" in str(raised.value)
     assert "must declare" not in str(raised.value)
 
-    await _loads(_scanning_document(rung={**rung, "max_window": 4}))
+    await _loads(_scanning_document(rung={**rung, "max_window": 4, "max_edge": 0}))
 
 
 async def test_a_declared_scan_naming_the_default_tokenizer_keeps_the_count() -> None:
     await _loads(
-        _scanning_document(rung={"kind": "scan", "tokenizer": "default"}, longest_form_tokens=4)
+        _scanning_document(
+            rung={"kind": "scan", "tokenizer": "default"}, longest_form_tokens=4, form_edge=0
+        )
     )
 
 
@@ -2357,11 +2364,332 @@ async def test_a_consumer_rung_with_no_answer_is_read_as_before() -> None:
     """
     from dataknobs_common.entity_resolution import async_signal_backends
 
-    assert "window_bounded" not in async_signal_backends.get_metadata("consumer_scan")
+    metadata = async_signal_backends.get_metadata("consumer_scan")
+    assert "window_bounded" not in metadata
     rung = {"kind": "consumer_scan", "max_window": 4}
     with pytest.raises(ValidationError, match="longest_form_tokens"):
         await _loads(_scanning_document(rung=rung))
+    # Declaring neither the edge fact nor an answer, it predates the edge
+    # question and is asked nothing about it: no `form_edge` needed to load.
+    assert metadata["bounded_by_form_edge"] is False
     await _loads(_scanning_document(rung=rung, longest_form_tokens=4))
+
+
+async def test_a_declared_scan_over_a_binding_with_no_edge_is_refused() -> None:
+    """The second bound, refused on the window's terms.
+
+    A probe is widened over the punctuation beside it as far as the source's
+    ``form_edge`` allows. A live table declaring none leaves the whole run,
+    and the run is the caller's text: one token between two 300-character
+    rules is 90,600 reads, each a round trip. A count bounds the window and
+    says nothing about that, so a binding declaring only a count is refused,
+    naming both keys that would bound the edge.
+    """
+    with pytest.raises(ValidationError) as raised:
+        await _loads(_scanning_document(longest_form_tokens=4))
+    message = str(raised.value)
+    assert "form_edge" in message and "max_edge" in message
+    assert "longest_form_tokens" not in message, "the window is bounded; only the edge is asked"
+    assert raised.value.context["edge_rungs"] == ["scan"]
+    assert raised.value.context["window_rungs"] == []
+
+
+@pytest.mark.parametrize(
+    ("rung", "lookup"),
+    [
+        ({"kind": "scan"}, {"longest_form_tokens": 4, "form_edge": 0}),
+        ({"kind": "scan", "max_edge": 0}, {"longest_form_tokens": 4}),
+        ({"kind": "scan", "max_window": 4, "max_edge": 2}, {}),
+    ],
+    ids=["binding-declares-both", "rung-caps-edge", "rung-caps-both"],
+)
+async def test_a_declared_scan_loads_once_both_bounds_are_stated(
+    rung: dict[str, Any], lookup: dict[str, Any]
+) -> None:
+    await _loads(_scanning_document(rung=rung, **lookup))
+
+
+@pytest.mark.usefixtures("registered_tokenizer")
+async def test_a_scan_with_its_own_tokenizer_is_offered_only_max_edge() -> None:
+    """A declared edge was measured beside default tokens; this rung uses its own.
+
+    So declaring ``form_edge`` would not bound it, and the refusal does not
+    send its author there: ``max_edge`` is the only remedy named, even over a
+    binding that declares an edge.
+    """
+    rung = {"kind": "scan", "tokenizer": "segmenter", "max_window": 4}
+    for lookup in ({"longest_form_tokens": 4}, {"longest_form_tokens": 4, "form_edge": 0}):
+        with pytest.raises(ValidationError) as raised:
+            await _loads(_scanning_document(rung=rung, **lookup))
+        message = str(raised.value)
+        assert "max_edge" in message
+        assert "must declare" not in message
+    await _loads(_scanning_document(rung={**rung, "max_edge": 0}, longest_form_tokens=4))
+
+
+async def test_a_document_missing_both_bounds_is_told_both_at_once() -> None:
+    """One error, both remedies: the commonest document lacks both numbers."""
+    with pytest.raises(ValidationError) as raised:
+        await _loads(_scanning_document())
+    message = str(raised.value)
+    assert "longest_form_tokens" in message and "max_window" in message
+    assert "form_edge" in message and "max_edge" in message
+    assert raised.value.context["window_rungs"] == ["scan"]
+    assert raised.value.context["edge_rungs"] == ["scan"]
+
+
+class _ConsumerEdgeScan:
+    """A consumer's scanning rung that widens over punctuation but publishes no answer."""
+
+    reads_surface_forms = True
+    bounded_by_longest_form = True
+    bounded_by_form_edge = True
+
+
+@pytest.fixture
+def consumer_edge_scan() -> Any:
+    """``consumer_edge_scan`` registered in both flavours, with the fact and no answer."""
+    from dataknobs_common.entity_resolution import (
+        AsyncScanningSignal,
+        ScanningSignal,
+        async_signal_backends,
+        declared_signal_metadata,
+        signal_backends,
+    )
+
+    signal_backends.register(
+        "consumer_edge_scan",
+        lambda config: ScanningSignal(config["entities"]),
+        metadata=declared_signal_metadata(
+            _ConsumerEdgeScan, {"flavour": "sync", "needs_io": False}
+        ),
+    )
+    async_signal_backends.register(
+        "consumer_edge_scan",
+        lambda config: AsyncScanningSignal(config["entities"]),
+        metadata=declared_signal_metadata(
+            _ConsumerEdgeScan, {"flavour": "async", "needs_io": False}
+        ),
+    )
+    yield
+    signal_backends.unregister("consumer_edge_scan")
+    async_signal_backends.unregister("consumer_edge_scan")
+
+
+@pytest.mark.usefixtures("consumer_edge_scan")
+async def test_a_consumer_rung_with_the_edge_fact_and_no_answer_needs_a_declared_edge() -> None:
+    """No ``edge_bounded``: bounded exactly when the binding declares ``form_edge``.
+
+    Its spec's keys are its own, so the door does not read ``max_edge`` off it.
+    """
+    rung = {"kind": "consumer_edge_scan", "max_edge": 0}
+    with pytest.raises(ValidationError, match="form_edge"):
+        await _loads(_scanning_document(rung=rung, longest_form_tokens=4))
+    await _loads(_scanning_document(rung=rung, longest_form_tokens=4, form_edge=0))
+
+
+@pytest.fixture
+def subclassed_scan() -> Any:
+    """A ``ScanningSignal`` subclass with its own factory and no answer of its own."""
+    from dataknobs_common.entity_resolution import (
+        AsyncScanningSignal,
+        async_signal_backends,
+        declared_signal_metadata,
+    )
+
+    class FixedTokens(AsyncScanningSignal):
+        """Registered by a factory that fixes a tokenizer the spec never names."""
+
+    async_signal_backends.register(
+        "fixed_scan",
+        lambda config: FixedTokens(config["entities"], tokenizer=lambda text: [(0, len(text))]),
+        metadata=declared_signal_metadata(FixedTokens, {"flavour": "async", "needs_io": False}),
+    )
+    yield
+    async_signal_backends.unregister("fixed_scan")
+
+
+async def test_a_subclass_that_blanks_its_answers_is_unbounded_whatever_is_declared() -> None:
+    """Opting out of the question is not a way past the refusal."""
+    from dataknobs_common.entity_resolution import (
+        AsyncScanningSignal,
+        async_signal_backends,
+        declared_signal_metadata,
+    )
+
+    class Blanked(AsyncScanningSignal):
+        window_bounded = None  # type: ignore[assignment]
+        edge_bounded = None  # type: ignore[assignment]
+
+    async_signal_backends.register(
+        "blanked_scan",
+        lambda config: Blanked(config["entities"], tokenizer=lambda text: [(0, len(text))]),
+        metadata=declared_signal_metadata(Blanked, {"flavour": "async", "needs_io": False}),
+    )
+    try:
+        with pytest.raises(ValidationError) as raised:
+            await _loads(
+                _scanning_document(
+                    rung={"kind": "blanked_scan"}, longest_form_tokens=4, form_edge=0
+                )
+            )
+    finally:
+        async_signal_backends.unregister("blanked_scan")
+    assert raised.value.context["window_rungs"] == ["blanked_scan"]
+    assert raised.value.context["edge_rungs"] == ["blanked_scan"]
+
+
+async def test_one_remedy_names_its_rungs_once_after_the_cost() -> None:
+    """Two bounds, one remedy each: the kind is named by the problem, not again."""
+    with pytest.raises(ValidationError) as raised:
+        await _loads(_scanning_document())
+    message = str(raised.value)
+    assert "For [" not in message
+    for cost, remedy in (
+        ("n(n+1)/2 reads", "The binding must declare `surface_forms.longest_form_tokens:`"),
+        ("(r + 1)**2 - 1 reads", "The binding must declare `surface_forms.form_edge:`"),
+    ):
+        assert message.index(cost) < message.index(remedy)
+
+
+@pytest.mark.usefixtures("subclassed_scan")
+@pytest.mark.parametrize(
+    "lookup",
+    [{}, {"longest_form_tokens": 4}, {"longest_form_tokens": 4, "form_edge": 0}],
+    ids=["neither", "count", "both"],
+)
+async def test_a_subclass_that_publishes_no_answer_is_unbounded_whatever_is_declared(
+    lookup: dict[str, Any],
+) -> None:
+    """Its factory fixes a tokenizer, so the rung trusts neither declared number.
+
+    An inherited answer would read ``max_window`` and ``max_edge`` off a spec
+    this factory ignores, and reading a declared ``form_edge`` as a bound
+    loads a scan that spends 90,601 probes on one word between two
+    300-character rules. Nothing the document or the binding can say bounds
+    it, so the only remedy named is the class's own answer.
+    """
+    rung = {"kind": "fixed_scan", "max_window": 4, "max_edge": 0}
+    with pytest.raises(ValidationError) as raised:
+        await _loads(_scanning_document(rung=rung, **lookup))
+    message = str(raised.value)
+    assert "`window_bounded`" in message and "`edge_bounded`" in message
+    for useless in ("longest_form_tokens", "form_edge:", "max_window", "max_edge"):
+        assert useless not in message
+    assert raised.value.context["window_rungs"] == ["fixed_scan"]
+    assert raised.value.context["edge_rungs"] == ["fixed_scan"]
+
+
+async def test_a_subclass_that_delegates_its_answers_loads_as_its_parent_does() -> None:
+    """The remedy the refusal names, followed."""
+    from dataknobs_common.entity_resolution import (
+        AsyncScanningSignal,
+        async_signal_backends,
+        declared_signal_metadata,
+    )
+
+    class Delegating(AsyncScanningSignal):
+        @classmethod
+        def window_bounded(cls, spec: Any, longest_form_tokens: int | None) -> bool:
+            return super().window_bounded(spec, longest_form_tokens)
+
+        @classmethod
+        def edge_bounded(cls, spec: Any, form_edge: int | None) -> bool:
+            return super().edge_bounded(spec, form_edge)
+
+    async_signal_backends.register(
+        "delegating_scan",
+        lambda config: Delegating(config["entities"]),
+        metadata=declared_signal_metadata(Delegating, {"flavour": "async", "needs_io": False}),
+    )
+    try:
+        await _loads(
+            _scanning_document(rung={"kind": "delegating_scan"}, longest_form_tokens=4, form_edge=0)
+        )
+    finally:
+        async_signal_backends.unregister("delegating_scan")
+
+
+@pytest.mark.usefixtures("consumer_edge_scan")
+async def test_a_kind_with_no_answer_is_offered_only_the_binding_keys() -> None:
+    """Its spec is never read, so a cap it already sets is not a remedy."""
+    rung = {"kind": "consumer_edge_scan", "max_window": 4, "max_edge": 0}
+    with pytest.raises(ValidationError) as raised:
+        await _loads(_scanning_document(rung=rung))
+    message = str(raised.value)
+    assert "longest_form_tokens" in message and "form_edge" in message
+    assert "max_window" not in message and "max_edge" not in message
+
+
+@pytest.mark.usefixtures("consumer_edge_scan", "registered_tokenizer")
+async def test_rungs_needing_different_remedies_are_each_told_their_own() -> None:
+    """One clause per remedy, naming the rungs it bounds; following them all loads."""
+    document = _scanning_document()
+    document["resolver"] = {
+        "rungs": [
+            {"kind": "consumer_edge_scan"},
+            {"kind": "scan", "tokenizer": "segmenter"},
+        ]
+    }
+    with pytest.raises(ValidationError) as raised:
+        await _loads(document)
+    message = str(raised.value)
+    for cost in ("n(n+1)/2 reads", "(r + 1)**2 - 1 reads"):
+        assert message.count(cost) == 1
+    assert message.index("n(n+1)/2 reads") < message.index("For [")
+    for half in ("longest_form_tokens", "form_edge"):
+        assert f"For ['consumer_edge_scan'], the binding must declare `surface_forms.{half}:`" in (
+            message
+        )
+    for cap in ("max_window", "max_edge"):
+        assert f"For ['scan'], cap it with `{cap}:`" in message
+
+    followed = _scanning_document(longest_form_tokens=4, form_edge=0)
+    followed["resolver"] = {
+        "rungs": [
+            {"kind": "consumer_edge_scan"},
+            {"kind": "scan", "tokenizer": "segmenter", "max_window": 4, "max_edge": 0},
+        ]
+    }
+    await _loads(followed)
+
+
+async def test_a_kind_whose_answer_reads_no_cap_is_not_offered_one() -> None:
+    """The cap is asked of the answer, not assumed: this one reads its own key."""
+    from dataknobs_common.entity_resolution import (
+        AsyncScanningSignal,
+        async_signal_backends,
+        declared_signal_metadata,
+    )
+
+    class OwnKey(AsyncScanningSignal):
+        @classmethod
+        def window_bounded(cls, spec: Any, longest_form_tokens: int | None) -> bool:
+            unread = set(spec) - {"kind", "widest"}
+            if unread:
+                raise ValidationError(f"unknown keys {sorted(unread)}")
+            return spec.get("widest") is not None
+
+        @classmethod
+        def edge_bounded(cls, spec: Any, form_edge: int | None) -> bool:
+            return True
+
+    async_signal_backends.register(
+        "own_key_scan",
+        lambda config: OwnKey(config["entities"], max_window=config["widest"], max_edge=0),
+        metadata=declared_signal_metadata(OwnKey, {"flavour": "async", "needs_io": False}),
+    )
+    try:
+        with pytest.raises(ValidationError) as raised:
+            await _loads(_scanning_document(rung={"kind": "own_key_scan"}))
+        message = str(raised.value)
+        assert (
+            "Set whatever the `window_bounded` of the class registered reads as a bound: "
+            "it accepts neither `max_window: 1` nor `surface_forms.longest_form_tokens: 1`"
+        ) in message
+        await _loads(_scanning_document(rung={"kind": "own_key_scan", "widest": 4}))
+    finally:
+        async_signal_backends.unregister("own_key_scan")
 
 
 # --------------------------------------------------------------------------

@@ -298,6 +298,35 @@ def test_narrowest_keeps_the_first_of_a_tie() -> None:
     assert narrowest(text, [first, second], span=itemgetter(0), key=itemgetter(1)) == [first]
 
 
+@pytest.mark.parametrize(
+    ("bad", "why"),
+    [
+        ((4, 12), "ends past the text"),
+        ((-3, 2), "starts before it"),
+        ((6, 4), "ends before it starts"),
+    ],
+)
+def test_narrowest_refuses_a_span_outside_the_text_naming_the_hit(
+    bad: tuple[int, int], why: str
+) -> None:
+    """A second scanner's hits are a caller's spans, checked as tokens are.
+
+    Unchecked, a span past the end raised ``IndexError`` from inside the
+    trimming, and a negative start wrapped round to the end of the text and
+    grouped the hit under a core it never covered.
+    """
+    text = "a (beagle)"
+    hits = [((3, 9), "beagle"), (bad, "beagle")]
+    with pytest.raises(ValueError, match=rf"hit 1 .*{re.escape(repr(bad))}.*length 10"):
+        narrowest(text, hits, span=itemgetter(0), key=itemgetter(1))
+
+
+def test_narrowest_accepts_an_empty_span_and_one_ending_at_the_text_s_end() -> None:
+    text = "a (beagle)"
+    hits = [((10, 10), "end"), ((0, 10), "all")]
+    assert narrowest(text, hits, span=itemgetter(0), key=itemgetter(1)) == hits
+
+
 _ALPHABET = "abcXYZ019 \n" + "!\"#$%&'()*+,-./:;<=>?@[]^_{"
 
 

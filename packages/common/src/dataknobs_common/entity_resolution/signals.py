@@ -477,6 +477,35 @@ def _window_bounded(spec: Mapping[str, Any], longest_form_tokens: int | None) ->
     return _source_measures_probes(normalizer, tokenizer) and longest_form_tokens is not None
 
 
+def _edge_bounded(spec: Mapping[str, Any], form_edge: int | None) -> bool:
+    """Whether a scan built from ``spec`` bounds how far it widens over punctuation.
+
+    :func:`_edge_bound`'s decision asked of a configuration, as
+    :func:`_window_bounded` asks :func:`_window_bound`'s: for a door that
+    refuses before anything is built, holding only the spec and the
+    ``form_edge`` the binding declares. Bounded when the spec sets
+    ``max_edge``, or when the rung would trust the source's edge and the source
+    has one.
+
+    ``max_edge`` is read first and settles the answer, so a spec setting it
+    builds no tokenizer here. Over a binding that reaches for data, a rung
+    with its own tokenizer must set it to load, so every document that loads
+    takes that path. Otherwise ``normalizer`` and ``tokenizer`` are read
+    through the factories' checks, and :func:`_source_measures_probes` is the
+    rule both this answer and the rung consult.
+
+    Raises:
+        ValidationError: For a ``max_edge`` that is not a whole number of at
+            least zero; and, when no ``max_edge`` is set, for a ``normalizer``
+            that is not callable or a ``tokenizer`` the registry cannot build.
+    """
+    if _checked_max_edge(spec.get("max_edge")) is not None:
+        return True
+    normalizer = _checked_callable(spec.get("normalizer"), "normalizer")
+    tokenizer = tokenizer_from_config(spec.get("tokenizer"))
+    return _source_measures_probes(normalizer, tokenizer) and form_edge is not None
+
+
 def _checked_count(value: object, name: str, at_least: int, consequence: str) -> int | None:
     """``value`` as given, when it is ``None`` or a whole number of at least ``at_least``.
 
@@ -637,8 +666,35 @@ def _checked_max_edge(max_edge: int | None) -> int | None:
     )
 
 
+def _scan_bounds(
+    entities: EntitySource | AsyncEntitySource,
+    normalizer: Callable[[str], str] | None,
+    tokenizer: Tokenizer,
+    max_window: int | None,
+    max_edge: int | None,
+) -> tuple[int | None, int | None]:
+    """How many tokens a scan's probe may span, and how far its edge may widen.
+
+    The scan twins' shared preamble: whether the source's own measurements
+    hold for this rung, then each bound by :func:`_window_bound` and
+    :func:`_edge_bound`. ``None`` in either place means unbounded.
+    """
+    measured = _source_measures_probes(normalizer, tokenizer)
+    return (
+        _window_bound(entities, measured, max_window),
+        _edge_bound(entities, measured, max_edge),
+    )
+
+
 def _query_tokens(tokenizer: Tokenizer, query: str) -> tuple[tuple[int, int], ...]:
     """The query's tokens by ``tokenizer``, checked once where they are not the default's.
+
+    For the near-spelling rungs, which count and enumerate the tokens
+    themselves. A scan hands its tokens to
+    :func:`~dataknobs_common.text.probe_spans`, which makes the same check, so
+    it does not call this one. The asynchronous twin calls it off the event
+    loop for any tokenizer but the default, since a caller's tokenizer may
+    load a dictionary or reach a service and nothing here bounds what it does.
 
     :func:`~dataknobs_common.text.token_spans` produces valid spans by
     construction, so its output is not re-checked on every query; a caller's
@@ -652,6 +708,11 @@ def _query_tokens(tokenizer: Tokenizer, query: str) -> tuple[tuple[int, int], ..
     if tokenizer is token_spans:
         return token_spans(query)
     return _checked_tokens(query, tokenizer(query))
+
+
+def _materialised_tokens(tokenizer: Tokenizer, query: str) -> tuple[tuple[int, int], ...]:
+    """Every token ``tokenizer`` finds, unchecked, so a lazy sequence is read here too."""
+    return tuple(tokenizer(query))
 
 
 def _evidence(query: str, found: Sequence[FormHit]) -> list[FormHit]:
@@ -1228,6 +1289,22 @@ class DeclaredSignal:
     #: blocks a composition that works.
     bounded_by_longest_form = False
 
+    #: Whether this rung widens its probes over punctuation, as far as the
+    #: vocabulary's widest punctuated edge -- **overridable**, and the third
+    #: fact a composition can be refused against before anything is built.
+    #:
+    #: A rung setting this True reads
+    #: :attr:`~dataknobs_common.ontology.SourceDescription.form_edge` to learn
+    #: how far a probe may extend over the punctuation beside its tokens. A
+    #: source answering ``None`` leaves the whole run, and the run is in the
+    #: caller's text: one token between two runs of *r* punctuation characters
+    #: is ``(r + 1) ** 2 - 1`` probes. As for :attr:`bounded_by_longest_form`,
+    #: what that costs depends on the source, so what this enables is a door's
+    #: refusal rather than a rule here.
+    #:
+    #: The default is False, for the same reason as the fact above.
+    bounded_by_form_edge = False
+
     #: What kind of number this rung's score is -- **overridable**. The
     #: default marks it as carrying none, which is the truth for a rung whose
     #: hits carry no
@@ -1516,6 +1593,7 @@ class ScanningSignal(DeclaredSignal):
     key = "scan"
     reads_surface_forms = True
     bounded_by_longest_form = True
+    bounded_by_form_edge = True
 
     def __init__(
         self,
@@ -1587,18 +1665,42 @@ class ScanningSignal(DeclaredSignal):
         defines the classmethod: this answer reads a spec as the shipped
         factory does, and a subclass's factory may read it otherwise. One
         whose factory reads it the same way defines it and returns
-        ``super().window_bounded(spec, longest_form_tokens)``.
+        ``super().window_bounded(spec, longest_form_tokens)``. Until it does,
+        a door reads it as unbounded whatever the source declares.
 
         Raises:
             ValidationError: For a spec the factory would refuse.
         """
         return _window_bounded(spec, longest_form_tokens)
 
+    @classmethod
+    def edge_bounded(cls, spec: Mapping[str, Any], form_edge: int | None) -> bool:
+        """Whether a rung built from ``spec`` bounds how far it widens over punctuation.
+
+        :meth:`window_bounded`'s sibling for the second bound: a source
+        reporting ``form_edge`` (``None`` for one that declares none) and a
+        rung spec as a document writes it. True when the spec sets
+        ``max_edge``, or when it names no ``normalizer`` and no tokenizer but
+        the default and the source has an edge -- the same rule the rung
+        applies to itself when it runs.
+
+        Published under ``edge_bounded`` in a rung's metadata, on the same
+        terms as :meth:`window_bounded`: only from a class whose own body
+        defines it. A rung declaring ``bounded_by_form_edge`` with no answer to
+        define or inherit is treated as bounded exactly when the source
+        declares an edge.
+
+        Raises:
+            ValidationError: For a spec the factory would refuse.
+        """
+        return _edge_bounded(spec, form_edge)
+
     def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
-        measured = _source_measures_probes(self._normalizer, self._tokenizer)
-        bound = _window_bound(self._entities, measured, self._max_window)
-        edge = _edge_bound(self._entities, measured, self._max_edge)
+        bound, edge = _scan_bounds(
+            self._entities, self._normalizer, self._tokenizer, self._max_window, self._max_edge
+        )
+        # None is the default's fast path: probe_spans checks any other tokens.
         tokens = None if self._tokenizer is token_spans else self._tokenizer(query)
         for span in probe_spans(query, bound, edge=edge, tokens=tokens):
             hits = self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
@@ -1796,6 +1898,7 @@ class LexicalSignal(DeclaredSignal):
         hits are all 1.0; here the order is the score's and
         :func:`_ranked` is where it is decided.
         """
+        # Counted before the catalogue is read, which the cap exists to spare.
         tokens = _query_tokens(self._tokenizer, query)
         _checked_query(tokens, self._max_query_tokens)
         found = _near_forms(
@@ -1883,6 +1986,22 @@ class AsyncDeclaredSignal:
     #: direction: a rung nobody classified is not refused, and a wrong True
     #: blocks a composition that works.
     bounded_by_longest_form = False
+
+    #: Whether this rung widens its probes over punctuation, as far as the
+    #: vocabulary's widest punctuated edge -- **overridable**, and the third
+    #: fact a composition can be refused against before anything is built.
+    #:
+    #: A rung setting this True reads
+    #: :attr:`~dataknobs_common.ontology.SourceDescription.form_edge` to learn
+    #: how far a probe may extend over the punctuation beside its tokens. A
+    #: source answering ``None`` leaves the whole run, and the run is in the
+    #: caller's text: one token between two runs of *r* punctuation characters
+    #: is ``(r + 1) ** 2 - 1`` probes. As for :attr:`bounded_by_longest_form`,
+    #: what that costs depends on the source, so what this enables is a door's
+    #: refusal rather than a rule here.
+    #:
+    #: The default is False, for the same reason as the fact above.
+    bounded_by_form_edge = False
 
     #: What kind of number this rung's score is -- **overridable**. The
     #: default marks it as carrying none, which is the truth for a rung whose
@@ -2026,6 +2145,7 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
     key = "scan"
     reads_surface_forms = True
     bounded_by_longest_form = True
+    bounded_by_form_edge = True
 
     def __init__(
         self,
@@ -2063,12 +2183,25 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
         """
         return _window_bounded(spec, longest_form_tokens)
 
+    @classmethod
+    def edge_bounded(cls, spec: Mapping[str, Any], form_edge: int | None) -> bool:
+        """:meth:`ScanningSignal.edge_bounded`, answered identically.
+
+        Raises:
+            ValidationError: For a spec the factory would refuse.
+        """
+        return _edge_bounded(spec, form_edge)
+
     async def _located(self, query: str) -> Sequence[FormHit]:
         found: list[FormHit] = []
-        measured = _source_measures_probes(self._normalizer, self._tokenizer)
-        bound = _window_bound(self._entities, measured, self._max_window)
-        edge = _edge_bound(self._entities, measured, self._max_edge)
-        tokens = None if self._tokenizer is token_spans else self._tokenizer(query)
+        bound, edge = _scan_bounds(
+            self._entities, self._normalizer, self._tokenizer, self._max_window, self._max_edge
+        )
+        tokens = (
+            None
+            if self._tokenizer is token_spans
+            else await asyncio.to_thread(_materialised_tokens, self._tokenizer, query)
+        )
         for span in probe_spans(query, bound, edge=edge, tokens=tokens):
             hits = await self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
@@ -2156,12 +2289,20 @@ class AsyncLexicalSignal(AsyncDeclaredSignal):
         cannot see it either.
 
         :func:`_near_forms` is a plain function taking only values, which is
-        what makes it handable to a thread -- and
-        :func:`_scorer_for` building a scorer per query is what makes it safe
-        to, since the default one is stateful and would otherwise be shared
-        across whatever else the loop is running.
+        what makes it handable to a thread. And :func:`_scorer_for` building a
+        scorer per query is what makes it safe to, since the default one is
+        stateful and would otherwise be shared across whatever else the loop is
+        running.
+
+        **A caller's tokenizer has a hop of its own**, before the catalogue is
+        read, because the cap it is counted against exists to spare that read.
+        The default runs on the loop: it is pure and linear in the query.
         """
-        tokens = _query_tokens(self._tokenizer, query)
+        tokens = (
+            token_spans(query)
+            if self._tokenizer is token_spans
+            else await asyncio.to_thread(_query_tokens, self._tokenizer, query)
+        )
         _checked_query(tokens, self._max_query_tokens)
         found = await asyncio.to_thread(
             _near_forms,

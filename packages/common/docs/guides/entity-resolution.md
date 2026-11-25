@@ -872,7 +872,9 @@ live table that declares none — the whole run beside a window is widened over,
 and that run is the caller's text: one word between two 300-character `=====`
 rules is 90,600 extensions. `max_edge` caps it, and like `max_window` it is the
 one number that can cost an answer. A document sets both on a `kind: scan`
-rung.
+rung, and over a live table that declares no `form_edge` it must: the
+registry refuses a scan whose edge nothing bounds, as it refuses one whose
+window nothing bounds.
 
 ### Your own tokens
 
@@ -933,10 +935,19 @@ about windows over anyone else's, and a scan with its own tokenizer does not
 ask for them — exactly as for a rung with its own `normalizer`. `max_window`
 and `max_edge` are then the only caps, and a tokenizer whose tokens include the
 punctuation wants `max_edge=0`. Over a live table that is a refusal at load: a
-`kind: scan` rung naming a tokenizer must set `max_window`, because the
-binding's `longest_form_tokens` no longer bounds it. `LexicalSignal`'s bound is
+`kind: scan` rung naming a tokenizer must set `max_window` and `max_edge`,
+because the binding's `longest_form_tokens` and `form_edge` no longer bound
+it. `LexicalSignal`'s bound is
 in characters, so a tokenizer moves its windows and leaves its bound alone, and
 its `max_query_tokens` counts the tokenizer's tokens.
+
+The async twins call a tokenizer through `asyncio.to_thread`, so a tokenizer
+that loads a dictionary on first use or calls a service does not stall the
+event loop. Only `token_spans` is called on the loop, because it is pure and
+cheap. Your tokenizer must therefore be **thread-safe**: concurrent queries call
+one instance from several threads, none of them necessarily the thread that
+built it. One holding a `sqlite3` connection, or keeping state between calls,
+needs a lock or a thread-local.
 
 What is worth writing yourself is a rung that asks the index a question the
 shipped one cannot, and there is a concrete one. A probe is a run of whole

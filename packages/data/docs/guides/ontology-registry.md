@@ -315,26 +315,37 @@ is left alone, which is why the refusal is here rather than on the rung. Which
 kinds are bounded this way is read from what each kind declares about itself, as
 with the lookup rule above — and whether a particular rung spec is bounded is
 asked of the rung too, through the `window_bounded` answer the signal registry
-publishes for it. A consumer's rung kind that publishes none is treated as
-bounded exactly when the binding declares `longest_form_tokens`.
+publishes for it. A consumer's rung kind that has none is treated as
+bounded exactly when the binding declares `longest_form_tokens`. A subclass of
+a rung that has one does not inherit it: it is refused until its own body
+defines `window_bounded`, because its factory may fix a tokenizer no spec
+names, and then neither declared number bounds it. One whose factory reads a
+spec as its parent's does returns `super().window_bounded(...)`.
 
-`form_edge` is the second number, and is optional. A window starts and ends on
-a token, so a form whose first or last character is punctuation — `(beagle)`,
-`C.D.C.` — is reached only by widening a window over the punctuation beside it
-in the query. `form_edge` says how far: `0` when no form in the table has
-punctuation at either end, which widens nothing; `n` for at most `n`
-characters on each side. Leaving it out is not refused, because it costs reads
-rather than answers — but it costs them quadratically: the scan then widens a
-window over the whole run of punctuation beside it, every pair of prefixes a
-round trip, so one word between two 300-character `=====` rules is 90,600
-reads. Declare it, or set `max_edge` on the `scan` rung.
+`form_edge` is the second number. A window starts and ends on a token, so a
+form whose first or last character is punctuation — `(beagle)`, `C.D.C.` — is
+reached only by widening a window over the punctuation beside it in the query.
+`form_edge` says how far: `0` when no form in the table has punctuation at
+either end, which widens nothing; `n` for at most `n` characters on each side.
+Without it the scan widens a window over the whole run of punctuation beside
+it, every pair of prefixes a round trip, so one word between two 300-character
+`=====` rules is 90,600 reads — and the run is the caller's text, so the read
+count is the caller's to choose. That is the window's reason for refusing, so
+the edge is **refused at load** on the same terms: declare `form_edge`, or set
+`max_edge` on the `scan` rung. As with the window, whether a rung is bounded is
+asked of the rung, through the `edge_bounded` answer the signal registry
+publishes, and a consumer's kind declaring `bounded_by_form_edge` that
+has none is bounded exactly when the binding declares `form_edge`; a subclass
+defines `edge_bounded` as it does `window_bounded`. A document missing both
+numbers is told about both in one error, and rungs that need different remedies
+are each told their own.
 
 A rung naming its own `tokenizer:` or `normalizer:` does not read `form_edge`
 either, for the reason it does not trust `longest_form_tokens`: the edge was
 measured beside default tokens under the table's fold. Over a live binding it
-therefore widens over the whole run unless it sets `max_edge` — `max_edge: 0`
-for a tokenizer whose tokens already carry the punctuation. Unlike the window,
-this is not refused at load, because it costs reads rather than answers.
+therefore needs `max_edge` as well as `max_window` — `max_edge: 0` for a
+tokenizer whose tokens already carry the punctuation — and the refusal names
+only that remedy.
 
 A source with no declared lookup **refuses** the call rather than answering over
 the unfolded column:
