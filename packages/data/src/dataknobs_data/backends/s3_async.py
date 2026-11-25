@@ -12,7 +12,6 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
-from dataknobs_common.clock import now_iso
 from dataknobs_common.async_iter import aclosing_iter
 from dataknobs_common.aws import create_aioboto3_session
 from dataknobs_common.structured_config import StructuredConfigConsumer
@@ -39,6 +38,7 @@ from ..vector import AsyncVectorOperationsMixin
 from ..vector.bulk_embed_mixin import AsyncBulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import AsyncS3DatabaseConfig
+from .s3_mixins import S3ObjectMixin
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
@@ -62,6 +62,7 @@ _session_manager: ConnectionPoolManager[Any] = ConnectionPoolManager()
 
 class AsyncS3Database(
     StructuredConfigConsumer[AsyncS3DatabaseConfig],
+    S3ObjectMixin,
     AsyncDatabase,
     VectorConfigMixin,
     SQLiteVectorSupport,
@@ -237,6 +238,11 @@ class AsyncS3Database(
 
     async def _fetch(self, s3: Any, key: str) -> Record | None:
         """The record at ``key``, or ``None`` when there is no such object."""
+        body = await self._fetch_body(s3, key)
+        return None if body is None else self._s3_object_to_record(json.loads(body))
+
+    async def _fetch_body(self, s3: Any, key: str) -> bytes | None:
+        """The bytes at ``key``, or ``None`` when there is no such object."""
         from botocore.exceptions import ClientError
 
         try:
@@ -245,21 +251,8 @@ class AsyncS3Database(
             if is_s3_missing_object(e):
                 return None
             raise
-        return self._s3_object_to_record(json.loads(await response["Body"].read()))
-
-    def _record_to_s3_object(self, record: Record) -> dict[str, Any]:
-        """Convert a Record to an S3 object."""
-        # Use Record's built-in serialization which handles VectorFields
-        record_dict = record.to_dict(include_metadata=True, flatten=False)
-
-        # Add timestamps
-        now = now_iso()
-        if "metadata" not in record_dict:
-            record_dict["metadata"] = {}
-        record_dict["metadata"]["created_at"] = record_dict["metadata"].get("created_at", now)
-        record_dict["metadata"]["updated_at"] = now
-
-        return record_dict
+        body: bytes = await response["Body"].read()
+        return body
 
     def _s3_object_to_record(self, obj: dict[str, Any]) -> Record:
         """Convert an S3 object to a Record."""
@@ -280,10 +273,7 @@ class AsyncS3Database(
         # Use centralized method to prepare record
         record_copy, storage_id = self._prepare_record_for_storage(record)
         key = self._get_key(storage_id)
-        obj = self._record_to_s3_object(record_copy)
-
-        # Add ID to metadata
-        obj["metadata"]["id"] = storage_id
+        obj = self._object_for_write(record_copy, storage_id)
 
         from botocore.exceptions import ClientError
 
@@ -353,28 +343,18 @@ class AsyncS3Database(
         When ``expected_version`` is provided the PUT carries an
         ``If-Match: <ETag>`` guard so the compare-and-set is enforced by S3; a
         stale token raises ``ConcurrencyError``. When ``None`` the update is
-        unconditional, byte-identical to prior behavior.
+        unconditional.
+
+        The stored object is read to keep its ``created_at``. One that is not a
+        record raises ``ValueError``, and one S3 will not return (archived, or
+        not permitted) raises botocore's error.
         """
         self._check_connection()
 
-        # An unconditional update must fail closed on a missing object (a plain
-        # PUT would insert), so it keeps the exists() pre-check. A conditional
-        # update needs no pre-check: the IfMatch PUT below resolves the missing
-        # case itself (S3 answers a missing key with 404 NoSuchKey, handled
-        # below -> False), so we skip the extra head_object round-trip.
-        if expected_version is None and not await self.exists(id):
-            return False
-
         key = self._get_key(id)
-        obj = self._record_to_s3_object(record)
-
-        # Preserve ID in metadata
-        obj["metadata"]["id"] = id
-
         put_kwargs: dict[str, Any] = {
             "Bucket": self._pool_config.bucket,
             "Key": key,
-            "Body": json.dumps(obj),
             "ContentType": "application/json",
         }
         if expected_version is not None:
@@ -384,11 +364,17 @@ class AsyncS3Database(
 
         try:
             async with self._client() as s3:
-                await s3.put_object(**put_kwargs)
+                body = await self._fetch_body(s3, key)
+                # An update never inserts. Where the read succeeds, the IfMatch
+                # PUT decides a conditional one; a missing or unreadable object
+                # ends it here, whatever the token.
+                if body is None:
+                    return False
+                obj = self._object_for_write(record, id, self._stored_metadata(body))
+                await s3.put_object(Body=json.dumps(obj), **put_kwargs)
         except ClientError as e:
             if expected_version is not None:
-                code = e.response.get("Error", {}).get("Code")
-                if code in ("404", "NoSuchKey"):
+                if is_s3_missing_object(e):
                     # A conditional update never inserts: an absent id is a
                     # miss, not a conflict, so an IfMatch PUT against a missing
                     # key (S3 -> 404 NoSuchKey) returns False.
@@ -480,6 +466,10 @@ class AsyncS3Database(
         When ``expected_version`` is provided the upsert is conditional: the
         record must already exist with a matching ETag, otherwise it raises
         ``ConcurrencyError``. A conditional upsert never inserts.
+
+        An object already stored is read to keep its ``created_at``. One that
+        is not a record raises ``ValueError``, and one S3 will not return
+        (archived, or not permitted) raises botocore's error.
         """
         self._check_connection()
 
@@ -499,12 +489,12 @@ class AsyncS3Database(
             raise version_conflict_error(id, expected_version, None)
 
         key = self._get_key(id)
-        obj = self._record_to_s3_object(record)
-
-        # Add ID to metadata
-        obj["metadata"]["id"] = id
-
         async with self._client() as s3:
+            # Read for the created_at it keeps. The PUT is plain, so a write
+            # that lands in between is overwritten: last writer wins.
+            body = await self._fetch_body(s3, key)
+            stored = None if body is None else self._stored_metadata(body)
+            obj = self._object_for_write(record, id, stored)
             await s3.put_object(
                 Bucket=self._pool_config.bucket,
                 Key=key,

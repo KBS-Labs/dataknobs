@@ -161,6 +161,41 @@ record_id = db.create(record)
 # Tags: id=xxx, created_at=xxx, created_by=admin, version=1.0, department=Engineering
 ```
 
+### Creation and Update Times
+
+Every write stamps `created_at` and `updated_at` into the stored record's
+metadata. `updated_at` is the time of the write, as ISO 8601 text. `created_at`
+is, in order:
+
+1. the stored object's, when the write replaces one;
+2. the one in the record's metadata, so a copied or migrated record keeps its
+   time;
+3. the time of the write, as ISO 8601 text.
+
+A `date` or `datetime` in the record's metadata is stored as ISO 8601 text; any
+other value is stored as given, so it must be one JSON can hold. The record
+passed in is not changed.
+
+Since a stored `created_at` always wins, no `update` or `upsert` corrects one:
+delete the record and create it again. A migration run again over records it
+has already written keeps the times they have.
+
+To keep `created_at`, replacing an object reads it first. A replacement is
+therefore at least two requests, and needs the object to be readable:
+
+- **It must be a record.** One that is not UTF-8, not JSON, or not a JSON
+  object raises `ValueError`. A streaming write counts it as a failed record
+  instead. Delete it to replace it.
+- **It must not be archived.** Over an object in a storage class that needs a
+  restore, such as GLACIER, the write raises botocore's `InvalidObjectState`.
+  Restore it, or delete it and create it again.
+- **The caller needs `s3:GetObject`** as well as `s3:PutObject`, and
+  `kms:Decrypt` under SSE-KMS.
+- **An `update` or `upsert` needs `s3:ListBucket` to find that an id is not
+  stored.** Both databases look for the object before they write, with a GET,
+  or a HEAD in `SyncS3Database.upsert`. Without that permission S3 answers for
+  a missing key with 403, which is raised.
+
 ### Searching and Filtering
 ```python
 # Note: S3 doesn't support native queries

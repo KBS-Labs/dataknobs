@@ -28,13 +28,33 @@ import time
 import uuid
 import warnings
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 from dataknobs_common.lifecycle import close_if_owned, close_if_owned_sync
 from dataknobs_data import AsyncDatabase, Record, SyncDatabase
 
 logger = logging.getLogger(__name__)
+
+
+def _unix_time(stamp: float | str | datetime | None) -> float:
+    """A stored stamp as a Unix time, 0.0 when there is none.
+
+    The bank writes Unix times, and a database may replace them with its own:
+    the S3 backends stamp ISO 8601 text. Text with no offset is UTC.
+
+    Raises:
+        ValueError: ``stamp`` is text that is not an ISO 8601 time.
+    """
+    if stamp is None:
+        return 0.0
+    if isinstance(stamp, str):
+        stamp = datetime.fromisoformat(stamp)
+    if isinstance(stamp, datetime):
+        aware = stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=UTC)
+        return aware.timestamp()
+    return float(stamp)
 
 
 @dataclass
@@ -45,6 +65,8 @@ class BankRecord:
         record_id: Unique identifier (12-char hex).
         data: Field values for this record.
         source_stage: Wizard stage that originally created this record.
+        source_node_id: Conversation node that created this record. ``None``
+            when it is not anchored to one.
         created_at: Unix timestamp of creation.
         updated_at: Unix timestamp of last modification.
         modified_in_stage: Wizard stage that last modified this record.
@@ -54,7 +76,7 @@ class BankRecord:
     record_id: str
     data: dict[str, Any]
     source_stage: str = ""
-    source_node_id: str = ""
+    source_node_id: str | None = ""
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     modified_in_stage: str | None = None
@@ -93,8 +115,8 @@ class BankRecord:
             data=dict(d.get("data", {})),
             source_stage=d.get("source_stage", ""),
             source_node_id=d.get("source_node_id", ""),
-            created_at=d.get("created_at", time.time()),
-            updated_at=d.get("updated_at", time.time()),
+            created_at=_unix_time(d.get("created_at", time.time())),
+            updated_at=_unix_time(d.get("updated_at", time.time())),
             modified_in_stage=d.get("modified_in_stage"),
         )
 
@@ -415,8 +437,8 @@ class _BankCore:
             data=dict(db_record.data) if db_record.data else {},
             source_stage=meta.get("source_stage", ""),
             source_node_id=meta.get("source_node_id", ""),
-            created_at=meta.get("created_at", 0.0),
-            updated_at=meta.get("updated_at", 0.0),
+            created_at=_unix_time(meta.get("created_at")),
+            updated_at=_unix_time(meta.get("updated_at")),
             modified_in_stage=meta.get("modified_in_stage"),
         )
 
@@ -664,14 +686,9 @@ class MemoryBank:
             record_id,
             self._core.name,
         )
-        updated_bank_record = BankRecord(
+        updated_bank_record = replace(
+            _BankCore.to_bank_record(updated_record),
             record_id=record_id,
-            data=dict(data),
-            source_stage=meta.get("source_stage", ""),
-            created_at=meta.get("created_at", 0.0),
-            updated_at=updated_record.metadata.get("updated_at", 0.0)
-            if updated_record.metadata
-            else 0.0,
             modified_in_stage=modified_in_stage or None,
         )
         self._fire_hooks(self._on_update_hooks, updated_bank_record)
@@ -713,7 +730,8 @@ class MemoryBank:
     def clear(self) -> None:
         """Remove all records from the bank."""
         for db_record in self._db_records():
-            self._db.delete(db_record.storage_id)
+            if db_record.storage_id is not None:
+                self._db.delete(db_record.storage_id)
         logger.debug("Cleared bank '%s'", self._core.name)
 
     def undo_to_checkpoint(self, checkpoint_node_id: str | None) -> int:
@@ -1152,14 +1170,9 @@ class AsyncMemoryBank:
         self._core.validate(data)
         updated_record = self._core.create_updated_record(data, meta, modified_in_stage)
         await self._db.update(record_id, updated_record)
-        updated_bank_record = BankRecord(
+        updated_bank_record = replace(
+            _BankCore.to_bank_record(updated_record),
             record_id=record_id,
-            data=dict(data),
-            source_stage=meta.get("source_stage", ""),
-            created_at=meta.get("created_at", 0.0),
-            updated_at=updated_record.metadata.get("updated_at", 0.0)
-            if updated_record.metadata
-            else 0.0,
             modified_in_stage=modified_in_stage or None,
         )
         await self._fire_hooks(self._on_update_hooks, updated_bank_record)
@@ -1189,7 +1202,8 @@ class AsyncMemoryBank:
 
     async def clear(self) -> None:
         for db_record in await self._db_records():
-            await self._db.delete(db_record.storage_id)
+            if db_record.storage_id is not None:
+                await self._db.delete(db_record.storage_id)
 
     async def undo_to_checkpoint(self, checkpoint_node_id: str | None) -> int:
         """Remove records added after the checkpoint node.

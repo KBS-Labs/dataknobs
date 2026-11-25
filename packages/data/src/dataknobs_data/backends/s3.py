@@ -11,7 +11,6 @@ from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
-from dataknobs_common.clock import now_iso, utc_now
 from dataknobs_common.aws import AwsSessionConfig
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
@@ -36,6 +35,7 @@ from ..vector import SyncVectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .config import SyncS3DatabaseConfig
+from .s3_mixins import S3ObjectMixin
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 class SyncS3Database(
     StructuredConfigConsumer[SyncS3DatabaseConfig],
+    S3ObjectMixin,
     SyncDatabase,
     VectorConfigMixin,
     SQLiteVectorSupport,
@@ -197,14 +198,6 @@ class SyncS3Database(
         """Generate S3 object key for a record ID."""
         return f"{self.prefix}{record_id}.json"
 
-    def _record_to_s3_object(self, record: Record) -> dict[str, Any]:
-        """Convert a Record to S3 object data."""
-        # Use Record's built-in serialization which handles VectorFields
-        # Use non-flattened format to preserve field metadata
-        record_dict = record.to_dict(include_metadata=True, flatten=False)
-
-        return record_dict
-
     def _s3_object_to_record(self, obj_data: dict[str, Any]) -> Record:
         """Convert S3 object data to a Record."""
         # Use Record's built-in deserialization
@@ -225,16 +218,7 @@ class SyncS3Database(
         record_copy, storage_id = self._prepare_record_for_storage(record)
         key = self._get_object_key(storage_id)
 
-        # Set metadata
-        record_copy.metadata = record_copy.metadata or {}
-        record_copy.metadata["id"] = storage_id
-        now = utc_now()
-        record_copy.metadata["created_at"] = now.isoformat()
-        record_copy.metadata["updated_at"] = now.isoformat()
-
-        # Convert record to JSON
-        obj_data = self._record_to_s3_object(record_copy)
-        body = json.dumps(obj_data)
+        body = json.dumps(self._object_for_write(record_copy, storage_id))
 
         # Store in S3 as an atomic insert. IfNoneMatch="*" makes the PUT fail
         # closed if the key already exists (412 PreconditionFailed) or if a
@@ -301,9 +285,12 @@ class SyncS3Database(
         When ``expected_version`` is provided the PUT carries an
         ``If-Match: <ETag>`` guard so the compare-and-set is enforced by S3; a
         stale token raises ``ConcurrencyError``. When ``None`` the update is
-        unconditional, byte-identical to prior behavior. The compare-and-set
-        holds against any S3 implementation that honors conditional writes
-        (real AWS S3, recent LocalStack).
+        unconditional. The compare-and-set holds against any S3 implementation
+        that honors conditional writes (real AWS S3, recent LocalStack).
+
+        The stored object is read to keep its ``created_at``. One that is not a
+        record raises ``ValueError``, and one S3 will not return (archived, or
+        not permitted) raises botocore's error.
         """
         self._check_connection()
 
@@ -312,25 +299,13 @@ class SyncS3Database(
         # Check if exists and get existing metadata
         try:
             response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
-            existing_data = json.loads(response["Body"].read())
-            existing_metadata = existing_data.get("metadata", {})
+            stored = self._stored_metadata(response["Body"].read())
         except self.ClientError as e:
-            if e.response["Error"]["Code"] == "NoSuchKey":
+            if is_s3_missing_object(e):
                 return False
             raise
 
-        # Preserve and update metadata
-        record.metadata = record.metadata or {}
-        record.metadata["id"] = id
-        # One read stamps both, so a record stored without a ``created_at``
-        # gets the same instant as its ``updated_at``.
-        now = now_iso()
-        record.metadata["created_at"] = existing_metadata.get("created_at", now)
-        record.metadata["updated_at"] = now
-
-        # Update the object
-        obj_data = self._record_to_s3_object(record)
-        body = json.dumps(obj_data)
+        body = json.dumps(self._object_for_write(record, id, stored))
 
         put_kwargs: dict[str, Any] = {
             "Bucket": self.bucket,
@@ -344,13 +319,18 @@ class SyncS3Database(
         try:
             self.s3_client.put_object(**put_kwargs)
         except self.ClientError as e:
-            if expected_version is not None and is_s3_conditional_conflict(e):
-                # The guarded PUT lost: either the object is gone (update never
-                # inserts -> False) or the ETag is stale (-> raise).
-                current = self.get_version(id)
-                if current is None:
+            if expected_version is not None:
+                if is_s3_missing_object(e):
+                    # Deleted since the GET. S3 answers an IfMatch PUT against
+                    # a missing key with 404 NoSuchKey, which is a miss.
                     return False
-                raise version_conflict_error(id, expected_version, current) from e
+                if is_s3_conditional_conflict(e):
+                    # The guarded PUT lost: either the object is gone (update
+                    # never inserts -> False) or the ETag is stale (-> raise).
+                    current = self.get_version(id)
+                    if current is None:
+                        return False
+                    raise version_conflict_error(id, expected_version, current) from e
             raise
 
         # Invalidate cache
