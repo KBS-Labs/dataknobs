@@ -19,6 +19,7 @@ from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 from dataknobs_data.backends.memory import SyncMemoryDatabase
 from dataknobs_data.fields import VectorField
+from dataknobs_data.vector.migration import MigrationConfig, VectorMigration
 
 pytestmark = [pytest.mark.integration, requires_real_elasticsearch]
 
@@ -141,3 +142,46 @@ async def test_an_update_that_changes_nothing_advances_the_version(db: Any) -> N
     before = await settle(db.get_version("a"))
     assert await settle(db.update("a", await settle(db.read("a"))))
     assert await settle(db.get_version("a")) != before
+
+
+async def test_a_migration_rollback_restores_the_stored_document(
+    make_elasticsearch_test_index: Any,
+) -> None:
+    for config in make_elasticsearch_test_index("test_update_replaces_"):
+        db = AsyncElasticsearchDatabase(config)
+        await db.connect()
+        try:
+            db.schema.add_vector_field("v", dimensions=2, source_field="t")
+            # One batch migrates, and the two after it fail, which rolls back.
+            await db.upsert("a", Record({"t": "ok"}, metadata={"m": 1}))
+            await db.upsert("b", Record({"t": "refused"}))
+            await db.upsert("c", Record({"t": "refused"}))
+            client = db._require_client()
+
+            async def stored(client: Any = client, index: str = db.index_name) -> Any:
+                return (await client.get(index=index, id="a"))["_source"]
+
+            before = await stored()
+            migrated: list[bool] = []
+
+            async def embed(text: str, stored: Any = stored, seen: Any = migrated) -> list[float]:
+                if text == "refused":
+                    seen.append("v" in (await stored())["data"])
+                    raise RuntimeError("Embedding service failed")
+                return [1.0, 0.0]
+
+            migration = VectorMigration(
+                db,
+                embedding_fn=embed,
+                config=MigrationConfig(
+                    enable_rollback=True, batch_size=1, max_retries=1, retry_delay=0.0
+                ),
+            )
+            with pytest.raises(RuntimeError, match="Embedding service failed"):
+                await migration.add_vectors_to_existing({"v": "t"})
+
+            assert migrated
+            assert all(migrated)
+            assert await stored() == before
+        finally:
+            await db.close()

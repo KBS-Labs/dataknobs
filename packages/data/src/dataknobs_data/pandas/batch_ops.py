@@ -265,6 +265,30 @@ class BatchOperations:
             return op.run(cast("AsyncDatabase", self.database).update(record_id, record))
         return cast("SyncDatabase", self.database).update(record_id, record)
 
+    def _merge_into_stored(
+        self, op: BridgedOperation, updates: list[tuple[str, Record]]
+    ) -> list[tuple[str, Record]]:
+        """Each update laid over its stored record, dropping those not stored."""
+        ids = list(dict.fromkeys(record_id for record_id, _ in updates))
+        stored = dict(zip(ids, self._read_batch(op, ids), strict=True))
+
+        merged = []
+        for record_id, update in updates:
+            record = stored[record_id]
+            if record is None:
+                continue
+            # A repeated id lays each row over the one before it.
+            record.fields.update(update.fields)
+            record.metadata.update(update.metadata)
+            merged.append((record_id, record))
+        return merged
+
+    def _read_batch(self, op: BridgedOperation, ids: list[str]) -> list[Record | None]:
+        """``read_batch``, on whichever flavour of database this object fronts."""
+        if self.is_async:
+            return op.run(cast("AsyncDatabase", self.database).read_batch(ids))
+        return cast("SyncDatabase", self.database).read_batch(ids)
+
     def _update_batch(self, op: BridgedOperation, updates: list[tuple[str, Record]]) -> list[bool]:
         """``update_batch``, on whichever flavour of database this object fronts."""
         if self.is_async:
@@ -369,14 +393,19 @@ class BatchOperations:
         config: BatchConfig | None = None,
         conversion_options: ConversionOptions | None = None,
     ) -> dict[str, Any]:
-        """Update records from DataFrame using ID column.
+        """Write a DataFrame's columns to the stored records its rows name.
+
+        The fields and metadata keys a row holds replace those of the stored
+        record, which keeps the rest. Each record is read before it is written,
+        so a change made to it between the two is overwritten. A row whose id
+        is not stored is counted in ``not_found``.
 
         Every chunk --- and, on the per-record fallback path, every row ---
         runs on the one loop this operation holds.
 
         Args:
             df: DataFrame with updates
-            id_column: Column containing record IDs
+            id_column: Column containing record IDs, or ``None`` for the index
             config: Batch configuration
             conversion_options: Conversion options
 
@@ -431,7 +460,12 @@ class BatchOperations:
 
             try:
                 # Use batch update for better performance
-                results = self._update_batch(op, chunk)
+                merged = self._merge_into_stored(op, chunk)
+                results = self._update_batch(op, merged) if merged else []
+
+                # Counted once the write has succeeded: the per-record path
+                # below counts the chunk again.
+                stats["not_found"] += len(chunk) - len(merged)
 
                 # Count successes and failures
                 for success in results:
@@ -454,9 +488,8 @@ class BatchOperations:
 
                 for record_id, record in chunk:
                     try:
-                        success = self._update(op, record_id, record)
-
-                        if success:
+                        merged = self._merge_into_stored(op, [(record_id, record)])
+                        if merged and self._update(op, *merged[0]):
                             stats["updated"] += 1
                         else:
                             stats["not_found"] += 1

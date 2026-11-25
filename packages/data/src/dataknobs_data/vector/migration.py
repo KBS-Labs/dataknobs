@@ -216,7 +216,7 @@ class VectorMigration:
         self.status = MigrationStatus()
 
         # Track rollback data if enabled
-        self._rollback_data: dict[str, dict[str, Any]] = {}
+        self._rollback_data: dict[str, Record] = {}
 
     async def run(
         self, progress_callback: Callable[[MigrationStatus], Awaitable[None] | None] | None = None
@@ -394,14 +394,15 @@ class VectorMigration:
                 for record in batch:
                     # Store original data for rollback
                     if self.config.enable_rollback and record.id is not None:
-                        # Store original field values for rollback. A record
-                        # with no id cannot be written back, so recording one
-                        # would only produce a rollback that silently does
+                        # The whole record this migration will replace, as the
+                        # target stores it: the source may be another database,
+                        # and a search may add to the records it returns. A
+                        # record with no id cannot be written back, so recording
+                        # one would only produce a rollback that silently does
                         # nothing.
-                        self._rollback_data[record.id] = {
-                            field_name: record.get_value(field_name)
-                            for field_name in record.fields.keys()
-                        }
+                        original = await self.target_db.read(record.id)
+                        if original is not None:
+                            self._rollback_data[record.id] = original
 
                     # Add vector fields to record
                     for vector_field, source_field in vector_fields.items():
@@ -609,10 +610,9 @@ class VectorMigration:
 
         logger.info(f"Rolling back {len(self._rollback_data)} records...")
 
-        for record_id, original_data in self._rollback_data.items():
+        for record_id, original_record in self._rollback_data.items():
             try:
                 # Restore original record
-                original_record = Record(id=record_id, data=original_data)
                 await self.target_db.update(record_id, original_record)
                 status.rollback_records += 1
             except Exception as e:
