@@ -17,20 +17,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from dataknobs_common.testing import (
-    GUARDED_ERROR_NAMES,
     assert_no_broad_except_in_error_text,
+    error_names_in,
 )
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
-
-#: The shared names plus this package's own API family. Every one of them is
-#: rendered by the policy table or by ``client_safe``, so all are in scope.
-_RENDERED = GUARDED_ERROR_NAMES | {
-    "BotCreationError",
-    "APIError",
-    "BotNotFoundError",
-    "ConsentRequiredError",
-}
 
 #: Sites reviewed and judged bounded.
 _ALLOWED = {
@@ -45,4 +36,6 @@ _ALLOWED = {
 
 
 def test_no_broad_except_feeds_a_rendered_error_message():
-    assert_no_broad_except_in_error_text(_SRC, error_names=_RENDERED, ignore=_ALLOWED)
+    assert_no_broad_except_in_error_text(
+        _SRC, error_names=error_names_in("dataknobs_bots"), ignore=_ALLOWED
+    )

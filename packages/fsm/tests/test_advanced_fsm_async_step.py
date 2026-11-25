@@ -235,4 +235,5 @@ class TestExecuteStepAsyncErrorHandling:
         result = await advanced.execute_step_async(context)
 
         assert result.success is False
-        assert "transform exploded" in (result.error or "")
+        # The type alone; `test_arc_error_text.py` covers where the text goes.
+        assert result.error == "Arc execution failed (RuntimeError)"

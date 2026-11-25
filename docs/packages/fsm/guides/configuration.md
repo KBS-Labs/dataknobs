@@ -471,7 +471,9 @@ states:
 
 All transforms in the list share a single `FunctionContext` (with the same
 resources and metadata). If any transform raises an error, the entire arc
-execution fails with a `FunctionError`.
+execution fails with a `FunctionError`. Its message names the type of what was
+raised, and the original is its `__cause__`; a `FunctionError` raised by the
+transform itself keeps its words.
 
 Each transform function receives `(data, func_context)` and returns the
 transformed data. If a transform returns an `ExecutionResult`, a successful

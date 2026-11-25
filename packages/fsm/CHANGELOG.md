@@ -286,6 +286,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ArcExecution` keeps a function's own text out of its errors.**
+  `execute_async` and `can_execute_async` raised a `FunctionError` quoting
+  whatever a transform or pre-test raised, which for a database driver can be
+  its connection URL. The message names the type instead, `Arc execution failed
+  (ConnectionError)`, with the original on `__cause__`. A `FunctionError` the
+  function raises, a failed `ExecutionResult`, and a refused resource keep their
+  words. `AdvancedFSM`'s stepping reports that message in `StepResult.error` and
+  now logs the failure with its traceback.
+
 - **`dataknobs-fsm[postgres]` installs from wheels.** It forwards to
   `dataknobs-data[postgres]`, which required the source-built `psycopg2` and so
   failed to install without `pg_config`. That extra now requires

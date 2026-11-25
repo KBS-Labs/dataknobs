@@ -594,6 +594,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`testing.error_names_in(package)`** returns every error name a package can
+  raise, read from its modules, for `assert_no_broad_except_in_error_text`. A
+  guard given it covers a new error class the day it is added. A module that
+  cannot be imported fails the call; `skip_modules=` exempts one.
+
 - **`PluginUnavailableError`, for a plugin a registry knows of but cannot
   create here.** Raised by `PluginRegistry.create`, `create_async`, `get`
   and `get_async` for a key declared with `declare_unavailable`, whose

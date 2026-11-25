@@ -8,6 +8,8 @@ each shape it must *not* flag gets a negative one.
 
 from __future__ import annotations
 
+import importlib
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,7 @@ import pytest
 from dataknobs_common.testing import (
     GUARDED_ERROR_NAMES,
     assert_no_broad_except_in_error_text,
+    error_names_in,
 )
 
 
@@ -568,10 +571,149 @@ def test_scans_a_directory_recursively(tmp_path):
 class TestCommonSourceIsClean:
     """The guard applied to this package."""
 
-    def test_no_broad_except_in_configuration_error_text(self):
+    def test_no_broad_except_in_error_text(self):
         src = Path(__file__).resolve().parents[1] / "src"
 
         assert_no_broad_except_in_error_text(
             src,
-            error_names=GUARDED_ERROR_NAMES | {"PackResolutionError"},
+            error_names=error_names_in("dataknobs_common"),
         )
+
+
+class TestErrorNamesIn:
+    """The names a package's raise sites can use, read from its modules."""
+
+    @pytest.fixture
+    def package(self, tmp_path, monkeypatch):
+        """A planted package under a unique name, importable for one test."""
+        name = f"planted_{tmp_path.name.replace('-', '_')}"
+        root = tmp_path / name
+        root.mkdir()
+        (root / "__init__.py").write_text("", encoding="utf-8")
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        def write(module: str, body: str) -> str:
+            path = root / f"{module.replace('.', '/')}.py"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+            importlib.invalidate_caches()
+            return name
+
+        yield write
+        for loaded in [m for m in sys.modules if m == name or m.startswith(f"{name}.")]:
+            del sys.modules[loaded]
+
+    def test_a_subclass_is_named(self, package):
+        name = package(
+            "errors",
+            "from dataknobs_common.exceptions import ResourceError\n"
+            "class PlantedStoreError(ResourceError): pass\n",
+        )
+        assert "PlantedStoreError" in error_names_in(name)
+
+    def test_an_alias_is_named(self, package):
+        """``raise AliasError(...)`` is matched on the alias, not on the class."""
+        name = package(
+            "errors", "from dataknobs_common.exceptions import DataknobsError as AliasError\n"
+        )
+        assert "AliasError" in error_names_in(name)
+
+    def test_an_error_from_another_package_is_named_where_it_is_used(self, package):
+        name = package(
+            "use",
+            "from dataknobs_common.exceptions import DataknobsError\n"
+            "SiblingError = type('SiblingError', (DataknobsError,), {'__module__': 'elsewhere'})\n",
+        )
+        assert "SiblingError" in error_names_in(name)
+
+    def test_a_package_error_outside_the_hierarchy_is_named(self, package):
+        name = package("errors", "class PlantedPlainError(RuntimeError): pass\n")
+        assert "PlantedPlainError" in error_names_in(name)
+
+    def test_a_nested_module_is_read(self, package):
+        package("sub.__init__", "")
+        name = package("sub.deep", "class DeepError(ValueError): pass\n")
+        assert "DeepError" in error_names_in(name)
+
+    def test_a_module_in_a_directory_without_an_init_is_read(self, package):
+        """The scan reads the file, and ``pkgutil`` does not find the module."""
+        name = package("bare.deep", "class DeepError(ValueError): pass\n")
+        assert "DeepError" in error_names_in(name)
+
+    def test_the_package_module_itself_is_read(self, package):
+        name = package("__init__", "class TopError(ValueError): pass\n")
+        assert "TopError" in error_names_in(name)
+
+    def test_the_shared_names_are_always_included(self, package):
+        assert error_names_in(package("empty", "")) >= GUARDED_ERROR_NAMES
+
+    def test_neither_a_plain_class_nor_a_foreign_error_is_named(self, package):
+        """A third-party or builtin error is not this project's to bound."""
+        name = package(
+            "mixed",
+            "from json import JSONDecodeError\nclass NotAnError: pass\nBuiltin = ValueError\n",
+        )
+        assert error_names_in(name) == GUARDED_ERROR_NAMES
+
+    def test_a_sibling_package_sharing_a_prefix_is_not_this_package(self, package):
+        name = package(
+            "mixed",
+            "Lookalike = type('Lookalike', (ValueError,), "
+            "{'__module__': __name__.split('.')[0] + '_other.x'})\n",
+        )
+        assert "Lookalike" not in error_names_in(name)
+
+    def test_a_module_that_cannot_be_imported_fails(self, package):
+        """Skipping it would leave the errors it defines unguarded and green."""
+        name = package("broken", "raise RuntimeError('no driver')\n")
+        with pytest.raises(AssertionError, match=r"\.broken") as excinfo:
+            error_names_in(name)
+        assert "RuntimeError" in str(excinfo.value)
+
+    def test_every_module_that_cannot_be_imported_is_listed(self, package):
+        package("broken_a", "raise RuntimeError\n")
+        name = package("broken_b", "import a_module_that_is_not_installed\n")
+        with pytest.raises(AssertionError) as excinfo:
+            error_names_in(name)
+        assert "broken_a" in str(excinfo.value)
+        assert "broken_b" in str(excinfo.value)
+
+    def test_a_subpackage_that_cannot_be_imported_fails(self, package):
+        name = package("sub.__init__", "import a_module_that_is_not_installed\n")
+        package("sub.deep", "class DeepError(ValueError): pass\n")
+        with pytest.raises(AssertionError, match=r"\.sub"):
+            error_names_in(name)
+
+    def test_a_module_that_exits_on_import_fails_by_name(self, package):
+        """``sys.exit`` at import is not an ``Exception``."""
+        name = package("quits", "import sys\nsys.exit(3)\n")
+        with pytest.raises(AssertionError, match=r"\.quits"):
+            error_names_in(name)
+
+    def test_a_skipped_module_is_not_imported(self, package):
+        package("errors", "class KeptError(ValueError): pass\n")
+        name = package("broken", "raise RuntimeError('no driver')\n")
+        assert "KeptError" in error_names_in(name, skip_modules=[f"{name}.broken"])
+        assert f"{name}.broken" not in sys.modules
+
+    def test_skipping_a_package_skips_what_is_under_it(self, package):
+        name = package("sub.__init__", "import a_module_that_is_not_installed\n")
+        package("sub.deep", "class DeepError(ValueError): pass\n")
+        assert "DeepError" not in error_names_in(name, skip_modules=[f"{name}.sub"])
+
+    def test_a_skip_that_matches_nothing_fails(self, package):
+        name = package("errors", "")
+        with pytest.raises(AssertionError, match=r"\.gone"):
+            error_names_in(name, skip_modules=[f"{name}.gone"])
+
+    def test_a_main_module_is_not_run(self, package):
+        name = package("__main__", "raise RuntimeError('a program, not a library')\n")
+        assert error_names_in(name) == GUARDED_ERROR_NAMES
+
+    def test_a_module_object_is_accepted(self, package):
+        name = package("errors", "class PlantedError(ValueError): pass\n")
+        assert "PlantedError" in error_names_in(importlib.import_module(name))
+
+    def test_a_single_module_is_accepted(self, package):
+        name = package("errors", "class PlantedError(ValueError): pass\n")
+        assert "PlantedError" in error_names_in(f"{name}.errors")

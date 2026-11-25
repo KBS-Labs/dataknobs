@@ -94,6 +94,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`DataknobsConversationStorage` keeps a backend's text out of its errors.**
+  Each operation's `StorageError` quoted what the database driver raised, which
+  can be its connection URL. The message names the type instead, `Failed to load
+  conversation (ConnectionError)`, with the original on `__cause__`. A refused
+  schema version, an unusable stored message and a missing conversation keep
+  their words.
+
 - **`create_intent_classifier` keeps a classifier factory's own words out of
   its errors.** It, and its async twin, unwrapped any `ValueError` off the
   registry's bounded error, so a consumer classifier factory refusing with

@@ -14,9 +14,6 @@ HTTP client's names a URL with its credentials in the query string, and an
 ``ImportError`` for an optional dependency names an absolute path into
 site-packages. An ``except Exception`` whose text reaches a caller hands that
 along, and a caller of this package is often the API layer of another one.
-
-Both are named alongside the shared set because they are the error types here a
-consumer catches by name, so they are the ones most likely to grow a message.
 """
 
 from __future__ import annotations
@@ -24,14 +21,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from dataknobs_common.testing import (
-    GUARDED_ERROR_NAMES,
     assert_no_broad_except_in_error_text,
+    error_names_in,
 )
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 
-_GUARDED = GUARDED_ERROR_NAMES | {"ElasticsearchConflictError", "ElasticsearchRequestError"}
-
 
 def test_no_broad_except_feeds_a_rendered_error_message():
-    assert_no_broad_except_in_error_text(_SRC, error_names=_GUARDED)
+    assert_no_broad_except_in_error_text(_SRC, error_names=error_names_in("dataknobs_utils"))

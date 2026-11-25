@@ -25,12 +25,15 @@ original to the logs. This module is the guard that keeps the pattern from
 coming back:
 
     ```python
-    from dataknobs_common.testing import assert_no_broad_except_in_error_text
+    from dataknobs_common.testing import (
+        assert_no_broad_except_in_error_text,
+        error_names_in,
+    )
 
-    def test_no_unbounded_text_in_configuration_errors():
+    def test_no_unbounded_text_in_error_messages():
         assert_no_broad_except_in_error_text(
             Path(__file__).parent.parent / "src",
-            error_names=frozenset({"ConfigurationError", "ConfigError"}),
+            error_names=error_names_in("my_package"),
         )
     ```
 
@@ -54,14 +57,19 @@ trigger.
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterable
+import importlib
+from collections.abc import Iterable, Iterator
 from pathlib import Path
+from types import ModuleType
 from typing import NamedTuple
+
+from dataknobs_common.exceptions import DataknobsError
 
 __all__ = [
     "GUARDED_ERROR_NAMES",
     "BroadExceptFinding",
     "assert_no_broad_except_in_error_text",
+    "error_names_in",
 ]
 
 #: ``except`` targets treated as unbounded, for either of two reasons.
@@ -95,11 +103,108 @@ def _shared_error_names() -> frozenset[str]:
     )
 
 
-#: The default set for :func:`assert_no_broad_except_in_error_text`. A package
-#: unions its own aliases and subclasses onto this — the raise site is matched
-#: on the bare name, so ``ConfigError`` must be named even though it *is* a
-#: ``ConfigurationError``.
+#: The shared exception names. :func:`error_names_in` returns these and the names
+#: a package adds to them.
 GUARDED_ERROR_NAMES = _shared_error_names()
+
+
+def _is_under(name: str, package: str) -> bool:
+    """Whether a dotted name is ``package`` or a module inside it."""
+    return name == package or name.startswith(f"{package}.")
+
+
+def _module_names(root: ModuleType) -> list[str]:
+    """Every module under ``root``, named from its file.
+
+    From the files rather than ``pkgutil``, which does not descend into a
+    directory without an ``__init__.py``. The scan reads those files, so the
+    errors they define have to be named too.
+    """
+    names: set[str] = set()
+    for location in getattr(root, "__path__", []):
+        base = Path(location)
+        for path in base.rglob("*.py"):
+            parts = path.relative_to(base).with_suffix("").parts
+            if parts[-1] == "__main__":
+                continue
+            if parts[-1] == "__init__":
+                parts = parts[:-1]
+            if parts and all(part.isidentifier() for part in parts):
+                names.add(".".join((root.__name__, *parts)))
+    return sorted(names)
+
+
+def _names_bound_in(module: ModuleType, package: str) -> Iterator[str]:
+    """The names this module binds to an exception class the project owns."""
+    for name, obj in vars(module).items():
+        if not (isinstance(obj, type) and issubclass(obj, BaseException)):
+            continue
+        if issubclass(obj, DataknobsError) or _is_under(obj.__module__, package):
+            yield name
+
+
+def error_names_in(
+    package: str | ModuleType, *, skip_modules: Iterable[str] = ()
+) -> frozenset[str]:
+    """Every error name a package's raise sites can use, read from its modules.
+
+    Imports each module under ``package`` and collects the names it binds to an
+    exception class that is a :class:`~dataknobs_common.exceptions.DataknobsError`
+    or is defined in the package. The result includes
+    :data:`GUARDED_ERROR_NAMES`.
+
+    A raise site is matched on its bare name, so what matters is the name a
+    module binds rather than the class behind it: an alias and an error imported
+    from another package are both included. An alias made inside a function is
+    not seen; union it on.
+
+    ``__main__`` modules are not imported, since importing one runs a program.
+
+    Args:
+        package: The package (or single module) to read, or its dotted name.
+        skip_modules: Dotted names of modules not to import, each with what is
+            under it. An entry matching no module is an error.
+
+    Returns:
+        The names, for ``error_names=`` of
+        :func:`assert_no_broad_except_in_error_text`.
+
+    Raises:
+        AssertionError: If a module could not be imported, or a
+            ``skip_modules`` entry matched nothing. The errors an unimported
+            module defines would go unguarded while the scan reported green.
+    """
+    root = importlib.import_module(package) if isinstance(package, str) else package
+    prefix = root.__name__
+    skipped = frozenset(skip_modules)
+    used: set[str] = set()
+    failures: list[str] = []
+    names = set(_names_bound_in(root, prefix))
+
+    for name in _module_names(root):
+        if matched := {entry for entry in skipped if _is_under(name, entry)}:
+            used |= matched
+            continue
+        try:
+            module = importlib.import_module(name)
+        except (Exception, SystemExit) as exc:
+            failures.append(f"{name}: {type(exc).__name__}: {exc}")
+            continue
+        names.update(_names_bound_in(module, prefix))
+
+    if stale := sorted(skipped - used):
+        listed = "\n".join(f"  {entry}" for entry in stale)
+        raise AssertionError(
+            f"{len(stale)} skip_modules entr(ies) matched no module under {prefix}:\n{listed}"
+        )
+    if failures:
+        listed = "\n".join(f"  {entry}" for entry in failures)
+        raise AssertionError(
+            f"{len(failures)} module(s) under {prefix} could not be imported, so the "
+            f"errors they define would go unguarded:\n{listed}\n\n"
+            "Install what each needs, or name it in `skip_modules`."
+        )
+    return frozenset(names) | GUARDED_ERROR_NAMES
 
 
 class BroadExceptFinding(NamedTuple):
@@ -306,10 +411,9 @@ def assert_no_broad_except_in_error_text(
 
     Args:
         *roots: Directories (or files) to scan for ``*.py``.
-        error_names: Bare class names whose construction is guarded — for
-            example ``{"ConfigurationError", "ConfigError"}``. Matched on the
-            name at the raise site, so an aliased import is covered by listing
-            the alias.
+        error_names: Bare class names whose construction is guarded, usually
+            :func:`error_names_in` of the package. Matched on the name at the
+            raise site, so an alias has to be in the set under its own name.
         ignore: ``"<path-suffix>:<lineno>"`` entries to exempt, for a site
             reviewed and judged bounded. Each needs a comment saying why.
             Matched on a path-component boundary, so ``"base.py:120"`` exempts

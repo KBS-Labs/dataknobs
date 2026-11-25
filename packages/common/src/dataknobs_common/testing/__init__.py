@@ -108,6 +108,7 @@ from dataknobs_common.testing.error_text import (
     GUARDED_ERROR_NAMES,
     BroadExceptFinding,
     assert_no_broad_except_in_error_text,
+    error_names_in,
 )
 from dataknobs_common.testing.elasticsearch_fixtures import (
     elasticsearch_connection_params,
@@ -189,6 +190,7 @@ __all__ = [
     "ensure_elasticsearch_ready",
     "ensure_localstack_s3_bucket",
     "ensure_postgres_ready",
+    "error_names_in",
     "get_localstack_endpoint",
     "get_test_bot_config",
     "get_test_rag_config",

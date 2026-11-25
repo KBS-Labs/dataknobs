@@ -1126,14 +1126,41 @@ class DataknobsConversationStorage(ConversationStorage):
         # Reconstruct conversation state
         return ConversationState.from_dict(data)
 
+    def _read_record(self, record: Any, operation: str) -> ConversationState:
+        """Convert a stored record, keeping the reason a record is refused.
+
+        The two errors caught here are worded by this package about the record.
+        Anything else a conversion raises is left to the caller's bounded
+        handler.
+
+        Args:
+            record: Record object from storage
+            operation: What the caller is doing, as its errors word it
+
+        Returns:
+            Conversation state
+
+        Raises:
+            StorageError: If the record's schema or a stored message is refused
+        """
+        try:
+            return self._record_to_state(record)
+        except (SchemaVersionError, ValidationError) as e:
+            raise StorageError(f"Failed to {operation}: {e}") from e
+
+    # The driver's text stays out of every message below: it can carry a
+    # connection URL. `__cause__` carries it to the logs.
+
     async def save_conversation(self, state: ConversationState) -> None:
         """Save conversation to backend."""
         try:
             record = self._state_to_record(state)
             # Use upsert to insert or update
             await self.backend.upsert(state.conversation_id, record)
+        except StorageError:
+            raise
         except Exception as e:
-            raise StorageError(f"Failed to save conversation: {e}") from e
+            raise StorageError(f"Failed to save conversation ({type(e).__name__})") from e
 
     async def load_conversation(self, conversation_id: str) -> ConversationState | None:
         """Load conversation from backend."""
@@ -1143,17 +1170,21 @@ class DataknobsConversationStorage(ConversationStorage):
             if record is None:
                 return None
 
-            return self._record_to_state(record)
+            return self._read_record(record, "load conversation")
 
+        except StorageError:
+            raise
         except Exception as e:
-            raise StorageError(f"Failed to load conversation: {e}") from e
+            raise StorageError(f"Failed to load conversation ({type(e).__name__})") from e
 
     async def delete_conversation(self, conversation_id: str) -> bool:
         """Delete conversation from backend."""
         try:
             return await self.backend.delete(conversation_id)
+        except StorageError:
+            raise
         except Exception as e:
-            raise StorageError(f"Failed to delete conversation: {e}") from e
+            raise StorageError(f"Failed to delete conversation ({type(e).__name__})") from e
 
     async def delete_conversations(
         self,
@@ -1191,7 +1222,7 @@ class DataknobsConversationStorage(ConversationStorage):
                     query.filter(f"metadata.{key}", "=", value)
 
             results = await self.backend.search(query)
-            states = [self._record_to_state(record) for record in results]
+            states = [self._read_record(record, "delete conversations") for record in results]
 
             # Post-query content filtering
             if content_contains:
@@ -1211,7 +1242,7 @@ class DataknobsConversationStorage(ConversationStorage):
         except StorageError:
             raise
         except Exception as e:
-            raise StorageError(f"Failed to delete conversations: {e}") from e
+            raise StorageError(f"Failed to delete conversations ({type(e).__name__})") from e
 
     async def update_metadata(self, conversation_id: str, metadata: Dict[str, Any]) -> None:
         """Update conversation metadata.
@@ -1240,7 +1271,7 @@ class DataknobsConversationStorage(ConversationStorage):
         except StorageError:
             raise
         except Exception as e:
-            raise StorageError(f"Failed to update metadata: {e}") from e
+            raise StorageError(f"Failed to update metadata ({type(e).__name__})") from e
 
     async def list_conversations(
         self,
@@ -1285,10 +1316,12 @@ class DataknobsConversationStorage(ConversationStorage):
             results = await self.backend.search(query)
 
             # Convert records to conversation states
-            return [self._record_to_state(record) for record in results]
+            return [self._read_record(record, "list conversations") for record in results]
 
+        except StorageError:
+            raise
         except Exception as e:
-            raise StorageError(f"Failed to list conversations: {e}") from e
+            raise StorageError(f"Failed to list conversations ({type(e).__name__})") from e
 
     async def count_conversations(
         self,
@@ -1318,7 +1351,7 @@ class DataknobsConversationStorage(ConversationStorage):
         except StorageError:
             raise
         except Exception as e:
-            raise StorageError(f"Failed to count conversations: {e}") from e
+            raise StorageError(f"Failed to count conversations ({type(e).__name__})") from e
 
     async def search_conversations(
         self,
@@ -1364,7 +1397,7 @@ class DataknobsConversationStorage(ConversationStorage):
             query.sort_by(sort_by, order)
 
             results = await self.backend.search(query)
-            states = [self._record_to_state(record) for record in results]
+            states = [self._read_record(record, "search conversations") for record in results]
 
             # Post-query content filtering: walk each conversation's message
             # tree and check if any message content matches.
@@ -1385,7 +1418,7 @@ class DataknobsConversationStorage(ConversationStorage):
         except StorageError:
             raise
         except Exception as e:
-            raise StorageError(f"Failed to search conversations: {e}") from e
+            raise StorageError(f"Failed to search conversations ({type(e).__name__})") from e
 
     @staticmethod
     def _conversation_contains_text(state: ConversationState, needle: str) -> bool:
