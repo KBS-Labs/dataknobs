@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import math
 import re
 import uuid
 import warnings
@@ -2011,12 +2012,21 @@ class SQLQueryBuilder:
         engine compares exactly and the driver can always bind. So a bound
         outside 64 bits neither raises on SQLite nor rounds on DuckDB.
 
+        On PostgreSQL a ``float`` is passed as the decimal JSON writes it as,
+        which is how ``jsonb`` holds a stored one. Left to the drivers,
+        psycopg2 writes ``0.1`` and asyncpg the decimal the double is exactly,
+        which no stored ``0.1`` equals. An infinity has no such decimal, and is
+        passed as it is.
+
         The default ``bind`` of :meth:`typed_clause`.
         """
         domain = self.number_domain(reading)
-        if domain is None:
-            return self.bind_bound(reading, bound)
-        return comparand(domain, op, bound)
+        if domain is not None:
+            return comparand(domain, op, bound)
+        bound = self.bind_bound(reading, bound)
+        if self.dialect == "postgres" and isinstance(bound, float) and math.isfinite(bound):
+            return Decimal(repr(bound))
+        return bound
 
     def typed_clause(
         self,
