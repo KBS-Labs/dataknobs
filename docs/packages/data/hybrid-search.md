@@ -100,7 +100,10 @@ fused = weighted_score_fusion(
 
 Native RRF retriever, on the async backend, where the node's version and licence
 allow it. A node that cannot run one is sent the two searches and they are fused
-client-side; any other failure raises.
+client-side; any other failure raises. The sync backend always sends the two
+searches. On both, the text half matches any word in any of `text_fields`
+(`content`, `title` and `text` when none are named); a field that cannot hold
+the text, such as a number field for a word, matches nothing.
 
 ```python
 results = await es_backend.hybrid_search(

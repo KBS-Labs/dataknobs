@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | sort on a field no record has | raised | the value is missing from each |
   | range with a string bound on a text field | compared lowercased words | compares the value |
   | string equality or pattern on a field mapped `keyword` | matched nothing | matches |
+  | pattern on a field mapped `version` | matched nothing | matches |
   | string equality on a field mapped `date` or `ip` | matched nothing | compares the value; raises for a string that is not one |
   | number equality on a text field | matched any word | matches the whole value |
 
@@ -30,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | Filter | Before | Now |
   |---|---|---|
   | `NEQ`, `NOT_IN`, `NOT_LIKE`, `NOT_BETWEEN` | also matched a record without the field | matches a record that has a value |
-  | `NOT_LIKE` on a number or boolean field | matched every record | matches nothing |
+  | `NOT_LIKE` on a number, boolean, object, nested or vector field | matched every record | matches nothing |
   | range with a numeric string on a number field | compared it as the number | matches nothing |
   | a bound of another kind on a number or boolean field | raised, or matched nothing when a string | matches nothing; its negation matches every value |
   | a boolean on a date field; a bound that is not a string on an `ip` field | raised | matches nothing; its negation matches every value |
@@ -41,6 +42,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `BETWEEN` a number and a string | compared as text, or raised | matches nothing |
 
   Use `NOT_EXISTS` in an `OR` to keep the records without the field.
+- **BREAKING: an Elasticsearch filter the index cannot answer raises
+  `ValueError`**, negated or not: any comparison or pattern on a `text` field
+  with no keyword sub-field, and a pattern on a field that is not matched as
+  text, such as a date or an `ip`. The filter matched nothing, or a word, and its
+  negation every record. Indexes the backends create have neither unless
+  `mappings` says so. Map the field with a keyword sub-field, or as a `keyword`.
+  A `DatabaseSource` raises for a `text_search_fields` entry that has neither.
+- **BREAKING: the text half of a sync Elasticsearch `hybrid_search` is a
+  full-text search**, as on the async backend: any word in any of `text_fields`,
+  or in `content`, `title` and `text` when none are named, best match first. It
+  was a substring of the first field, or every record when none were named, and
+  found nothing in a `text` field with no keyword sub-field. A missing index is
+  `ValueError` there too, where it was `NotFoundError`.
+- **An Elasticsearch `hybrid_search` whose `text_fields` include one that cannot
+  hold the text** (a number, date, boolean, ip, range, geo or vector field)
+  matches nothing in that field, on both backends. The async backend raised
+  `ValueError`, even when another field matched, and also when no field was named
+  and the index mapped `content`, `title` or `text` that way.
 - **BREAKING: an index the Elasticsearch backends create maps strings the same
   way whatever it first holds.** A data string is `text` with a `keyword`
   sub-field of up to 8191 characters, where it was 256, and `date_detection` is

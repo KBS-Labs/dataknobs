@@ -5,10 +5,9 @@ record without one. Elasticsearch's bare ``must_not`` kept that record. A bound
 of a kind the field does not hold relates to none of its values; Elasticsearch
 read ``"3"`` as a number and refused ``"red"`` or ``True``.
 
-One field per kind, because an index maps a field once. Two differences are
-left out: a bound that is not a string against a string field, where the index
-holds ``5`` and ``"5"`` alike, and a field of lists, which Elasticsearch
-compares element by element.
+One field per kind, because an index maps a field once. A bound of another kind
+against a string or date field is a declared variation (``KIND_IS_LOST``). A
+field of lists, which Elasticsearch compares element by element, is left out.
 """
 
 from __future__ import annotations
@@ -239,6 +238,59 @@ async def test_a_bound_a_date_or_ip_field_cannot_hold_relates_to_nothing(
         await async_db.close()
         await asyncio.to_thread(sync_db.close)
     assert wrong == {}
+
+
+#: The index keeps one term for ``5`` and ``"5"``, and one for a time however it
+#: is written, so a bound of one kind also answers for values of the other. Each
+#: filter, and what Elasticsearch answers where the matcher does not.
+MIXED: dict[str, dict[str, Any]] = {
+    "number": {"s": 5, "day": 1704103200000},
+    "string": {"s": "5", "day": "2024-01-02T10:00:00"},
+    "word": {"s": "x"},
+    "true": {"s": "true"},
+}
+KIND_IS_LOST: list[tuple[Filter, list[str]]] = [
+    (Filter("s", Operator.EQ, 5), ["number", "string"]),
+    (Filter("s", Operator.EQ, "5"), ["number", "string"]),
+    (Filter("s", Operator.IN, [5]), ["number", "string"]),
+    (Filter("s", Operator.NEQ, 5), ["true", "word"]),
+    (Filter("s", Operator.EQ, True), ["true"]),
+    (Filter("s", Operator.GT, 4), ["number", "string", "true", "word"]),
+    (Filter("s", Operator.BETWEEN, [4, 6]), ["number", "string"]),
+    (Filter("day", Operator.GT, 0), ["number", "string"]),
+    (Filter("day", Operator.GT, "2023"), ["number", "string"]),
+    (Filter("day", Operator.GT, datetime(2023, 1, 1)), ["number", "string"]),
+    (Filter("day", Operator.EQ, "2024-01-01T10:00:00"), ["number"]),
+    (Filter("day", Operator.EQ, 1704189600000), ["string"]),
+]
+
+
+async def test_the_declared_variations_are_what_they_are_declared_to_be(
+    config: dict[str, Any],
+) -> None:
+    """One that answers as the matcher does has gone stale, and fails too."""
+    text = {"type": "text", "fields": {"keyword": {"type": "keyword"}}}
+    mapped = {"s": text, "day": {"type": "date"}}
+    config["mappings"] = {"properties": {"data": {"properties": mapped}}}
+    sync_db = SyncElasticsearchDatabase(config)
+    await asyncio.to_thread(sync_db.connect)
+    async_db = AsyncElasticsearchDatabase(config)
+    await async_db.connect()
+    try:
+        for row_id, data in MIXED.items():
+            await asyncio.to_thread(sync_db.create, Record(data, storage_id=row_id))
+        for spec, declared in KIND_IS_LOST:
+            query = Query(filters=[spec])
+            for found in (
+                await asyncio.to_thread(sync_db.search, query),
+                await async_db.search(query),
+            ):
+                assert sorted(str(r.storage_id) for r in found) == declared, spec
+            matcher = [i for i, row in MIXED.items() if spec.matches(row.get(spec.field))]
+            assert sorted(matcher) != declared, spec
+    finally:
+        await async_db.close()
+        await asyncio.to_thread(sync_db.close)
 
 
 @pytest.mark.parametrize("operator", [Operator.EQ, Operator.NEQ])

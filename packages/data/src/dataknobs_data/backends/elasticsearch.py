@@ -42,10 +42,12 @@ from .elasticsearch_query import (
     FieldTypes,
     build_query,
     build_sort,
+    build_text_search,
     client_search_kwargs,
     plan_search,
     query_fields,
     run_search_plan,
+    text_search_results,
 )
 from .vector_config_mixin import VectorConfigMixin
 
@@ -97,16 +99,13 @@ class SyncElasticsearchDatabase(
     class; that the other eight arrive with it is the twin-parity gap
     closing, not a side effect to be undone.
 
-    **The gap closes on presence, and not yet on behaviour.** The async twin
-    overrides ``hybrid_search``, ``_supports_native_hybrid`` and
-    ``_text_search_for_hybrid`` to use Elasticsearch's own RRF in a single
-    request; this class takes the mixin's implementations, so it answers
-    ``False`` to native support and fuses two rankings client-side --- a
-    ``LIKE`` text arm through the shared filter translation, then the same
-    ``fuse_hybrid_results`` the other eight backends use. That is a correct
-    hybrid search rather than a stub, and it is slower and worse at text than
-    what the twin does. Porting the native path is a capability gap, recorded
-    here rather than left for a reader to infer from three absent methods.
+    **The gap closes on presence, and not yet on behaviour.** Both twins send
+    the same full-text search as a hybrid search's text half. The async twin
+    also overrides ``hybrid_search`` and ``_supports_native_hybrid`` to use
+    Elasticsearch's own RRF in a single request; this class fuses the two
+    rankings client-side, which is a correct hybrid search in two requests
+    rather than one. Porting the native path is a capability gap, recorded here
+    rather than left for a reader to infer from two absent methods.
     """
 
     CONFIG_CLS: ClassVar[type[SyncElasticsearchDatabaseConfig]] = SyncElasticsearchDatabaseConfig
@@ -845,6 +844,38 @@ class SyncElasticsearchDatabase(
             )
 
         return results
+
+    def _text_search_for_hybrid(
+        self,
+        query_text: str,
+        text_fields: list[str] | None,
+        k: int,
+        filter: Query | None = None,
+    ) -> list[tuple[Record, float]]:
+        """Perform BM25 text search for hybrid search fusion.
+
+        Uses Elasticsearch's native BM25 scoring for text relevance.
+
+        Args:
+            query_text: Text to search for
+            text_fields: Fields to search in
+            k: Maximum results to return
+            filter: Additional filters
+
+        Returns:
+            List of (record, score) tuples ordered by BM25 relevance
+        """
+        self._check_connection()
+
+        body = build_text_search(query_text, text_fields, k, self._pre_filter(filter))
+
+        try:
+            response = self._require_client().search(index=self.index_name, **body)
+            require_complete(response, "text search for hybrid")
+        except Exception as e:
+            self._handle_elasticsearch_error(e, "text search for hybrid")
+
+        return text_search_results(response["hits"], self._doc_to_record)
 
     def create_vector_index(
         self,

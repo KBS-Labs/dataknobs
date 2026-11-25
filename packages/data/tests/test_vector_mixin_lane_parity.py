@@ -535,9 +535,9 @@ class TestAnOverrideAcceptsWhatTheBaseDeclares:
     """
 
     def test_the_sweep_found_overrides(self) -> None:
-        """Fourteen: the backends with native index and hybrid support.
+        """The backends with native index and hybrid support.
 
-        It was eleven while ``SyncPostgresDatabase`` took the mixin's
+        There were three fewer while ``SyncPostgresDatabase`` took the mixin's
         ``create_vector_index``, ``drop_vector_index`` and
         ``get_vector_index_stats`` --- which return ``True``, ``True`` and an
         empty dict, so it reported that it had built an index and built
@@ -548,7 +548,7 @@ class TestAnOverrideAcceptsWhatTheBaseDeclares:
         it cannot disagree with a declaration it does not restate --- which
         is the whole argument for ``vector_search`` moving up here too.
 
-        Plus the twelve ``_vector_search`` hooks: the hook is declared
+        Plus the ``_vector_search`` hooks: the hook is declared
         abstract on the mixin and implemented by every backend with a vector
         surface, so each one is an override this sweep can compare against
         its declaration. ``TestOneSearchOverTwelveHooks`` pins the hook's
@@ -556,7 +556,7 @@ class TestAnOverrideAcceptsWhatTheBaseDeclares:
         is what keeps the next method added to the mixin covered without an
         edit here.
         """
-        assert len(_override_cases()) == 26, sorted(
+        assert len(_override_cases()) == 27, sorted(
             (cls.__name__, method) for cls, method in _override_cases()
         )
 

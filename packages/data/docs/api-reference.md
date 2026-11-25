@@ -1396,7 +1396,7 @@ pre-filters agree:
   whatever that is called; a keyword, number, date or boolean field is used
   directly. A field the index does not map yet matches nothing, sorts as a
   missing value, and is asked about again by the next query. A pattern on
-  a number, date or boolean field matches nothing.
+  a number, boolean, object, nested or vector field matches nothing, negated or not.
 - **A bound of another kind matches nothing on a number or boolean field**, in
   equality, membership and range alike; nor does a number or boolean on `id`, a
   boolean on a date field, or anything but a string on an `ip` field. On
@@ -1404,17 +1404,23 @@ pre-filters agree:
   as text, because the index holds `5` and `"5"` alike. A number on a date field
   is read as epoch milliseconds, whether the document holds a number or a string.
 - **A negated operator** (`NEQ`, `NOT_IN`, `NOT_LIKE`, `NOT_BETWEEN`) matches only
-  a document that has a value, as on every backend. `NOT_LIKE` matches no number
-  or boolean, and every value of a date or `ip` field, which `LIKE` cannot match.
+  a document that has a value, as on every backend.
 - **A list is compared element by element**, unlike other backends: a field holding `["a", "b"]` equals
   `"a"`, and is not matched by `NEQ "a"`. Elasticsearch refuses `EQ` or `NEQ` with
   a list as the value.
 - **A string compared with a date field is read as a date** by equality and range
   alike, and Elasticsearch refuses one that is not a date. An `ip` field reads
   its operand the same way.
-- **A `text` field with no keyword sub-field** (a mapping made elsewhere) has no
-  full value to reach: equality and patterns match nothing, so `NEQ`, `NOT_IN` and
-  `NOT_LIKE` match every value; a range compares its analyzed words, and Elasticsearch refuses to sort by it.
+- **What the index cannot answer raises `ValueError`**, negated or not, where
+  it would otherwise match nothing or every value. A `text` field with no keyword
+  sub-field (a mapping made elsewhere) has no full value to reach, so every
+  comparison and pattern on it raises, and Elasticsearch refuses to sort by it.
+  A pattern raises on a date, an `ip` and any other field Elasticsearch does not
+  match as text. `EXISTS` and `NOT_EXISTS` are always answered. Under an alias,
+  one index that maps the field this way is enough to raise, except where another
+  maps a keyword sub-field. That is then used for all of them, and an index
+  without it has nothing there: none of its records match, and every one that has
+  a value matches the negation.
 - **`REGEX`** matches the **full field value** (case-sensitive), like the
   in-memory and SQL backends — not a single analyzed token. Elasticsearch
   `regexp` is anchored and uses Lucene RegExp syntax (no `^`/`$` anchors, no
