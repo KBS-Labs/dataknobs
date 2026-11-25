@@ -14,13 +14,27 @@ private mark saying dataknobs wrote the text. Each half needs a guard:
   text names nothing a factory, driver or service supplied. A site setting it
   over text it did not write would turn every guard above into a pass-through,
   so the population is a list someone reads, not a property of the tree.
+
+The mark is one of three ways to vouch, so there is a census of each: the
+written-by mark, the private namer that re-marks an error it amends, and the
+value-free mark on a config refusal. A census counts calls by name, so
+``PRIVATE_NAMES`` also says where each name involved may appear at all; any
+other mention is a route the counts would miss.
+
+**Not covered:** a name assembled at run time (``getattr(e, "a" + "b")``), or
+read out of a mapping by a computed key. No source scan sees one. These guards
+stop an unreviewed site, not an author set on evading them.
 """
 
 from __future__ import annotations
 
 import ast
 from collections import Counter
+from collections.abc import Iterable, Iterator
+from functools import cache
 from pathlib import Path
+
+import pytest
 
 from dataknobs_common.testing import assert_no_cause_read
 from tests._workspace import ROOT
@@ -158,17 +172,89 @@ VOUCHING_NAMERS: dict[tuple[str, str], int] = {
     # Origin: the ontology's and the binding's ids, from the ontology document.
     ("dataknobs_data/ontology/registry.py", "OntologyRegistry._bind_record_source"): 1,
 }
-VOUCHING_NAMER = "_naming_refusals_as_dataknobs"
 
-
-SETTER = "_written_by_dataknobs"
-ATTRIBUTE = "_WRITTEN_BY_DATAKNOBS"
-#: The two marks' attribute names on an instance, each owned by one module.
-#: Spelled out here rather than imported, so the guard reads what is written.
-MARK_VALUES = {
-    "_dataknobs_written_by_dataknobs": "dataknobs_common/exceptions.py",
-    "_dataknobs_raised_by_a_registry": "dataknobs_common/registry.py",
+#: Every site that marks a config refusal value-free. The mark vouches that the
+#: refusal's words name fields and types and no value, and a registry shows
+#: them to its caller on that word alone.
+VALUE_FREE_SITES: dict[tuple[str, str], int] = {
+    # Every refusal ``StructuredConfig.from_dict`` writes is built here.
+    ("dataknobs_common/structured_config.py", "_config_field_error"): 1,
 }
+
+#: The two callers of the private core. ``vouch=True`` there is the namer's
+#: decision without the namer's census, so a third caller would be one.
+NAMING_CORE_CALLERS: dict[tuple[str, str], int] = {
+    ("dataknobs_common/exceptions.py", "naming_refusals"): 1,
+    ("dataknobs_common/exceptions.py", "_naming_refusals_as_dataknobs"): 1,
+}
+
+#: Each censused function, with every call of it.
+CENSUSES: dict[str, dict[tuple[str, str], int]] = {
+    "_written_by_dataknobs": MARK_SITES,
+    "_naming_refusals_as_dataknobs": VOUCHING_NAMERS,
+    "_value_free": VALUE_FREE_SITES,
+    "_naming_refusals": NAMING_CORE_CALLERS,
+}
+
+EXCEPTIONS = "dataknobs_common/exceptions.py"
+REGISTRY = "dataknobs_common/registry.py"
+
+#: Every private name that can set a mark or vouch for a text, and the one
+#: module that may mention it. ``None`` means any module may, but only by
+#: importing it unaliased and calling it: the forms a census counts. Spelled
+#: out here rather than imported, so the guard reads what is written.
+PRIVATE_NAMES: dict[str, str | None] = {
+    "_written_by_dataknobs": None,
+    "_naming_refusals_as_dataknobs": None,
+    "_value_free": None,
+    # The private core both namers share: ``vouch=True`` is the decision.
+    "_naming_refusals": EXCEPTIONS,
+    # Sets both of a registry's marks.
+    "_ours": REGISTRY,
+    # The constants holding the marks' attribute names.
+    "_WRITTEN_BY_DATAKNOBS": EXCEPTIONS,
+    "_VALUE_FREE_REFUSAL": EXCEPTIONS,
+    "_RAISED_BY_A_REGISTRY": REGISTRY,
+}
+
+#: The marks' attribute names on an instance, each spelled once, by the module
+#: that owns its constant, and reached only through that constant.
+MARK_VALUES: dict[str, str] = {
+    "_dataknobs_written_by_dataknobs": EXCEPTIONS,
+    "_dataknobs_value_free_refusal": EXCEPTIONS,
+    "_dataknobs_raised_by_a_registry": REGISTRY,
+}
+
+#: The one function that writes each mark.
+MARK_WRITERS: dict[tuple[str, str, str], int] = {
+    (EXCEPTIONS, "_written_by_dataknobs", "_WRITTEN_BY_DATAKNOBS"): 1,
+    (EXCEPTIONS, "_value_free", "_VALUE_FREE_REFUSAL"): 1,
+    (REGISTRY, "_ours", "_RAISED_BY_A_REGISTRY"): 1,
+}
+
+#: Strings that spell a private name without reaching it.
+ALLOWED_SPELLINGS = {
+    # A scanner's vocabulary: it reads source, and matches calls by name.
+    ("dataknobs_common/testing/error_text.py", "_written_by_dataknobs"),
+    ("dataknobs_common/testing/error_text.py", "_ours"),
+}
+
+
+def _module_path(path: Path) -> str:
+    return path.as_posix().split("/src/", 1)[1]
+
+
+@cache
+def _parsed(source: Path) -> tuple[tuple[str, ast.Module], ...]:
+    return tuple(
+        (_module_path(path), ast.parse(path.read_text(encoding="utf-8"), filename=str(path)))
+        for path in sorted(source.rglob("*.py"))
+    )
+
+
+def _modules(sources: Iterable[Path]) -> Iterator[tuple[str, ast.Module]]:
+    for source in sources:
+        yield from _parsed(source)
 
 
 def _owners(tree: ast.AST) -> dict[ast.AST, str]:
@@ -188,107 +274,191 @@ def _owners(tree: ast.AST) -> dict[ast.AST, str]:
     return owner
 
 
-def _module_path(path: Path) -> str:
-    return path.as_posix().split("/src/", 1)[1]
+def _named(node: ast.AST) -> str | None:
+    """The bare name a ``Name`` or ``Attribute`` node mentions."""
+    if isinstance(node, ast.Name):
+        return node.id
+    return node.attr if isinstance(node, ast.Attribute) else None
 
 
-def test_the_mark_is_set_only_at_the_reviewed_sites() -> None:
+def _calls(name: str, sources: Iterable[Path]) -> dict[tuple[str, str], int]:
+    """Every call of ``name``, by file and enclosing function."""
     found: Counter[tuple[str, str]] = Counter()
-    for source in SOURCES:
-        for path in sorted(source.rglob("*.py")):
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for module, tree in _modules(sources):
+        calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and _named(n.func) == name]
+        if calls:
             owners = _owners(tree)
-            for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name | ast.Attribute)
-                    and (node.func.id if isinstance(node.func, ast.Name) else node.func.attr)
-                    == SETTER
-                ):
-                    found[(_module_path(path), owners.get(node, "<module>"))] += 1
-
-    assert dict(found) == MARK_SITES
+            found.update((module, owners[call]) for call in calls)
+    return dict(found)
 
 
-def test_the_marks_attribute_is_written_only_by_its_setter() -> None:
-    """A direct ``setattr`` would vouch without the snapshot the reader compares."""
-    writers: list[str] = []
-    for source in SOURCES:
-        for path in sorted(source.rglob("*.py")):
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+def _mark_writes(sources: Iterable[Path]) -> dict[tuple[str, str, str], int]:
+    """Every ``setattr`` naming a mark's constant, by file, function and constant."""
+    constants = {name for name in PRIVATE_NAMES if name.isupper()}
+    found: Counter[tuple[str, str, str]] = Counter()
+    for module, tree in _modules(sources):
+        writes = [
+            (node, name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and _named(node.func) in {"setattr", "__setattr__"}
+            for arg in node.args
+            if (name := _named(arg)) in constants
+        ]
+        if writes:
             owners = _owners(tree)
-            for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name)
-                    and node.func.id == "setattr"
-                    and len(node.args) >= 2
-                    and isinstance(node.args[1], ast.Name)
-                    and node.args[1].id == ATTRIBUTE
-                ):
-                    writers.append(f"{_module_path(path)}::{owners.get(node, '<module>')}")
-
-    assert writers == ["dataknobs_common/exceptions.py::_written_by_dataknobs"]
+            found.update((module, owners[node], name) for node, name in writes)
+    return dict(found)
 
 
-def test_neither_mark_is_set_by_a_route_the_census_cannot_see() -> None:
-    """The census counts calls by name; these would set a mark without one.
-
-    An aliased import or the setter passed as a value makes a call the count
-    misses; a string or attribute naming a mark's attribute outside its own
-    module is a direct write; ``_ours`` sets both marks, so it is called in
-    the registry module and nowhere else.
-    """
-    evasions: list[str] = []
-    for source in SOURCES:
-        for path in sorted(source.rglob("*.py")):
-            module = _module_path(path)
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            parents = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
-            for node in ast.walk(tree):
-                where = f"{module}:{getattr(node, 'lineno', 0)}"
-                if isinstance(node, ast.ImportFrom):
-                    for alias in node.names:
-                        if alias.name in {SETTER, "_ours"} and alias.asname:
-                            evasions.append(f"{where} imports {alias.name} as {alias.asname}")
-                        if alias.name == "_ours" and module != "dataknobs_common/registry.py":
-                            evasions.append(f"{where} imports _ours")
-                named = (
-                    node.id
-                    if isinstance(node, ast.Name)
-                    else node.attr
-                    if isinstance(node, ast.Attribute)
-                    else None
-                )
-                if named == SETTER:
-                    parent = parents.get(node)
-                    if not (isinstance(parent, ast.Call) and parent.func is node):
-                        evasions.append(f"{where} uses {SETTER} other than by calling it")
-                if named == "_ours" and module != "dataknobs_common/registry.py":
-                    evasions.append(f"{where} uses _ours")
-                if isinstance(node, ast.Constant) and node.value in MARK_VALUES:
+def _evasions(sources: Iterable[Path]) -> list[str]:
+    """Every mention of a private name that a census could not count."""
+    found: list[str] = []
+    for module, tree in _modules(sources):
+        called = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+        for node in ast.walk(tree):
+            where = f"{module}:{getattr(node, 'lineno', 0)}"
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name not in PRIVATE_NAMES:
+                        continue
+                    home = PRIVATE_NAMES[alias.name]
+                    if home is not None and module != home:
+                        found.append(f"{where} imports {alias.name}")
+                    elif alias.asname not in (None, alias.name):
+                        found.append(f"{where} imports {alias.name} as {alias.asname}")
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if node.value in MARK_VALUES:
                     if module != MARK_VALUES[node.value]:
-                        evasions.append(f"{where} spells the mark attribute {node.value!r}")
-                if isinstance(node, ast.Attribute) and node.attr in MARK_VALUES:
-                    evasions.append(f"{where} reaches the mark attribute {node.attr!r} directly")
+                        found.append(f"{where} spells the mark attribute {node.value!r}")
+                elif node.value in PRIVATE_NAMES and (module, node.value) not in ALLOWED_SPELLINGS:
+                    found.append(f"{where} spells {node.value!r} in a string")
+            elif (named := _named(node)) in PRIVATE_NAMES:
+                home = PRIVATE_NAMES[named]
+                if home is not None and module != home:
+                    found.append(f"{where} uses {named}")
+                elif named in CENSUSES and id(node) not in called:
+                    found.append(f"{where} uses {named} other than by calling it")
+            elif isinstance(node, ast.Attribute) and node.attr in MARK_VALUES:
+                found.append(f"{where} reaches the mark attribute {node.attr!r} directly")
+    return found
 
-    assert evasions == []
+
+@pytest.mark.parametrize("name", CENSUSES)
+def test_every_call_that_vouches_is_at_a_reviewed_site(name: str) -> None:
+    """A new site is a claim about text, and needs reading before it joins its list."""
+    assert _calls(name, SOURCES) == CENSUSES[name]
 
 
-def test_only_the_reviewed_callers_name_refusals_as_dataknobs() -> None:
-    """A caller passing a factory-supplied origin would vouch for it past every registry."""
-    found: Counter[tuple[str, str]] = Counter()
-    for source in SOURCES:
-        for path in sorted(source.rglob("*.py")):
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            owners = _owners(tree)
-            for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name | ast.Attribute)
-                    and (node.func.id if isinstance(node.func, ast.Name) else node.func.attr)
-                    == VOUCHING_NAMER
-                ):
-                    found[(_module_path(path), owners.get(node, "<module>"))] += 1
+def test_each_marks_attribute_is_written_only_by_its_setter() -> None:
+    """A direct ``setattr`` would vouch without the snapshot the reader compares."""
+    assert _mark_writes(SOURCES) == MARK_WRITERS
 
-    assert dict(found) == VOUCHING_NAMERS
+
+def test_no_private_name_is_mentioned_where_a_census_cannot_count_it() -> None:
+    assert _evasions(SOURCES) == []
+
+
+# ---------------------------------------------------------------------------
+# The guards themselves: each route planted alone in a tree of its own
+# ---------------------------------------------------------------------------
+
+FROM_EXCEPTIONS = "from dataknobs_common.exceptions import "
+FROM_REGISTRY = "from dataknobs_common.registry import "
+AS_MODULE = "from dataknobs_common import exceptions as e\n"
+CENSUSED_ANYWHERE = [name for name, home in PRIVATE_NAMES.items() if home is None]
+OWNED = [(name, home) for name, home in PRIVATE_NAMES.items() if home is not None]
+
+
+def _planted(tmp_path: Path, text: str, module: str = "planted/m.py") -> list[Path]:
+    path = tmp_path / "src" / module
+    path.parent.mkdir(parents=True)
+    path.write_text(text, encoding="utf-8")
+    return [tmp_path / "src"]
+
+
+@pytest.mark.parametrize("name", CENSUSES)
+@pytest.mark.parametrize(
+    "template",
+    [
+        FROM_EXCEPTIONS + "{0}\ndef f(x):\n    return {0}(x)\n",
+        AS_MODULE + "def f(x):\n    return e.{0}(x)\n",
+        FROM_EXCEPTIONS + "{0}\ndef f(x):\n    with {0}(x):\n        pass\n",
+    ],
+    ids=["call", "attribute-call", "with"],
+)
+def test_a_planted_call_is_counted(tmp_path: Path, name: str, template: str) -> None:
+    sources = _planted(tmp_path, template.format(name))
+
+    assert _calls(name, sources) == {("planted/m.py", "f"): 1}
+
+
+@pytest.mark.parametrize("name", CENSUSED_ANYWHERE)
+def test_an_unaliased_import_and_a_direct_call_is_the_allowed_form(
+    tmp_path: Path, name: str
+) -> None:
+    text = FROM_EXCEPTIONS + f"{name}\ndef f(x):\n    return {name}(x)\n"
+
+    assert _evasions(_planted(tmp_path, text)) == []
+
+
+@pytest.mark.parametrize("name", PRIVATE_NAMES)
+@pytest.mark.parametrize(
+    "template",
+    [
+        FROM_EXCEPTIONS + "{0} as n\ndef f(x):\n    return n(x)\n",
+        FROM_EXCEPTIONS + "{0}\nn = {0}\n",
+        "import functools\n" + FROM_EXCEPTIONS + "{0}\nn = functools.partial({0}, 'x')\n",
+        AS_MODULE + "n = e.{0}\n",
+        AS_MODULE + "e.{0} = lambda x: x\n",
+        AS_MODULE + "n = getattr(e, '{0}')\n",
+        AS_MODULE + "n = vars(e)['{0}']\n",
+    ],
+    ids=["alias", "binding", "partial", "attribute-value", "rebound", "getattr", "vars"],
+)
+def test_a_planted_mention_is_reported(tmp_path: Path, name: str, template: str) -> None:
+    assert _evasions(_planted(tmp_path, template.format(name))) != []
+
+
+@pytest.mark.parametrize(("name", "home"), OWNED)
+def test_an_owned_name_is_reported_outside_its_module_and_not_inside(
+    tmp_path: Path, name: str, home: str
+) -> None:
+    text = f"def f(x):\n    return {name}(x)\n"
+
+    assert _evasions(_planted(tmp_path / "out", text)) != []
+    assert _evasions(_planted(tmp_path / "in", text, module=home)) == []
+
+
+@pytest.mark.parametrize("name", [name for name, _ in OWNED])
+def test_importing_an_owned_name_is_reported(tmp_path: Path, name: str) -> None:
+    assert _evasions(_planted(tmp_path, FROM_REGISTRY + f"{name}\n")) != []
+
+
+@pytest.mark.parametrize("value", MARK_VALUES)
+@pytest.mark.parametrize(
+    "template",
+    ["def f(x):\n    x.{0} = 1\n", "def f(x):\n    setattr(x, '{0}', 1)\n"],
+    ids=["attribute", "string"],
+)
+def test_a_planted_mark_attribute_is_reported(tmp_path: Path, value: str, template: str) -> None:
+    assert _evasions(_planted(tmp_path, template.format(value))) != []
+
+
+@pytest.mark.parametrize("constant", [name for name in PRIVATE_NAMES if name.isupper()])
+@pytest.mark.parametrize(
+    "template",
+    [
+        "def f(x):\n    setattr(x, {0}, 1)\n",
+        "def f(x):\n    x.__setattr__({0}, 1)\n",
+        "def f(x):\n    object.__setattr__(x, {0}, 1)\n",
+    ],
+    ids=["setattr", "method", "object"],
+)
+def test_a_second_writer_in_a_marks_own_module_is_counted(
+    tmp_path: Path, constant: str, template: str
+) -> None:
+    home = PRIVATE_NAMES[constant]
+    assert home is not None
+    sources = _planted(tmp_path, template.format(constant), module=home)
+
+    assert _mark_writes(sources) == {(home, "f", constant): 1}

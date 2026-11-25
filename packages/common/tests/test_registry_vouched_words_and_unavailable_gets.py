@@ -483,6 +483,20 @@ class TestGetRefusesAnUnavailableKey:
         assert isinstance(caught.value, ValueError)
         assert str(caught.value) == "vector store 'vec' is not available here: needs faiss"
 
+    async def test_an_unknown_key_on_a_value_error_registry_is_a_not_found_error(
+        self, lane: str
+    ) -> None:
+        """``not_found_exception`` and ``not_found_kind`` shape the ``create`` lane only."""
+        registry = _declared(not_found_exception=ValueError, not_found_kind="vector store")
+
+        with pytest.raises(NotFoundError) as caught:
+            await _get(lane, registry, "nope")
+
+        assert type(caught.value) is NotFoundError
+        assert str(caught.value) == "Plugin 'nope' not registered and no default available"
+        with pytest.raises(ValueError, match="Unknown vector store: nope"):
+            registry.create(key="nope")
+
 
 def test_create_and_get_word_an_unavailable_key_alike() -> None:
     registry = _declared()

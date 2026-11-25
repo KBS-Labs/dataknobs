@@ -445,6 +445,14 @@ own type with their words. A backend that fails to *connect* keeps its family
 the same way — a `ResourceError` is still a 503 and a `TimeoutError` a 504 —
 with a bounded message.
 
+A grounded source's refusal is a `SourceConfigError`
+(`dataknobs_bots.knowledge.sources`): a 422 under `ValidationError`'s row, with
+the source's name in `detail["source"]`. It covers an unknown database backend,
+a setting the backend refuses in DataKnobs' words, a missing knowledge base,
+and a database that could not be opened because its backend raised a
+`ValueError` of its own, which is named by type only. A key no one reads stays
+a `PluginConfigError`, with `source` in its `detail` too.
+
 **Adding a row means reading what that type's raise sites put in `context`, not
 only what its message says.** They are separate arguments precisely because the
 answer differs — a type whose message is authored for the caller may still

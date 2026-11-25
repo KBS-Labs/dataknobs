@@ -58,7 +58,7 @@ handler = handlers.create(config={"handler_type": "fast", "timeout": 5})
 | `strip_config_key` | `bool` | `False` | Remove the key field from config before passing it to the factory, when `key` is not given. An explicit `key=` leaves the config as given |
 | `on_first_access` | `Callable \| None` | `None` | Lazy init callback (supports re-entrant `register()` calls) |
 | `not_found_kind` | `str \| None` | `None` | Opt-in kind label rendered into the not-found error from `create()` / `create_async()`. When set (e.g. `"event bus backend"`), the message becomes `"Unknown event bus backend: <key>. Available backends: <sorted-keys>"`. When `None`, the historical `"Plugin '<key>' not registered"` text is used. |
-| `not_found_exception` | `type[Exception]` | `NotFoundError` | Exception class raised on not-found. Defaults to `NotFoundError` (the `DataknobsError`-rooted shape consumers catch programmatically). Domain shims preserving a historical `ValueError` contract pass `not_found_exception=ValueError`. Non-`DataknobsError` classes receive the message only (no `context=` kwarg). |
+| `not_found_exception` | `type[Exception]` | `NotFoundError` | Exception class raised on not-found by `create()` / `create_async()`; `get()` / `get_async()` always raise `NotFoundError`. Defaults to `NotFoundError` (the `DataknobsError`-rooted shape consumers catch programmatically). Domain shims preserving a historical `ValueError` contract pass `not_found_exception=ValueError`. Non-`DataknobsError` classes receive the message only (no `context=` kwarg). |
 
 ## Per-input-shape Split Convention
 

@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_bots.reasoning.grounded_config import GroundedSourceConfig
 from dataknobs_common.exceptions import (
     NotFoundError,
+    ValidationError,
     _is_written_by_dataknobs,
     _naming_refusals_as_dataknobs,
     _value_free_words,
@@ -42,6 +43,37 @@ logger = logging.getLogger(__name__)
 SourceFactory = PluginFactory[GroundedSource]
 
 
+class SourceConfigError(ValidationError, ValueError):
+    """A grounded source could not be built from its config.
+
+    Raised by the built-in source factories for a source whose own
+    declaration or backend refuses it. The message opens with ``Source
+    '<name>'`` and ``context["source"]`` holds the same name, so a bot config
+    declaring several sources says which one to fix. ``context`` carries no
+    text a backend wrote: beyond ``source`` it has what the config class's
+    refusal recorded (``unknown``, ``did_you_mean``, ...), or ``cause_type``
+    when the backend failed in its own words.
+
+    A :class:`~dataknobs_common.exceptions.ValidationError`, as the other
+    refusals of a source's config are, and a ``ValueError``, so ``except
+    ValueError`` around :func:`create_source_from_config` catches it.
+    """
+
+
+def _source_error(
+    config: GroundedSourceConfig,
+    words: str,
+    context: Mapping[str, Any] | None = None,
+) -> SourceConfigError:
+    """The error naming ``config``'s source, in its message and its context.
+
+    Unmarked: each raise vouches for its own ``words`` and ``context``.
+    """
+    return SourceConfigError(
+        f"Source {config.name!r}{words}", context={**(context or {}), "source": config.name}
+    )
+
+
 async def create_source_from_config(
     config: GroundedSourceConfig,
     *,
@@ -59,14 +91,17 @@ async def create_source_from_config(
         A fully initialized source ready for use in the grounded pipeline.
 
     Raises:
-        ValueError: If the source type is unknown, required dependencies
-            are missing, or an option is one the source and its backend
-            both refuse -- a refusal by this package's own checks. A
-            ``database`` source's backend refusing a setting in dataknobs'
-            words (an unknown backend, S3 with no ``bucket``) names the
-            source. A backend's ``ValueError`` in its own words arrives as
-            ``Source '<name>': its database could not be opened
-            (<type>)``, with the original on ``__cause__``.
+        ValueError: If the source type is unknown.
+        SourceConfigError: If a ``vector_kb`` source has no
+            ``knowledge_base``, or a ``database`` source's backend refuses a
+            setting in dataknobs' words (an unknown backend, S3 with no
+            ``bucket``). A backend's ``ValueError`` in its own words arrives
+            as ``Source '<name>': its database could not be opened
+            (<type>)``, with the original on ``__cause__``. ``context`` has
+            ``source``.
+        PluginConfigError: If an option is one neither a ``database`` source
+            nor its backend takes. The message and ``context["source"]`` name
+            the source.
         ValidationError: If a ``database`` source's ``schema`` declares
             something the shared schema reader refuses (an unknown type, a
             key a field does not take, a repeated or unnamed field), or its
@@ -155,11 +190,11 @@ def _create_vector_kb_source(
 
     if knowledge_base is None:
         raise _written_by_dataknobs(
-            ValueError(
-                f"Source {config.name!r} has type 'vector_kb' but no "
-                f"knowledge_base was provided. Either configure a "
-                f"knowledge_base in the bot config or use a different "
-                f"source type."
+            _source_error(
+                config,
+                " has type 'vector_kb' but no knowledge_base was provided. "
+                "Either configure a knowledge_base in the bot config or use "
+                "a different source type.",
             )
         )
 
@@ -515,8 +550,10 @@ async def _create_database_source(
         description: Human-readable source description.
 
     Raises:
-        ValueError: If an option is neither a source option nor a key the
-            chosen backend accepts.
+        SourceConfigError: If an option is neither a source option nor a key
+            the chosen backend accepts, the backend is unknown or refuses a
+            setting, or it raised a ``ValueError`` in its own words, named
+            then by type. ``context`` has ``source``.
         ValidationError: If ``schema`` declares something the shared reader
             refuses, or the backend refuses its configuration, naming this
             source.
@@ -572,16 +609,22 @@ async def _create_database_source(
         # backend's own text can carry the connection URL it was handed, so
         # it is named by type and kept on ``__cause__``.
         if _is_written_by_dataknobs(exc):
-            raise _written_by_dataknobs(ValueError(f"Source {config.name!r}: {exc}")) from exc
+            # Marked and unchanged since, so its context is dataknobs' too.
+            raise _written_by_dataknobs(
+                _source_error(config, f": {exc}", getattr(exc, "context", None))
+            ) from exc
         refusal = _value_free_words(exc)
         if refusal is not None:
-            raise _written_by_dataknobs(
-                ValueError(f"Source {config.name!r}: {refusal[0]}")
-            ) from exc
+            # The recorded context, not ``exc.context``: a backend may have
+            # written its own text into that since.
+            words, recorded = refusal
+            raise _written_by_dataknobs(_source_error(config, f": {words}", recorded)) from exc
         # Names only the source and the error's type, so it is ours.
         raise _written_by_dataknobs(
-            ValueError(
-                f"Source {config.name!r}: its database could not be opened ({type(exc).__name__})"
+            _source_error(
+                config,
+                f": its database could not be opened ({type(exc).__name__})",
+                {"cause_type": type(exc).__name__},
             )
         ) from exc
 
