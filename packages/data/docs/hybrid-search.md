@@ -160,7 +160,7 @@ Uses backend's native hybrid search implementation:
 config = HybridSearchConfig(
     fusion_strategy=FusionStrategy.NATIVE,
 )
-# Falls back to RRF if backend doesn't support native
+# Falls back to client-side RRF if the backend doesn't support native
 ```
 
 ## API Reference
@@ -237,7 +237,9 @@ async def hybrid_search(
 
 ### Elasticsearch
 
-Uses native RRF retriever (Elasticsearch 8.8+):
+Uses the native RRF retriever, on the async backend, where the node's version
+and licence allow it. A node that cannot run one is sent the two searches and
+they are fused client-side; any other failure raises.
 
 ```python
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase

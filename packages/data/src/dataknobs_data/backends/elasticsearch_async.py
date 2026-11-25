@@ -36,6 +36,7 @@ from .elasticsearch_errors import (
     bulk_outcomes,
     is_existing_index,
     is_missing_document,
+    is_rrf_unsupported,
     require_complete,
 )
 from .elasticsearch_mixins import (
@@ -985,6 +986,9 @@ class AsyncElasticsearchDatabase(
         BM25 text search with KNN vector search. This is more efficient than
         client-side fusion as it's executed in a single request.
 
+        A node whose version or licence leaves native RRF out is asked for the
+        two searches instead, and they are fused here.
+
         Args:
             query_text: Text query for BM25 matching
             query_vector: Vector for KNN similarity search
@@ -997,6 +1001,13 @@ class AsyncElasticsearchDatabase(
 
         Returns:
             List of HybridSearchResult ordered by RRF score (descending)
+
+        Raises:
+            ValueError: Elasticsearch rejected the request, or the index is missing.
+            RuntimeError: The server did not answer.
+            DatabaseError: Some shard did not answer, or the search timed out.
+            elasticsearch.ApiError: Elasticsearch refused it for another reason,
+                such as a missing permission.
         """
         from ..vector.hybrid import (
             FusionStrategy,
@@ -1010,9 +1021,6 @@ class AsyncElasticsearchDatabase(
 
         # If not using native strategy, fall back to parent implementation
         if config.fusion_strategy != FusionStrategy.NATIVE:
-            # Import parent class to call its implementation
-            from ..vector.mixins import AsyncVectorOperationsMixin
-
             return await AsyncVectorOperationsMixin.hybrid_search(
                 self,
                 query_text=query_text,
@@ -1042,45 +1050,43 @@ class AsyncElasticsearchDatabase(
         }
 
         # Build RRF query combining both searches
-        # Note: RRF requires Elasticsearch 8.8+ with appropriate license
-        # For older versions, we need to use sub_searches
+        body: dict[str, Any] = {
+            "retriever": {
+                "rrf": {
+                    "retrievers": [
+                        {"standard": {"query": text_query}},
+                        {
+                            "knn": {
+                                "field": f"data.{vector_field}",
+                                "query_vector": query_vector.tolist()
+                                if hasattr(query_vector, "tolist")
+                                else list(query_vector),
+                                "k": k,
+                                "num_candidates": k * 3,
+                            }
+                        },
+                    ],
+                    "rank_constant": config.rrf_k,
+                    "rank_window_size": k * 3,
+                }
+            },
+            "size": k,
+        }
+
+        if filter_query:
+            body["post_filter"] = filter_query
+
         try:
-            # Try native RRF (ES 8.8+)
-            body: dict[str, Any] = {
-                "retriever": {
-                    "rrf": {
-                        "retrievers": [
-                            {"standard": {"query": text_query}},
-                            {
-                                "knn": {
-                                    "field": f"data.{vector_field}",
-                                    "query_vector": query_vector.tolist()
-                                    if hasattr(query_vector, "tolist")
-                                    else list(query_vector),
-                                    "k": k,
-                                    "num_candidates": k * 3,
-                                }
-                            },
-                        ],
-                        "rank_constant": config.rrf_k,
-                        "rank_window_size": k * 3,
-                    }
-                },
-                "size": k,
-            }
-
-            if filter_query:
-                body["post_filter"] = filter_query
-
             response = await self._require_client().search(
                 index=self.index_name,
                 body=body,
             )
+            require_complete(response, "hybrid search")
         except Exception as e:
-            # Fall back to client-side fusion if native RRF not available
-            logger.warning(f"Native RRF not available ({e}), falling back to client-side fusion")
-            from ..vector.mixins import AsyncVectorOperationsMixin
+            if not is_rrf_unsupported(e):
+                self._handle_elasticsearch_error(e, "hybrid search")
 
+            logger.warning(f"Native RRF not available ({e}), falling back to client-side fusion")
             return await AsyncVectorOperationsMixin.hybrid_search(
                 self,
                 query_text=query_text,
@@ -1098,9 +1104,6 @@ class AsyncElasticsearchDatabase(
                 filter=filter,
                 metric=metric,
             )
-
-        # Outside the try: a shard that failed is not a reason to fall back.
-        require_complete(response, "hybrid search")
 
         # Process results
         results: list[HybridSearchResult] = []
