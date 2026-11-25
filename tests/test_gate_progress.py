@@ -136,18 +136,75 @@ def test_the_gate_clears_coverage_before_any_check_runs() -> None:
     assert -1 < clear < source.index("\nrecord_check() {")
 
 
-def test_packages_are_ordered_by_the_size_of_their_unit_suite(tmp_path: Path) -> None:
-    """Integration tests run elsewhere, so they must not count towards the order."""
-    for name, unit, integration in (("small", 10, 9000), ("large", 500, 0), ("mid", 90, 0)):
-        tests = tmp_path / "packages" / name / "tests"
+def _sized_suites(root: Path, *sizes: tuple[str, int, int]) -> None:
+    for name, unit, integration in sizes:
+        tests = root / "packages" / name / "tests"
         (tests / "integration").mkdir(parents=True)
         (tests / "test_unit.py").write_text("#" * unit)
         (tests / "integration" / "test_service.py").write_text("#" * integration)
+
+
+def _ordered(root: Path, *packages: str) -> list[str]:
+    result = _bash('longest_suite_first "$@"', str(root), str(root / "out"), *packages)
+    assert result.returncode == 0, result.stderr
+    return result.stdout.split()
+
+
+def test_packages_never_timed_are_ordered_by_the_size_of_their_unit_suite(tmp_path: Path) -> None:
+    """Integration tests run elsewhere, so they must not count towards the order."""
+    _sized_suites(tmp_path, ("small", 10, 9000), ("large", 500, 0), ("mid", 90, 0))
     (tmp_path / "packages" / "untested").mkdir()
 
-    result = _bash('largest_suite_first "$@"', str(tmp_path), "small", "untested", "large", "mid")
+    order = _ordered(tmp_path, "small", "untested", "large", "mid")
+    assert order == ["large", "mid", "small", "untested"]
+
+
+def test_packages_are_ordered_by_how_long_each_last_took(tmp_path: Path) -> None:
+    """A suite with more code than another can still be the quicker of the two."""
+    _sized_suites(tmp_path, ("wordy", 500, 0), ("slow", 90, 0), ("quick", 10, 0))
+    out = tmp_path / "out"
+    out.mkdir()
+    for name, seconds in (("wordy", 18), ("slow", 44), ("quick", 9)):
+        (out / f"unit-test-seconds-{name}.txt").write_text(f"{seconds}\n")
+
+    assert _ordered(tmp_path, "quick", "wordy", "slow") == ["slow", "wordy", "quick"]
+
+
+def test_a_package_without_a_usable_time_goes_first(tmp_path: Path) -> None:
+    """It may be the longest, and the longest must not be left to run alone."""
+    _sized_suites(tmp_path, ("timed", 900, 0), ("unread", 5, 0), ("new", 10, 0))
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "unit-test-seconds-timed.txt").write_text("44\n")
+    (out / "unit-test-seconds-unread.txt").write_text("not a number\n")
+
+    assert _ordered(tmp_path, "timed", "unread", "new") == ["new", "unread", "timed"]
+
+
+@pytest.mark.parametrize(("exit_code", "recorded"), [(0, True), (1, False)])
+def test_only_a_suite_that_passed_records_its_time(
+    tmp_path: Path, exit_code: int, recorded: bool
+) -> None:
+    """One that failed may have stopped early; the time it last took still stands."""
+    suite = tmp_path / "suite.sh"
+    suite.write_text(f"exit {exit_code}\n")
+    record = tmp_path / "unit-test-seconds-data.txt"
+    record.write_text("before\n")
+
+    result = _run_gate_functions(
+        tmp_path,
+        ("run_unit_for_pkg",),
+        f"""
+        cd "{tmp_path}"
+        PROJECT_ROOT="{tmp_path}"
+        UNIT_COV_REPORT=none
+        TEST_FLAGS=""
+        TEST_CMD="bash {suite}"
+        run_unit_for_pkg data || true
+        """,
+    )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.split() == ["large", "mid", "small", "untested"]
+    assert record.read_text().strip().isdigit() is recorded
 
 
 def test_the_gate_runs_its_unit_suites_through_the_pool() -> None:
