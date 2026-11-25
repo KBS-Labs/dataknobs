@@ -32,7 +32,12 @@ from ..vector.mixins import AsyncVectorOperationsMixin
 from ..vector.mixins import resolve_metric
 from ..vector.types import DistanceMetric, VectorSearchResult
 from .config import AsyncElasticsearchDatabaseConfig
-from .elasticsearch_errors import bulk_outcomes, is_existing_index, is_missing_document
+from .elasticsearch_errors import (
+    bulk_outcomes,
+    is_existing_index,
+    is_missing_document,
+    require_complete,
+)
 from .elasticsearch_mixins import (
     ElasticsearchBaseConfig,
     ElasticsearchErrorHandler,
@@ -615,6 +620,8 @@ class AsyncElasticsearchDatabase(
             response = await self._require_client().field_caps(
                 index=self.index_name, fields=FieldTypes.request_fields(unknown)
             )
+            # Learned for good, so never from part of an alias.
+            require_complete(response, "field lookup")
             self._known_types.learn(unknown, response["fields"])
         return self._known_types
 
@@ -656,6 +663,7 @@ class AsyncElasticsearchDatabase(
         """Send one planned search request; return its hits and point-in-time id."""
         client = self._require_client()
         response = await client.search(**client_search_kwargs(body, self.index_name))
+        require_complete(response, "search")
         return list(response["hits"]["hits"]), response.get("pit_id")
 
     async def _open_pit(self) -> str:
@@ -687,12 +695,12 @@ class AsyncElasticsearchDatabase(
 
         client = self._require_client()
         response = await client.count(index=self.index_name, query=es_query)
-        return int(response["count"])
+        return int(require_complete(response, "count")["count"])
 
     async def _count_all(self) -> int:
         """Count all records in the database."""
         response = await self._require_client().count(index=self.index_name)
-        return int(response["count"])
+        return int(require_complete(response, "count")["count"])
 
     async def clear(self) -> int:
         """Clear all records from the database."""
@@ -722,9 +730,9 @@ class AsyncElasticsearchDatabase(
         )
 
         scroll_id = response["_scroll_id"]
-        hits = response["hits"]["hits"]
 
         try:
+            hits = require_complete(response, "stream read")["hits"]["hits"]
             while hits:
                 for hit in hits:
                     record = self._doc_to_record(hit)
@@ -734,7 +742,7 @@ class AsyncElasticsearchDatabase(
 
                 # Get next batch
                 response = await self._require_client().scroll(scroll_id=scroll_id, scroll="2m")
-                hits = response["hits"]["hits"]
+                hits = require_complete(response, "stream read")["hits"]["hits"]
         finally:
             # Clear scroll
             await self._require_client().clear_scroll(scroll_id=scroll_id)
@@ -867,6 +875,7 @@ class AsyncElasticsearchDatabase(
                 # client is untyped, which is here and not on the twin.
                 source=True,
             )
+            require_complete(response, "vector search")
         except Exception as e:
             self._handle_elasticsearch_error(e, "vector search")
 
@@ -1067,6 +1076,7 @@ class AsyncElasticsearchDatabase(
                 index=self.index_name,
                 body=body,
             )
+            require_complete(response, "hybrid search")
         except Exception as e:
             # Fall back to client-side fusion if native RRF not available
             logger.warning(f"Native RRF not available ({e}), falling back to client-side fusion")
@@ -1175,6 +1185,7 @@ class AsyncElasticsearchDatabase(
                 index=self.index_name,
                 body=body,
             )
+            require_complete(response, "text search for hybrid")
         except Exception as e:
             self._handle_elasticsearch_error(e, "text search for hybrid")
 

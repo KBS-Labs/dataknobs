@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`elasticsearch_responses`**: `error_type`, `error_reason`,
-  `says_document_missing` and `says_index_exists`, which read the body of an
-  Elasticsearch response. A missing document and a missing index are both a
+  `says_document_missing`, `says_index_exists`, `incomplete_reason` and
+  `incomplete_failures`, which read the body of an Elasticsearch response. A missing document and a missing index are both a
   404, and the body is what tells them apart.
 - **`PostgresDB.query_rows()` and `PostgresDB.stream_rows()`.** `query_rows`
   returns rows as dicts of the driver's values rather than a DataFrame.
@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `False`, and `create` of an existing index and `delete` of a missing one are
   still `False`. `search` still returns the response: its `result` is now the
   error, where it was replaced with an empty hit list.
+  `count` raises it too when some shard did not answer, where it answered what
+  the other shards counted. Such a `search` still succeeds, and its `_shards`
+  says so.
   `index` refuses a negative `max_retries` with `ValueError`; it sent nothing and
   answered `{"_id": None, "result": "error"}`.
 - **`SimplifiedElasticsearchIndex` no longer prints every response to stderr.**

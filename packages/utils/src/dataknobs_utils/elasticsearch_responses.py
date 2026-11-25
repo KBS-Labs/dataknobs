@@ -46,3 +46,49 @@ def says_document_missing(body: Any) -> bool:
 def says_index_exists(body: Any) -> bool:
     """Whether a refused index creation says the index is already there."""
     return error_type(body) == "resource_already_exists_exception"
+
+
+def incomplete_reason(body: Any) -> str | None:
+    """Why a successful response leaves something out; ``None`` if it does not.
+
+    Elasticsearch answers a search or count with a 200 when only some shards
+    did, and a field capabilities request when only some indices did.
+    """
+    if not isinstance(body, dict):
+        return None
+    shards = body.get("_shards")
+    shards = shards if isinstance(shards, dict) else {}
+    parts = []
+    if failed := shards.get("failed"):
+        parts.append(f"{failed} of {shards.get('total')} shards failed")
+    if indices := body.get("failed_indices"):
+        parts.append(f"{indices} indices failed")
+    if body.get("timed_out"):
+        parts.append("timed out")
+    if not parts:
+        return None
+    named = {_failure_text(failure) for failure in incomplete_failures(body)}
+    return "; ".join(parts + sorted(named))
+
+
+def incomplete_failures(body: Any) -> list[dict[str, Any]]:
+    """The failures a response gives for what it leaves out.
+
+    Elasticsearch may give fewer than it counts.
+    """
+    if not isinstance(body, dict):
+        return []
+    shards = body.get("_shards")
+    of_shards = shards.get("failures") if isinstance(shards, dict) else None
+    return [*(of_shards or []), *(body.get("failures") or [])]
+
+
+def _failure_text(failure: dict[str, Any]) -> str:
+    # A shard's failure carries its reason; an index's wraps it in an error.
+    nested = failure.get("failure")
+    reason = failure.get("reason")
+    if isinstance(nested, dict):
+        return f"{error_type(nested)}: {error_reason(nested)}"
+    if isinstance(reason, dict):
+        return f"{reason.get('type')}: {reason.get('reason')}"
+    return str(reason)

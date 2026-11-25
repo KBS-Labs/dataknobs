@@ -5,7 +5,8 @@
 
 A missing document is an answer: ``read`` returns ``None`` and ``delete``
 returns ``False``. Everything else Elasticsearch refuses is a failure and
-raises. Both arrive as errors, and a missing *index* shares the status of a
+raises, as does a search that only some shards answered, which arrives with a
+200. The first two arrive as errors, and a missing *index* shares the status of a
 missing document, so the two are told apart here by what the body says.
 
 Nothing in this module does I/O or imports the client, so one copy serves the
@@ -20,6 +21,8 @@ from typing import Any
 from dataknobs_utils.elasticsearch_responses import (
     error_reason,
     error_type,
+    incomplete_failures,
+    incomplete_reason,
     says_document_missing,
     says_index_exists,
 )
@@ -39,6 +42,28 @@ def is_missing_document(error: Any) -> bool:
 def is_existing_index(error: Any) -> bool:
     """Whether an ``ApiError`` says the index being created is already there."""
     return says_index_exists(error.body)
+
+
+def require_complete(response: Any, operation: str) -> Any:
+    """``response``, unless it leaves something out.
+
+    Args:
+        response: The client's response to a search, scroll, count or field
+            capabilities request. An incomplete delete-by-query is refused.
+        operation: What the caller was doing, for the error message.
+
+    Raises:
+        DatabaseError: A shard or index did not answer, or the request timed
+            out. Its ``context["failures"]`` lists those Elasticsearch gave.
+    """
+    body = getattr(response, "body", response)
+    reason = incomplete_reason(body)
+    if reason is None:
+        return response
+    raise DatabaseError(
+        f"Elasticsearch {operation} is incomplete: {reason}",
+        context={"operation": operation, "failures": incomplete_failures(body)},
+    )
 
 
 def bulk_outcomes(items: Iterable[dict[str, Any]], operation: str) -> list[bool]:
