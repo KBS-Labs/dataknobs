@@ -104,15 +104,15 @@ MARK_SITES: dict[tuple[str, str], int] = {
     ("dataknobs_common/entity_resolution/signals.py", "_require_flavour"): 1,
     ("dataknobs_common/entity_resolution/signals.py", "refuse_negative_k"): 1,
     # Tokenizer and variant-rule doors and their built-in factories.
+    ("dataknobs_common/text/_named.py", "built_from_config"): 6,
     ("dataknobs_common/text/tokenizers.py", "_default_factory"): 1,
     ("dataknobs_common/text/tokenizers.py", "_words_factory"): 2,
-    ("dataknobs_common/text/tokenizers.py", "tokenizer_from_config"): 5,
     ("dataknobs_common/text/variants.py", "_hyphen_factory"): 1,
     ("dataknobs_common/text/variants.py", "_inflect_factory"): 1,
     ("dataknobs_common/text/variants.py", "_parameterless.factory"): 1,
     ("dataknobs_common/text/variants.py", "_parameters"): 2,
     ("dataknobs_common/text/variants.py", "_strip_prefix_factory"): 1,
-    ("dataknobs_common/text/variants.py", "rules_from_config"): 6,
+    ("dataknobs_common/text/variants.py", "rules_from_config"): 1,
     ("dataknobs_common/text/variants.py", "split"): 1,
     ("dataknobs_common/text/variants.py", "strip_prefix"): 1,
     # Backend selection: an unknown or uninstalled backend name.

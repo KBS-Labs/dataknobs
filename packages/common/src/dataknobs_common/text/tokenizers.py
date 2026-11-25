@@ -44,16 +44,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, cast
 
-from dataknobs_common.exceptions import (
-    OperationError,
-    ValidationError,
-    _given,
-    _given_value,
-    _written_by_dataknobs,
-)
-from dataknobs_common.registry import PluginRegistry, _shown_failure
+from dataknobs_common.exceptions import _written_by_dataknobs
+from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.text._named import NamedSeam, built_from_config
 from dataknobs_common.text.scan import _APOSTROPHE_MODES, token_spans, word_spans
 
 __all__ = ["TOKENIZERS", "Tokenizer", "tokenizer_from_config"]
@@ -100,6 +95,16 @@ TOKENIZERS: PluginRegistry[Tokenizer] = PluginRegistry(
 TOKENIZERS.register("default", _default_factory)
 TOKENIZERS.register("words", _words_factory)
 
+_SEAM = NamedSeam(
+    registry=TOKENIZERS,
+    key="name",
+    noun="tokenizer",
+    plural="tokenizers",
+    result="tokenizer",
+    shape="a tokenizer name, a mapping with a 'name' naming one, or a callable",
+    context_key="tokenizer",
+)
+
 
 def tokenizer_from_config(
     spec: str | Mapping[str, Any] | Tokenizer | None,
@@ -120,56 +125,16 @@ def tokenizer_from_config(
 
     Raises:
         ValidationError: For a spec of any other shape, a name
-            :data:`TOKENIZERS` does not hold, parameters the named factory
-            refuses, or a factory that returns something not callable. The
-            message names the tokenizer and an unknown name lists the
-            registered ones.
+            :data:`TOKENIZERS` does not hold or holds as unavailable, a
+            factory that fails, or one that returns something not callable.
+            The message names the tokenizer; an unknown name lists the
+            registered ones and an unavailable one gives its reason. A
+            factory's own words are repeated only when dataknobs wrote them;
+            otherwise its error is named by type and kept under ``__cause__``.
     """
     if spec is None:
         return None
     if callable(spec):
         return spec
-    config = {"name": spec} if isinstance(spec, str) else spec
-    name = config.get("name") if isinstance(config, Mapping) else None
-    if not isinstance(name, str) or not name:
-        raise _written_by_dataknobs(
-            ValidationError(
-                f"tokenizer must be a tokenizer name, a mapping with a 'name' naming "
-                f"one, or a callable; given {_given(spec)}",
-                context={"spec": _given_value(spec)},
-            )
-        )
-    if not TOKENIZERS.is_registered(name):
-        raise _written_by_dataknobs(
-            ValidationError(
-                f"unknown tokenizer {name!r}. Registered tokenizers: "
-                f"{sorted(TOKENIZERS.list_keys())}",
-                context={"tokenizer": name},
-            )
-        )
-    try:
-        tokenizer = TOKENIZERS.create(config=dict(config))
-    except OperationError as error:
-        # A consumer factory's text may carry what it was handed, so unless
-        # dataknobs wrote it, it is named by type and kept on ``__cause__``.
-        reason = _shown_failure(error)
-        if reason is None:
-            # Names only the tokenizer and the error's type, so it is ours.
-            raise _written_by_dataknobs(
-                ValidationError(
-                    f"tokenizer {name!r} could not be built ({type(error.__cause__).__name__})",
-                    context={"tokenizer": name},
-                )
-            ) from error
-        raise _written_by_dataknobs(
-            ValidationError(f"tokenizer {name!r} {reason}", context={"tokenizer": name})
-        ) from error
-    if not callable(tokenizer):
-        raise _written_by_dataknobs(
-            ValidationError(
-                f"tokenizer {name!r}'s factory returned a {type(tokenizer).__name__}, "
-                f"which is not callable; a factory returns a tokenizer",
-                context={"tokenizer": name},
-            )
-        )
-    return tokenizer
+    _, tokenizer = built_from_config(_SEAM, spec)
+    return cast("Tokenizer", tokenizer)

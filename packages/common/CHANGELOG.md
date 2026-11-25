@@ -60,7 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the original on `__cause__`. Every refusal a built-in tokenizer,
   variant rule or rung writes still reaches the author word for word: a
   parameter typo such as `{name: words, apostrophe: keep}` reads exactly as
-  before. A factory returning something not callable is named by its type
+  before. The two `*_from_config` functions raise `ValidationError` for every
+  way a name cannot be built: a factory's own `NotFoundError` included, and a
+  name declared with `declare_unavailable`, which is refused as `tokenizer 'x'
+  is not available here: <reason>` rather than as unknown. A factory returning
+  something not callable is named by its type
   rather than its `repr`, and so is a value in one of these refusals that a
   configuration document could not have written: a live object handed to
   `tokenizer_from_config`, `rules_from_config`, a rung's count, threshold or
