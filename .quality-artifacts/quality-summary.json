@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-11-25T05:52:06Z",
+  "timestamp": "2026-11-25T15:10:04Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -15,7 +15,7 @@
     "bots": "a634b7a8d973693a4ed73b998015e21ea6ceb279421174f7fe45ffa265280b3b",
     "common": "ba6f851e57111967d936dbb08beee1dd5b0a4338455ce314abc4baaf857ef9d3",
     "config": "cdaf343b445bda115fed832f5409bca69e3b4759607643832c1e3d28ed3277b3",
-    "data": "1104c9f1877cef64da79f33dc39c3504bca9e52bb04b3e5f303682ed3245ba4e",
+    "data": "cba9852be8afe57787de7b82612fcd3d4cb54919ea885e18b2c4d8e487f35ec3",
     "fsm": "87159e2cd290aa47a04960c93e403b4f243010bcd68db63e0840a033c5354b48",
     "legacy": "b335a8e1278335890d903d28ecb391b3f8f09e439e9055966e9cacfcb4706a82",
     "llm": "105893e7e257946f5d0e3aa72bac7eaff98a63af32eb1664fbf6e9b43998c5a3",
@@ -29,9 +29,9 @@
     "toolchain_test": "b7160b875b37ec44c7e343c1a539f503555bd5296b7690ddf4308ef39c784b14",
     "toolchain_lint": "6bcbb34df9feb37c7eec4ca866cdcb1f006d710109517161e59a83019d12fbbd",
     "workspace_tests": "22a4e453fcb5d60e603c7f325fd29f1c51380045e20d5e6243fd82e2eb05f01c",
-    "docs": "fdc22e8add1c48f2d12b23791c3b6b5e4201601b2d369213fffc97dbbf4b582c"
+    "docs": "b0e9a4e57738a5e9eeff9df7756fc30c6193c7db87de232ff8c82a28daceec56"
   },
-  "total_seconds": 122,
+  "total_seconds": 123,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -63,7 +63,7 @@
       "exit_code": 0,
       "skipped": false,
       "duration_seconds": 56,
-      "workspace_guards_seconds": 29
+      "workspace_guards_seconds": 25
     },
     "integration_tests": {
       "status": "pass",
@@ -90,7 +90,7 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-mirror-check.py",
-      "duration_seconds": 0
+      "duration_seconds": 1
     }
   }
 }
