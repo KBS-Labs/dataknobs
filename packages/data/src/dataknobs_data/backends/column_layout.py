@@ -80,10 +80,11 @@ _EQUALITY = frozenset({Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN})
 _RANGES = frozenset({Operator.BETWEEN, Operator.NOT_BETWEEN})
 _MEMBERSHIP = frozenset({Operator.IN, Operator.NOT_IN})
 _STRING_ONLY = frozenset({Operator.LIKE, Operator.NOT_LIKE, Operator.REGEX, Operator.STARTS_WITH})
+_ELEMENTS = frozenset({Operator.CONTAINS, Operator.NOT_CONTAINS})
 _PRESENCE = frozenset({Operator.EXISTS, Operator.NOT_EXISTS})
 #: The negations whose positive compares a bound: ``NOT_LIKE`` is not one, as
 #: ``Filter.matches`` answers it False for a value that is not a string.
-_NEGATIONS = frozenset({Operator.NEQ, Operator.NOT_IN, Operator.NOT_BETWEEN})
+_NEGATIONS = frozenset({Operator.NEQ, Operator.NOT_IN, Operator.NOT_BETWEEN, Operator.NOT_CONTAINS})
 
 _TEXT_TYPE = MappingProxyType({"postgres": "TEXT", "sqlite": "TEXT", "duckdb": "VARCHAR"})
 
@@ -409,6 +410,8 @@ class NativeColumnLayout(ColumnLayout):
         if sql_type is None:
             self._refuse_structured(column, spec.operator, None)
             raise AssertionError  # unreachable
+        if spec.operator in _ELEMENTS:
+            return False  # a column holds one value, not a list of them
         if spec.operator in _STRING_ONLY:
             return sql_type.stores_text or sql_type.reads_as_text
         bounds = [sql_type.bind(b) for b in self._bounds(spec.operator, spec.value)]
@@ -487,6 +490,9 @@ class NativeColumnLayout(ColumnLayout):
             self._refuse_structured(column, op, builder.table_name)
             raise AssertionError  # unreachable
 
+        if op in _ELEMENTS:
+            # A column holds one value, and only a list contains anything.
+            return ("FALSE" if op == Operator.CONTAINS else f"{column.quoted} IS NOT NULL"), []
         if op in _STRING_ONLY:
             if not (sql_type.stores_text or sql_type.reads_as_text):
                 # ``Filter.matches`` answers False for a value that is not a

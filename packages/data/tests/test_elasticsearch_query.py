@@ -231,6 +231,28 @@ def test_not_exists_wraps_in_must_not() -> None:
 # --- regex / prefix --------------------------------------------------------
 
 
+def test_contains_compares_an_element_as_eq_compares_a_value() -> None:
+    assert build_filter_es_query(
+        Filter("tags", Operator.CONTAINS, "urgent"), _learned(tags="text")
+    ) == {"term": {"data.tags.keyword": "urgent"}}
+
+
+def test_not_contains_matches_only_a_field_with_a_value() -> None:
+    clause = {"term": {"data.tags.keyword": "urgent"}}
+    assert build_filter_es_query(
+        Filter("tags", Operator.NOT_CONTAINS, "urgent"), _learned(tags="text")
+    ) == _has_value_but_not("data.tags", clause)
+
+
+def test_the_storage_key_contains_nothing() -> None:
+    assert build_filter_es_query(Filter("id", Operator.CONTAINS, "a"), _learned()) == {
+        "match_none": {}
+    }
+    assert build_filter_es_query(Filter("id", Operator.NOT_CONTAINS, "a"), _learned()) == {
+        "exists": {"field": "id"}
+    }
+
+
 def test_regex_uses_keyword_full_value() -> None:
     # REGEX targets the .keyword sub-field (full, un-analyzed value), NOT the
     # analyzed base path where a regexp would match a single lowercased token.
