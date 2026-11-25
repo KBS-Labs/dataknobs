@@ -1421,10 +1421,16 @@ pre-filters agree:
   maps a keyword sub-field. That is then used for all of them, and an index
   without it has nothing there: none of its records match, and every one that has
   a value matches the negation.
-- **`REGEX`** matches the **full field value** (case-sensitive), like the
-  in-memory and SQL backends — not a single analyzed token. Elasticsearch
-  `regexp` is anchored and uses Lucene RegExp syntax (no `^`/`$` anchors, no
-  look-around), which differs from Python `re`.
+- **`REGEX`** finds a Python pattern anywhere in the **full field value**
+  (case-sensitive), as `re.search` does, except that `\d` and `\w` are ASCII.
+  The pattern is translated to Lucene's syntax
+  (`python_regex_to_lucene`, in `backends.elasticsearch_regex`). One that
+  cannot be raises `ValueError`: look-around, `\b`, back-references, atomic
+  groups, possessive repeats, inline flags, an anchor that is not at an end of
+  the pattern (as in `a^b`), and one that is not a regular expression.
+  Elasticsearch refuses a translated pattern longer than `index.max_regex_length`
+  (1000), and a pattern that does not start with `^` is tried against every
+  distinct value of the field.
 - **`LIKE`/`NOT_LIKE`** treat only `%` and `_` as wildcards and match
   case-insensitively, folding ASCII case only; a literal `*`, `?`, or `\` in
   the pattern is escaped to match verbatim. The case-insensitive form requires

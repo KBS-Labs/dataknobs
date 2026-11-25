@@ -50,13 +50,11 @@ Semantics:
   matches literally, mirroring SQL ``LIKE`` where only ``%`` and ``_`` are
   wildcards. The case-insensitive ``wildcard`` form requires Elasticsearch
   ≥ 7.10.
-* ``REGEX`` runs against the **full field value** via the keyword sub-field
-  (case-sensitive), so a pattern matches the whole string — matching the
-  in-memory (``re.search``) and SQL backends. Against the analyzed base path a
-  ``regexp`` would match per-token (and lowercased), which is why the keyword
-  sub-field is used. Note Elasticsearch ``regexp`` is anchored (the pattern must
-  match the entire value) and uses Lucene RegExp syntax, which differs from
-  Python ``re`` (no ``^``/``$`` anchors, no look-around).
+* ``REGEX`` finds the pattern anywhere in the **full field value**
+  (case-sensitive), as ``re.search`` does. Elasticsearch ``regexp`` matches a
+  whole value in Lucene's syntax, so the pattern is translated
+  (:func:`~dataknobs_data.backends.elasticsearch_regex.python_regex_to_lucene`);
+  one that cannot be raises ``ValueError``.
 * ``STARTS_WITH`` is a case-sensitive ``prefix`` query.
 * A bound relates only to values of its own kind, as ``Filter.matches`` has it.
   The mapping says so for a number or boolean field, and the storage key is
@@ -88,6 +86,7 @@ from ..query import (
     is_storage_key_field,
     value_kind,
 )
+from .elasticsearch_regex import python_regex_to_lucene
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping, Sequence
@@ -454,8 +453,9 @@ def _pattern_clause(op: Operator, path: str, value: Any) -> dict[str, Any]:
     if op == Operator.LIKE:
         return {"wildcard": {path: {"value": _sql_wildcard_to_es(value), "case_insensitive": True}}}
     if op == Operator.REGEX:
-        # ``path`` holds the full value, not a single analyzed token.
-        return {"regexp": {path: value}}
+        # ``path`` holds the full value, not a single analyzed token. ``NONE``
+        # turns off the operators Lucene has and Python does not.
+        return {"regexp": {path: {"value": python_regex_to_lucene(value), "flags": "NONE"}}}
     # Literal, case-sensitive prefix: no case_insensitive flag.
     return {"prefix": {path: value}}
 

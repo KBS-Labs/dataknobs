@@ -34,8 +34,8 @@ pytestmark = [pytest.mark.integration, requires_real_elasticsearch]
 
 Database = SyncElasticsearchDatabase | AsyncElasticsearchDatabase
 
-#: Not a regular expression, so Elasticsearch answers this one with a 400.
-REJECTED = Query(filters=[Filter("id", Operator.REGEX, "(")])
+#: Longer than ``index.max_regex_length``, so Elasticsearch answers this one with a 400.
+REJECTED = Query(filters=[Filter("id", Operator.REGEX, "a" * 1001)])
 
 
 async def settle(value: Any) -> Any:
