@@ -62,8 +62,9 @@ async def db(
     for config in make_elasticsearch_test_index("test_starred_"):
         database = request.param(config)
         await settle(database.connect())
-        for key, row in ROWS.items():
-            await settle(database.upsert(key, Record(row)))
+        await settle(
+            database.upsert_batch([Record(row, storage_id=key) for key, row in ROWS.items()])
+        )
         yield database
         await settle(database.close())
 
@@ -86,12 +87,10 @@ async def test_a_starred_name_answers_as_it_does_in_memory(db: Any, name: str) -
         assert await _found(db, name, op, value) == expected, op
 
 
-@pytest.mark.parametrize(("op", "value"), ASK_FOR_A_VALUE)
-async def test_a_starred_field_another_one_matches_is_refused(
-    db: Any, op: Operator, value: Any
-) -> None:
-    with pytest.raises(ValueError, match=r"'r\*'.*reads the '\*'"):
-        await _found(db, "r*", op, value)
+async def test_a_starred_field_another_one_matches_is_refused(db: Any) -> None:
+    for op, value in ASK_FOR_A_VALUE:
+        with pytest.raises(ValueError, match=r"'r\*'.*reads the '\*'"):
+            await _found(db, "r*", op, value)
 
 
 async def test_a_comparison_with_a_starred_field_is_answered(db: Any) -> None:
