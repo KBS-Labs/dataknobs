@@ -28,6 +28,14 @@ class MigrationProgress:
     start_time: float | None = None
     end_time: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    #: ``start_time`` / ``end_time`` as marked, each with the monotonic reading
+    #: taken then. The system clock can be adjusted between the two.
+    _started: tuple[float, float] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _finished: tuple[float, float] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def start(self) -> MigrationProgress:
         """Mark migration as started.
@@ -35,7 +43,8 @@ class MigrationProgress:
         Returns:
             Self for chaining
         """
-        self.start_time = time.time()
+        self.start_time, self.end_time = time.time(), None
+        self._started, self._finished = (self.start_time, time.monotonic()), None
         return self
 
     def finish(self) -> MigrationProgress:
@@ -45,11 +54,16 @@ class MigrationProgress:
             Self for chaining
         """
         self.end_time = time.time()
+        self._finished = (self.end_time, time.monotonic())
         return self
 
     @property
     def duration(self) -> float:
         """Get migration duration in seconds.
+
+        Measured on a monotonic clock, so an adjustment of the system clock
+        does not change it. Between a ``start_time`` and ``end_time`` set
+        directly, it is their difference.
 
         Returns:
             Duration in seconds, or 0 if not started
@@ -57,7 +71,13 @@ class MigrationProgress:
         if self.start_time is None:
             return 0.0
 
-        end = self.end_time if self.end_time else time.time()
+        if self._started is not None and self._started[0] == self.start_time:
+            if self.end_time is None:
+                return time.monotonic() - self._started[1]
+            if self._finished is not None and self._finished[0] == self.end_time:
+                return self._finished[1] - self._started[1]
+
+        end = self.end_time if self.end_time is not None else time.time()
         return end - self.start_time
 
     @property

@@ -1911,6 +1911,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`MigrationProgress.duration` and `StreamResult.duration` are measured on a
+  monotonic clock.** Each was the difference of two readings of the system
+  clock, so an adjustment between them made it short, long or negative.
+  `MigrationProgress.start()` also clears the `end_time` of an earlier run,
+  which made the duration of the new one negative. `start_time` and `end_time`
+  are still the system clock's.
 - **`AsyncPostgresDatabase` compares a float with a stored number as its sync
   twin does.** `asyncpg` sent the decimal a double is exactly, which no stored
   `0.1` equals, so `EQ`, `IN` and `CONTAINS` missed the record, `NEQ` and
