@@ -130,7 +130,8 @@ def proxied(es_config: dict[str, Any], script: Script) -> Iterator[dict[str, Any
         setattr(Proxy, f"do_{method}", Proxy.forward)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # ``shutdown`` waits out one poll, half a second unless told otherwise.
+    thread = threading.Thread(target=lambda: server.serve_forever(0.01), daemon=True)
     thread.start()
     yield {**es_config, "host": "127.0.0.1", "port": server.server_port}
     server.shutdown()

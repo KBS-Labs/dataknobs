@@ -130,8 +130,11 @@ async def db(
     for config in make_elasticsearch_test_index("test_list_fields_"):
         database = request.param(config)
         await settle(database.connect())
-        for record_id, data in ROWS.items():
-            await settle(database.upsert(record_id, Record(data)))
+        await settle(
+            database.upsert_batch(
+                [Record(data, storage_id=record_id) for record_id, data in ROWS.items()]
+            )
+        )
         yield database
         await settle(database.close())
 

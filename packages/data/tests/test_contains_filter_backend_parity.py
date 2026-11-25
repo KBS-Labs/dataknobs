@@ -153,6 +153,10 @@ def _oracle(spec: Filter, corpus: dict[str, dict[str, Any]]) -> set[str]:
     return {i for i in corpus if spec.matches(_value(i, corpus, spec.field))}
 
 
+def _records(corpus: dict[str, dict[str, Any]]) -> list[Record]:
+    return [Record(data=dict(data), id=record_id) for record_id, data in corpus.items()]
+
+
 def _ids(records: list[Record]) -> set[str]:
     return {record.id for record in records if record.id is not None}
 
@@ -256,8 +260,7 @@ def sync_db(request: pytest.FixtureRequest) -> Iterator[Any]:
     """A connected sync backend holding the corpus."""
     with tempfile.TemporaryDirectory() as d:
         for db in _make_sync_db(request.param, Path(d), request):
-            for record_id, data in CORPUS.items():
-                db.create(Record(data=dict(data), id=record_id))
+            db.create_batch(_records(CORPUS))
             yield db
 
 
@@ -266,51 +269,71 @@ async def async_db(request: pytest.FixtureRequest) -> AsyncIterator[Any]:
     """A connected async backend holding the corpus."""
     with tempfile.TemporaryDirectory() as d:
         async for db in _make_async_db(request.param, Path(d), request):
-            for record_id, data in CORPUS.items():
-                await db.create(Record(data=dict(data), id=record_id))
+            await db.create_batch(_records(CORPUS))
             yield db
 
 
-@pytest.mark.parametrize(("case", "spec", "expected"), CASES, ids=[c[0] for c in CASES])
 class TestContainsIsAnsweredAsTheMatcherAnswersIt:
+    """A backend is asked every case at once: only the questions differ."""
+
+    @pytest.mark.parametrize(("case", "spec", "expected"), CASES, ids=[c[0] for c in CASES])
     def test_the_oracle_is_the_expectation(
         self, case: str, spec: Filter, expected: set[str]
     ) -> None:
         assert _oracle(spec, CORPUS) == expected
 
-    def test_sync(self, sync_db: Any, case: str, spec: Filter, expected: set[str]) -> None:
-        query = Query(filters=[spec])
-        answer = _expected(sync_db, case, expected)
-        assert _ids(sync_db.search(query)) == answer
-        assert sync_db.count(query) == len(answer)
+    def test_sync(self, sync_db: Any) -> None:
+        wrong = {}
+        for case, spec, expected in CASES:
+            query = Query(filters=[spec])
+            answer = _expected(sync_db, case, expected)
+            found, counted = _ids(sync_db.search(query)), sync_db.count(query)
+            if (found, counted) != (answer, len(answer)):
+                wrong[case] = (found, counted, answer)
+        assert wrong == {}
 
-    async def test_async(self, async_db: Any, case: str, spec: Filter, expected: set[str]) -> None:
-        answer = _expected(async_db, case, expected)
-        assert _ids(await async_db.search(Query(filters=[spec]))) == answer
+    async def test_async(self, async_db: Any) -> None:
+        wrong = {}
+        for case, spec, expected in CASES:
+            answer = _expected(async_db, case, expected)
+            found = _ids(await async_db.search(Query(filters=[spec])))
+            if found != answer:
+                wrong[case] = (found, answer)
+        assert wrong == {}
 
 
-@pytest.mark.parametrize(("case", "spec", "expected"), MIXED_CASES, ids=[c[0] for c in MIXED_CASES])
 class TestOnlyAListContains:
     """A value on its own contains nothing, whatever the list's elements are."""
 
+    @pytest.mark.parametrize(
+        ("case", "spec", "expected"), MIXED_CASES, ids=[c[0] for c in MIXED_CASES]
+    )
     def test_the_oracle_is_the_expectation(
         self, case: str, spec: Filter, expected: set[str]
     ) -> None:
         assert _oracle(spec, MIXED) == expected
 
-    def test_sync(self, sync_db: Any, case: str, spec: Filter, expected: set[str]) -> None:
+    def test_sync(self, sync_db: Any) -> None:
         if _is_elasticsearch(sync_db):
             pytest.skip("one Elasticsearch field cannot hold these")
-        for record_id, data in MIXED.items():
-            sync_db.create(Record(data=dict(data), id=record_id))
-        assert _ids(sync_db.search(Query(filters=[spec]))) == expected
+        sync_db.create_batch(_records(MIXED))
+        wrong = {}
+        for case, spec, expected in MIXED_CASES:
+            found = _ids(sync_db.search(Query(filters=[spec])))
+            if found != expected:
+                wrong[case] = (found, expected)
+        assert wrong == {}
 
-    async def test_async(self, async_db: Any, case: str, spec: Filter, expected: set[str]) -> None:
+    async def test_async(self, async_db: Any) -> None:
         if _is_elasticsearch(async_db):
             pytest.skip("one Elasticsearch field cannot hold these")
-        for record_id, data in MIXED.items():
-            await async_db.create(Record(data=dict(data), id=record_id))
-        assert _ids(await async_db.search(Query(filters=[spec]))) == expected
+        await async_db.create_batch(_records(MIXED))
+        wrong = {}
+        for case, spec, expected in MIXED_CASES:
+            found = _ids(await async_db.search(Query(filters=[spec])))
+            if found != expected:
+                wrong[case] = (found, expected)
+        assert wrong == {}
 
 
 class TestContainsAmongOtherConditions:
