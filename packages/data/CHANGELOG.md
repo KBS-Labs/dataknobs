@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   metadata the frame does not name.** It replaced each record with its row,
   erasing them. Each record is read before it is written. Use `update_batch` to
   replace whole records.
+- **BREAKING: an Elasticsearch filter compares a field holding a list whole**, as
+  the other backends do, on both twins and in vector pre-filters. A list matched
+  when any element did, `NEQ` and the other negations left it out, an empty one
+  had no value, and a name leading into a list of mappings reached them. A
+  document names its list fields in a top-level `list_fields`; one stored without
+  it is compared as before until it is written again, and an existing index with
+  a `strict` mapping refuses a record holding a list until `list_fields` is added.
+  To find a record by an element, use `CONTAINS`, which finds nothing in a
+  document stored without `list_fields`.
 - **BREAKING: an Elasticsearch filter or sort reaches a field by how the index
   maps it**, on both twins, instead of by guessing.
 
@@ -1208,7 +1217,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list, on every backend (`Filter("tags", Operator.CONTAINS, "urgent")`). An
   element equals the value as `EQ` has it. Only a list contains anything; a
   string is not searched, so the spelling `"contains"`, which raised
-  `ValueError` before, finds no substring: use `LIKE` for that. On Elasticsearch a value on its own contains itself.
+  `ValueError` before, finds no substring: use `LIKE` for that.
+  On Elasticsearch a list inside a list is read as its elements.
   They take one value: a collection raises `ValueError`. A `ColumnLayout` of your
   own answers them for its columns, or raises for an operator it does not know.
 - **`RecordEntitySource` takes a `revision=` provider**, an async callable

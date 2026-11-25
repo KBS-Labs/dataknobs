@@ -1423,11 +1423,25 @@ pre-filters agree:
   is read as epoch milliseconds, whether the document holds a number or a string.
 - **A negated operator** (`NEQ`, `NOT_IN`, `NOT_LIKE`, `NOT_BETWEEN`, `NOT_CONTAINS`) matches only
   a document that has a value, as on every backend.
-- **`CONTAINS` cannot tell a list from its elements**: a field holding `"a"`
-  contains `"a"`, and an empty list is no value to `NOT_CONTAINS`.
-- **A list is compared element by element**, unlike other backends: a field holding `["a", "b"]` equals
-  `"a"`, and is not matched by `NEQ "a"`. Elasticsearch refuses `EQ` or `NEQ` with
-  a list as the value.
+- **A field holding a list is compared whole**, as on every backend: `["a", "b"]`
+  does not equal `"a"`, is matched by `NEQ "a"`, and has a value even when it is
+  empty. A name leading into a list (`items.name`) has no value. Elasticsearch
+  cannot tell a list from its elements, so each document written names the fields
+  that hold one in a top-level `list_fields`. A document written without it, by an
+  earlier version or another client, is compared element by element until it is
+  written again. So is every document of an index whose mapping has `dynamic`
+  `false` and no `list_fields`; one that is `strict` refuses a record holding a
+  list until `list_fields` is added to it, as a keyword with a `keyword`
+  sub-field. An index created without `list_fields` by an earlier version or
+  elsewhere maps it on the first write of a list, and by default leaves out a
+  path longer than 256 characters (`data.` included); a list there is compared
+  element by element. Elasticsearch refuses `EQ` or `NEQ` with a list as the
+  value, and `IN` or `NOT_IN` with a list among the values.
+- **`CONTAINS` finds nothing in a document written without `list_fields`**, and
+  `NOT_CONTAINS` matches it if the field has a value, until it is written again.
+  The same holds for a path left out as above, written again or not. A
+  list inside a list is read as its elements, unlike other backends: `[["a"]]`
+  contains `"a"`.
 - **A string compared with a date field is read as a date** by equality and range
   alike, and Elasticsearch refuses one that is not a date. An `ip` field reads
   its operand the same way.

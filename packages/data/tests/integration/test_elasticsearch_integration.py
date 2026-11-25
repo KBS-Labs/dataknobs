@@ -8,6 +8,7 @@ import pytest
 from dataknobs_common.testing import requires_real_elasticsearch
 from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
 from dataknobs_data.query import Operator, SortOrder
+from dataknobs_data.query_logic import ComplexQuery
 
 # pytestmark = pytest.mark.integration
 
@@ -494,16 +495,18 @@ class TestElasticsearchIntegration:
         ids = db.create_batch(records)
 
         # Search by array element
-        query = Query().filter("tags", Operator.EQ, "electronics")
+        query = Query().filter("tags", Operator.CONTAINS, "electronics")
         results = db.search(query)
         assert len(results) == 2
         names = {r.get_value("name") for r in results}
         assert names == {"Product A", "Product B"}
 
-        # IN query with array field
-        query = Query().filter("tags", Operator.IN, ["mobile", "laptop"])
+        # Either of two elements
+        query = ComplexQuery.OR(
+            [Query().filter("tags", Operator.CONTAINS, tag) for tag in ("mobile", "laptop")]
+        )
         results = db.search(query)
-        assert len(results) == 2
+        assert {r.get_value("name") for r in results} == {"Product A", "Product B"}
 
         # Cleanup
         db.delete_batch(ids)
