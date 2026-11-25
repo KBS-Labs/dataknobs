@@ -268,27 +268,44 @@ jobs:
     needs: [check-changes, validate-quality-artifacts, build-docs]
     if: always()
     steps:
+      # This job runs whatever happened before it, and it is the only check the
+      # branch ruleset requires, so anything it does not refuse can merge.
+      # tests/test_required_ci_check.py runs this script.
       - name: Check job results
+        env:
+          DETECTION: ${{ needs.check-changes.result }}
+          CODE_CHANGED: ${{ needs.check-changes.outputs.code-changed }}
+          DOCS_CHANGED: ${{ needs.check-changes.outputs.docs-changed }}
+          VALIDATION: ${{ needs.validate-quality-artifacts.result }}
+          BUILD_DOCS: ${{ needs.build-docs.result }}
         run: |
-          echo "Checking results of all jobs..."
-          echo "Code changed: ${{ needs.check-changes.outputs.code-changed }}"
-          echo "Docs changed: ${{ needs.check-changes.outputs.docs-changed }}"
-          echo "Quality validation: ${{ needs.validate-quality-artifacts.result }}"
-          echo "Build docs: ${{ needs.build-docs.result }}"
+          echo "Change detection: $DETECTION"
+          echo "Code changed: $CODE_CHANGED"
+          echo "Docs changed: $DOCS_CHANGED"
+          echo "Quality validation: $VALIDATION"
+          echo "Build docs: $BUILD_DOCS"
 
-          # Fail if any required job failed (not skipped)
-          if [[ "${{ needs.validate-quality-artifacts.result }}" == "failure" ]]; then
-            echo "❌ Quality validation failed"
+          # Without this, a failed detection skips every other job and looks
+          # like a pull request that changed nothing.
+          if [[ "$DETECTION" != "success" ]]; then
+            echo "❌ Change detection did not succeed, so nothing was checked. Re-run this workflow."
             exit 1
           fi
 
-          if [[ "${{ needs.build-docs.result }}" == "failure" ]]; then
-            echo "❌ Documentation build failed"
-            exit 1
-          fi
+          # A job must have run if its files changed, and been skipped if not.
+          check_job() {
+            case "$2:$3" in
+              true:success | false:skipped) ;;
+              *)
+                echo "❌ $1: result '$3' (files changed: '$2')"
+                exit 1
+                ;;
+            esac
+          }
+          check_job "Quality validation" "$CODE_CHANGED" "$VALIDATION"
+          check_job "Documentation build" "$DOCS_CHANGED" "$BUILD_DOCS"
 
-          # Check if any checks ran
-          if [[ "${{ needs.check-changes.outputs.code-changed }}" == "true" ]] || [[ "${{ needs.check-changes.outputs.docs-changed }}" == "true" ]]; then
+          if [[ "$CODE_CHANGED" == "true" || "$DOCS_CHANGED" == "true" ]]; then
             echo "✅ All required checks passed"
           else
             echo "ℹ️  No code or documentation changes detected - skipping quality checks"

@@ -92,7 +92,8 @@ steps when `bin/package-hashes.py validate` reports no quality-relevant source
 change.
 
 **`all-checks-complete`** always runs and produces the single consistent status
-check, failing if either substantive job failed.
+check. It fails unless `check-changes` succeeded and each of the other two jobs
+did what `check-changes` decided: ran and succeeded, or was skipped.
 
 ### Documentation Mirror Check
 
@@ -234,8 +235,11 @@ the run that produced the artifacts.
 
 ### The quality job did not run at all
 
-`check-changes` decided nothing quality-relevant changed. Confirm your paths
-match the `code` filter in `quality-validation.yml`. The filter is mirrored by
+If `check-changes` failed, so does `all-checks-complete`. Read its log: a GitHub
+error fetching the list of changed files is cleared by re-running the workflow.
+
+Otherwise `check-changes` decided nothing quality-relevant changed. Confirm your
+paths match the `code` filter in `quality-validation.yml`. The filter is mirrored by
 `WORKSPACE_QUALITY_INPUTS` in `bin/changed-packages.py`, and
 `tests/test_toolchain_consistency.py` asserts the two agree — a disagreement
 there is a bug, not something to work around.
