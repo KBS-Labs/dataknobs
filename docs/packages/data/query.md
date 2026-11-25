@@ -56,6 +56,8 @@ query = Query(filters=[
 | `NOT_EXISTS` | Field has no value | `Filter("deleted_at", Operator.NOT_EXISTS)` |
 | `BETWEEN` | Between range | `Filter("age", Operator.BETWEEN, (18, 65))` |
 | `NOT_BETWEEN` | Outside range | `Filter("temp", Operator.NOT_BETWEEN, (20, 30))` |
+| `CONTAINS` | A list with an element equal to the value | `Filter("tags", Operator.CONTAINS, "urgent")` |
+| `NOT_CONTAINS` | Has a value that is not such a list | `Filter("tags", Operator.NOT_CONTAINS, "draft")` |
 
 `IN` and `NOT_IN` take a collection that is neither a string nor a mapping;
 anything else raises `ValueError` when the `Filter` is built. Nothing is in an

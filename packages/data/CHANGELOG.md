@@ -1204,6 +1204,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Operator.CONTAINS` and `NOT_CONTAINS`** find a record by one element of a
+  list, on every backend (`Filter("tags", Operator.CONTAINS, "urgent")`). An
+  element equals the value as `EQ` has it. Only a list contains anything; a
+  string is not searched. On Elasticsearch a value on its own contains itself.
+  They take one value: a collection raises `ValueError`. A `ColumnLayout` of your
+  own answers them for its columns, or raises for an operator it does not know.
 - **`RecordEntitySource` takes a `revision=` provider**, an async callable
   typed by the new `RevisionProvider` alias, exported from
   `dataknobs_data.ontology`. With one, the source declares

@@ -464,7 +464,16 @@ query = (Query()
 # Operator.REGEX - regular expression match
 # Operator.STARTS_WITH - literal, case-sensitive prefix match
 #   (escape-safe: a '_' or '%' in the prefix matches literally, unlike LIKE)
+# Operator.CONTAINS - a list, one of whose elements equals the value
+# Operator.NOT_CONTAINS - has a value that is not such a list
 ```
+
+`CONTAINS` and `NOT_CONTAINS` take one value and compare it with each element of
+the list a field holds, as `EQ` compares it; a collection raises `ValueError`
+when the `Filter` is built. Only a list contains anything: a string is not
+searched for a substring, nor a mapping for a key. `NOT_CONTAINS` matches every
+other record whose field has a value. A column of a native table holds one value,
+so it contains nothing, and a `json` column is refused as for other operators.
 
 `IN` and `NOT_IN` take a collection (a list, tuple, set, `dict.keys()`, or
 any other collection that is neither a string nor a mapping). Anything else
@@ -1408,8 +1417,10 @@ pre-filters agree:
   a string field, unlike other backends, a bound that is not a string is compared
   as text, because the index holds `5` and `"5"` alike. A number on a date field
   is read as epoch milliseconds, whether the document holds a number or a string.
-- **A negated operator** (`NEQ`, `NOT_IN`, `NOT_LIKE`, `NOT_BETWEEN`) matches only
+- **A negated operator** (`NEQ`, `NOT_IN`, `NOT_LIKE`, `NOT_BETWEEN`, `NOT_CONTAINS`) matches only
   a document that has a value, as on every backend.
+- **`CONTAINS` cannot tell a list from its elements**: a field holding `"a"`
+  contains `"a"`, and an empty list is no value to `NOT_CONTAINS`.
 - **A list is compared element by element**, unlike other backends: a field holding `["a", "b"]` equals
   `"a"`, and is not matched by `NEQ "a"`. Elasticsearch refuses `EQ` or `NEQ` with
   a list as the value.

@@ -111,12 +111,12 @@ earlier version keeps, are in the
 
 ## Usage Examples
 
-### Full-Text Search
+### Finding a Record by an Element of a List
 
 ```python
-# Text search across all fields
+# Records whose "tags" list holds "outdoor"
 query = Query(filters=[
-    Filter("_all", Operator.CONTAINS, "sensor malfunction")
+    Filter("tags", Operator.CONTAINS, "outdoor")
 ])
 
 results = db.search(query)

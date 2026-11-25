@@ -70,7 +70,8 @@ Semantics:
   whose index holds ``5`` and ``"5"`` alike, and a number with a date field as
   epoch milliseconds. A list is compared element by
   element, and equality with a list is refused by Elasticsearch.
-* A negated operator (``NEQ``/``NOT_IN``/``NOT_LIKE``/``NOT_BETWEEN``) matches a
+* A negated operator (``NEQ``/``NOT_IN``/``NOT_LIKE``/``NOT_BETWEEN``/
+  ``NOT_CONTAINS``) matches a
   document that **has a value** the operator it negates does not match: ``exists``
   with a ``must_not``, because a bare ``must_not`` also keeps a document without
   the field. Each clause is self-contained, so callers only ever wrap the
@@ -108,6 +109,7 @@ _NEGATED = {
     Operator.NOT_IN: Operator.IN,
     Operator.NOT_BETWEEN: Operator.BETWEEN,
     Operator.NOT_LIKE: Operator.LIKE,
+    Operator.NOT_CONTAINS: Operator.CONTAINS,
 }
 _RANGE_BOUNDS = {
     Operator.GT: "gt",
@@ -474,7 +476,10 @@ def _positive_clause(op: Operator, filter_obj: Filter, types: FieldTypes) -> dic
         if types.holds_only_words(name) or not types.takes_patterns(name):
             raise _unanswerable(filter_obj, types)
         return clause
-    if op == Operator.EQ:
+    if op == Operator.CONTAINS and is_storage_key_field(name):
+        return None
+    if op in (Operator.EQ, Operator.CONTAINS):
+        # A list is indexed as its elements, so a term finds any of them.
         return {"term": {path: value}} if _relates(filter_obj, value, types) else None
     if op == Operator.IN:
         members = [m for m in value if _relates(filter_obj, m, types)]
