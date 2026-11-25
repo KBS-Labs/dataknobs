@@ -364,6 +364,37 @@ made to it between the two is overwritten.
 Rows whose ID is not in the database count as `not_found` rather than
 being inserted: `update_from_dataframe` updates, it does not upsert.
 
+### Transform and Save
+
+`transform_and_save` queries records, hands them to your function as a frame, and
+writes what it changed back to the same records:
+
+```python
+from dataknobs_data import Filter, Operator, Query
+
+stats = batch_ops.transform_and_save(
+    Query(filters=[Filter("status", Operator.EQ, "active")]),
+    transformer=lambda df: df.assign(total=df["price"] * df["quantity"]),
+)
+
+print(f"Updated: {stats['updated']}")
+print(f"Unchanged: {stats['unchanged']}")
+```
+
+The frame's index is the records' ids, named `record_id` unless a field has that
+name. Filter and reorder rows as you like, but keep the index: a returned row that
+names no queried record, or one twice, raises `ValueError` before anything is
+written. After a `merge`, set the index again. To insert new rows or aggregates, use
+`bulk_insert_dataframe`.
+
+Only a cell that differs from the one queried is written, so a field the frame
+shows as missing because other records have it stays absent. A dropped column or
+row is left as stored, and an int and a float that are equal do not differ. A cell
+made missing is written as `None`. pandas holds an int column with a missing value
+as floats, so a changed cell of one is written as a float.
+
+`BatchConfig.progress_callback` counts the rows that changed.
+
 ### Upsert Operations
 
 `BatchOperations` has no upsert method. Insert-or-update goes through the
