@@ -122,6 +122,11 @@ query = Query(filters=[
 results = db.search(query)
 ```
 
+This relies on `list_fields`, which each document is written with, so it finds
+nothing in a document stored by an earlier version or another client until that
+document is written again. See the
+[API reference](https://kbs-labs.github.io/dataknobs/packages/data/api-reference/#elasticsearch-backend).
+
 ### Aggregations
 
 ```python

@@ -30,20 +30,19 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
+import numpy as np
 import pytest
 
 from dataknobs_data import Filter, Operator, Query, Record
+from dataknobs_data.backends import elasticsearch_query
 from dataknobs_data.backends.elasticsearch_query import (
     FieldTypes,
     _field_path,
     _sql_wildcard_to_es,
-    build_bool_query,
-    build_complex_es_query,
-    build_filter_es_query,
-    build_query,
     build_sort,
     build_text_query,
     build_text_search,
+    list_paths,
     query_fields,
     text_search_results,
 )
@@ -71,6 +70,61 @@ def _learned(**mapped: str) -> FieldTypes:
     return types
 
 
+def _list_clauses(path: str) -> list[dict[str, Any]]:
+    """What leaves out a list at ``path``, and one ``path`` leads into."""
+    parts = path.split(".")
+    parents = [".".join(parts[:i]) for i in range(2, len(parts))]
+    at = {"term": {"list_fields.keyword": path}}
+    return [at, {"terms": {"list_fields.keyword": parents}}] if parents else [at]
+
+
+def _apart_from_lists(built: Any) -> Any:
+    """A built query less the clauses that leave lists out, requiring each of them.
+
+    What those are has tests of its own; every other test reads what is left.
+    """
+    if isinstance(built, list):
+        return [_apart_from_lists(part) for part in built]
+    if not isinstance(built, dict):
+        return built
+    body = built.get("bool", {})
+    if body.keys() == {"must", "must_not"} and "list_fields" in str(body["must_not"][0]):
+        path = body["must_not"][0]["term"]["list_fields.keyword"]
+        assert body["must_not"] == _list_clauses(path)
+        assert path in str(body["must"])
+        return _apart_from_lists(body["must"])
+    if "list_fields" in str(body.get("should", [{}])[-1]) and "term" in body["should"][-1]:
+        *indexed, at = body["should"]
+        clauses = _list_clauses(at["term"]["list_fields.keyword"])
+        assert at == clauses[0]
+        assert body["minimum_should_match"] == 1
+        assert [body[k] for k in body if k == "must_not"] == clauses[1:]
+        if not indexed:
+            return NOTHING
+        assert indexed == [{"exists": {"field": at["term"]["list_fields.keyword"]}}]
+        return indexed[0]
+    return {key: _apart_from_lists(part) for key, part in built.items()}
+
+
+def build_filter_es_query(spec: Filter, types: FieldTypes) -> dict[str, Any]:
+    return _apart_from_lists(elasticsearch_query.build_filter_es_query(spec, types))
+
+
+def build_bool_query(filters: Any, types: FieldTypes) -> dict[str, Any]:
+    return _apart_from_lists(elasticsearch_query.build_bool_query(filters, types))
+
+
+def build_complex_es_query(condition: Any, types: FieldTypes) -> dict[str, Any]:
+    return _apart_from_lists(elasticsearch_query.build_complex_es_query(condition, types))
+
+
+def build_query(query: Any, types: FieldTypes) -> dict[str, Any]:
+    return _apart_from_lists(elasticsearch_query.build_query(query, types))
+
+
+NOTHING: dict[str, Any] = {"match_none": {}}
+
+
 TYPES = _learned(
     **dict.fromkeys(("name", "f", "status", "a", "b"), "text"),
     age="long",
@@ -81,9 +135,6 @@ TYPES = _learned(
 
 def _has_value_but_not(path: str, clause: dict[str, Any]) -> dict[str, Any]:
     return {"bool": {"filter": {"exists": {"field": path}}, "must_not": clause}}
-
-
-NOTHING = {"match_none": {}}
 
 
 # --- equality / inequality -------------------------------------------------
@@ -231,14 +282,18 @@ def test_not_exists_wraps_in_must_not() -> None:
 # --- regex / prefix --------------------------------------------------------
 
 
+def _contains(path: str, clause: dict[str, Any]) -> dict[str, Any]:
+    return {"bool": {"must": clause, "filter": {"term": {"list_fields.keyword": path}}}}
+
+
 def test_contains_compares_an_element_as_eq_compares_a_value() -> None:
     assert build_filter_es_query(
         Filter("tags", Operator.CONTAINS, "urgent"), _learned(tags="text")
-    ) == {"term": {"data.tags.keyword": "urgent"}}
+    ) == _contains("data.tags", {"term": {"data.tags.keyword": "urgent"}})
 
 
 def test_not_contains_matches_only_a_field_with_a_value() -> None:
-    clause = {"term": {"data.tags.keyword": "urgent"}}
+    clause = _contains("data.tags", {"term": {"data.tags.keyword": "urgent"}})
     assert build_filter_es_query(
         Filter("tags", Operator.NOT_CONTAINS, "urgent"), _learned(tags="text")
     ) == _has_value_but_not("data.tags", clause)
@@ -562,10 +617,13 @@ def _starred(*others: str) -> FieldTypes:
 
 
 def test_a_starred_name_that_is_no_field_has_no_value() -> None:
-    for op, value in [(Operator.EXISTS, None), *NEGATIVES]:
-        assert build_filter_es_query(Filter("p*", op, value), TYPES) == {"match_none": {}}
+    """But an empty list, which the index maps no field for."""
+    assert build_filter_es_query(Filter("p*", Operator.EXISTS), TYPES) == NOTHING
+    for op, value in NEGATIVES:
+        clause = build_filter_es_query(Filter("p*", op, value), TYPES)
+        assert clause["bool"]["filter"] == NOTHING
     spec = Filter("p*", Operator.NOT_EXISTS)
-    assert build_filter_es_query(spec, TYPES) == {"match_all": {}}
+    assert build_filter_es_query(spec, TYPES) == {"bool": {"must_not": NOTHING}}
 
 
 @pytest.mark.parametrize("other", ["data.q", "data.Price", "data", "id", "x.data.price"])
@@ -979,3 +1037,65 @@ class TestTextSearch:
         found = {"max_score": 0.0, "hits": [{"_id": "x", "_score": 0.0}]}
         ((_, score),) = text_search_results(found, lambda hit: Record({}))
         assert score == 0.0
+
+
+# --- fields holding a list ----------------------------------------------------
+
+
+def test_a_comparison_leaves_out_a_list() -> None:
+    assert elasticsearch_query.build_filter_es_query(Filter("age", Operator.EQ, 1), TYPES) == {
+        "bool": {
+            "must": {"term": {"data.age": 1}},
+            "must_not": [{"term": {"list_fields.keyword": "data.age"}}],
+        }
+    }
+
+
+def test_a_comparison_leaves_out_what_a_list_holds() -> None:
+    spec = Filter("l.m.k", Operator.EQ, 1)
+    assert elasticsearch_query.build_filter_es_query(spec, TYPES) == {
+        "bool": {
+            "must": {"term": {"data.l.m.k": 1}},
+            "must_not": [
+                {"term": {"list_fields.keyword": "data.l.m.k"}},
+                {"terms": {"list_fields.keyword": ["data.l", "data.l.m"]}},
+            ],
+        }
+    }
+
+
+def test_a_list_is_a_value_and_what_it_holds_is_not() -> None:
+    assert elasticsearch_query.build_filter_es_query(Filter("l.k", Operator.EXISTS), TYPES) == {
+        "bool": {
+            "should": [
+                {"exists": {"field": "data.l.k"}},
+                {"term": {"list_fields.keyword": "data.l.k"}},
+            ],
+            "minimum_should_match": 1,
+            "must_not": {"terms": {"list_fields.keyword": ["data.l"]}},
+        }
+    }
+
+
+@pytest.mark.parametrize("op", [Operator.EQ, Operator.NEQ, Operator.EXISTS, Operator.LIKE])
+def test_the_storage_key_is_never_a_list(op: Operator) -> None:
+    spec = Filter("id", op, "a")
+    assert "list_fields" not in str(elasticsearch_query.build_filter_es_query(spec, TYPES))
+
+
+@pytest.mark.parametrize(
+    ("data", "paths"),
+    [
+        ({}, []),
+        ({"a": 1, "b": "x", "c": {"d": None}}, []),
+        ({"a": []}, ["data.a"]),
+        ({"a": (1, 2)}, ["data.a"]),
+        ({"a": np.array([1.0])}, ["data.a"]),
+        ({"b": [1], "a": {"c": {"d": [1]}}}, ["data.a.c.d", "data.b"]),
+        ({"a": [{"k": [1]}]}, ["data.a"]),
+        ({"a": [["b"]]}, ["data.a"]),
+        ({"a.b": [1], "a": {"b": [1]}}, ["data.a.b"]),
+    ],
+)
+def test_the_paths_that_hold_a_list(data: dict[str, Any], paths: list[str]) -> None:
+    assert list_paths(data) == paths

@@ -68,14 +68,23 @@ Semantics:
   NaN match nothing anywhere, and a ``None`` member of a list is dropped. A
   bound that is not a string is still compared as text with a string field,
   whose index holds ``5`` and ``"5"`` alike, and a number with a date field as
-  epoch milliseconds. A list is compared element by
-  element, and equality with a list is refused by Elasticsearch.
+  epoch milliseconds.
+* A field holding a list is compared whole, so no operator with a single value
+  matches it and each negation but ``NOT_LIKE`` does; what a list holds is not
+  reached by a name leading into it. Elasticsearch indexes each element as a
+  value of the field, so the document names the paths that hold a list
+  (:data:`LIST_FIELDS`), and the clauses leave those out. A document stored
+  without it is compared element by element, and ``[]`` in it is no value.
+  Equality with a list is refused by Elasticsearch.
+* ``CONTAINS`` matches a field the document names as a list, so it finds nothing
+  in one stored without the names. A list inside a list is indexed as its
+  elements, and is read as them.
 * A negated operator (``NEQ``/``NOT_IN``/``NOT_LIKE``/``NOT_BETWEEN``/
-  ``NOT_CONTAINS``) matches a
-  document that **has a value** the operator it negates does not match: ``exists``
-  with a ``must_not``, because a bare ``must_not`` also keeps a document without
-  the field. Each clause is self-contained, so callers only ever wrap the
-  returned clauses in ``bool``/``must``.
+  ``NOT_CONTAINS``) matches a document that **has a value** the operator it
+  negates does not match: ``exists`` with a ``must_not``, because a bare
+  ``must_not`` also keeps a document without the field. Each clause is
+  self-contained, so callers only ever wrap the returned clauses in
+  ``bool``/``must``.
 * An unsupported operator raises ``ValueError`` rather than silently matching
   every document — a dropped filter that falls back to ``match_all`` returns
   everything, the worst failure mode for a query engine. ``ValueError`` matches
@@ -86,6 +95,8 @@ from __future__ import annotations
 
 import re
 from typing import TYPE_CHECKING, Any
+
+import numpy as np
 
 from ..query import (
     Operator,
@@ -120,6 +131,14 @@ _RANGE_BOUNDS = {
 #: Operators whose operand is a pattern over the full, un-analyzed string.
 _PATTERN_OPS = frozenset({Operator.LIKE, Operator.STARTS_WITH, Operator.REGEX})
 _EXISTENCE_OPS = frozenset({Operator.EXISTS, Operator.NOT_EXISTS})
+
+#: The document field naming the paths (``data.<field>``) that hold a list. A
+#: document with none does not have it.
+LIST_FIELDS = "list_fields"
+#: Where it is matched. Dynamic mapping makes this sub-field of a string, so an
+#: index created without :data:`LIST_FIELDS` in its mapping holds it as well,
+#: up to 256 characters of path.
+_LIST_PATHS = f"{LIST_FIELDS}.keyword"
 
 #: Elasticsearch types whose terms are words rather than the stored value.
 _ANALYZED_TYPES = frozenset({"text", "match_only_text", "search_as_you_type"})
@@ -394,13 +413,69 @@ def _presence_path(name: str) -> str:
     return name if is_storage_key_field(name) else f"data.{name}"
 
 
+def list_paths(data: Mapping[str, Any]) -> list[str]:
+    """The paths in a document's ``data`` that hold a list, for :data:`LIST_FIELDS`.
+
+    Elasticsearch indexes each element as a value of the field and cannot say
+    whether it was in a list. A path into a list's elements is not named: the
+    list's own says that it is one.
+    """
+    found: dict[str, None] = {}
+    pending: list[tuple[str, Any]] = [("data", data)]
+    while pending:
+        path, value = pending.pop()
+        if isinstance(value, dict):
+            pending.extend((f"{path}.{key}", item) for key, item in value.items())
+        elif isinstance(value, (list, tuple, np.ndarray)):
+            found[path] = None
+    return sorted(found)
+
+
+def _is_list(name: str) -> dict[str, Any]:
+    """The clause for a field holding a list."""
+    return {"term": {_LIST_PATHS: _presence_path(name)}}
+
+
+def _in_list(name: str) -> dict[str, Any] | None:
+    """The clause for a field's name leading into a list; ``None`` if it has one part."""
+    parts = name.split(".")
+    parents = [_presence_path(".".join(parts[:i])) for i in range(1, len(parts))]
+    return {"terms": {_LIST_PATHS: parents}} if parents else None
+
+
+def _outside_lists(name: str, clause: dict[str, Any]) -> dict[str, Any]:
+    """``clause``, for documents where the field neither holds a list nor is inside one."""
+    if is_storage_key_field(name):
+        return clause
+    inside = _in_list(name)
+    return {"bool": {"must": clause, "must_not": [_is_list(name), *([inside] if inside else [])]}}
+
+
 def _is_field_pattern_match(pattern: str, path: str) -> bool:
     """Whether Elasticsearch reads a name with a ``*`` as matching ``path``."""
     return re.fullmatch(".*".join(map(re.escape, pattern.split("*"))), path, re.DOTALL) is not None
 
 
-def _presence_clause(filter_obj: Filter, types: FieldTypes) -> dict[str, Any] | None:
-    """The clause for a field having a value; ``None`` if no document has one."""
+def _presence_clause(filter_obj: Filter, types: FieldTypes) -> dict[str, Any]:
+    """The clause for a field having a value.
+
+    A list is one, though Elasticsearch indexes nothing for ``[]``. What a list
+    holds is not, though Elasticsearch indexes that under the field's name.
+    """
+    name = filter_obj.field
+    if is_storage_key_field(name):
+        return {"exists": {"field": _presence_path(name)}}
+    indexed = _indexed_clause(filter_obj, types)
+    either = [_is_list(name)] if indexed is None else [indexed, _is_list(name)]
+    clause: dict[str, Any] = {"should": either, "minimum_should_match": 1}
+    inside = _in_list(name)
+    if inside:
+        clause["must_not"] = inside
+    return {"bool": clause}
+
+
+def _indexed_clause(filter_obj: Filter, types: FieldTypes) -> dict[str, Any] | None:
+    """The clause for a field with an indexed value; ``None`` if no document has one."""
     name = filter_obj.field
     if "*" in name:
         # ``exists`` would answer for every field the name matches.
@@ -443,8 +518,7 @@ def build_filter_es_query(filter_obj: Filter, types: FieldTypes) -> dict[str, An
     """
     op = filter_obj.operator
     if op == Operator.NOT_EXISTS:
-        present = _presence_clause(filter_obj, types)
-        return {"match_all": {}} if present is None else {"bool": {"must_not": present}}
+        return {"bool": {"must_not": _presence_clause(filter_obj, types)}}
     if op not in _NEGATED:
         clause = _positive_clause(op, filter_obj, types)
         return {"match_none": {}} if clause is None else clause
@@ -453,9 +527,10 @@ def build_filter_es_query(filter_obj: Filter, types: FieldTypes) -> dict[str, An
     if op == Operator.NOT_LIKE and types.holds_no_strings(filter_obj.field):
         # A pattern asks for a string, negated or not.
         return {"match_none": {}}
-    present = _presence_clause(filter_obj, types)
-    if present is None:
-        return {"match_none": {}}
+    if op == Operator.NOT_LIKE:
+        present = _outside_lists(filter_obj.field, _presence_clause(filter_obj, types))
+    else:
+        present = _presence_clause(filter_obj, types)
     if negated is None:
         return present
     return {"bool": {"filter": present, "must_not": negated}}
@@ -463,12 +538,22 @@ def build_filter_es_query(filter_obj: Filter, types: FieldTypes) -> dict[str, An
 
 def _positive_clause(op: Operator, filter_obj: Filter, types: FieldTypes) -> dict[str, Any] | None:
     """The clause for an operator that is not negated; ``None`` if nothing can match."""
+    if op == Operator.EXISTS:
+        return _presence_clause(filter_obj, types)
+    clause = _value_clause(op, filter_obj, types)
+    if clause is None:
+        return None
+    if op == Operator.CONTAINS:
+        return {"bool": {"must": clause, "filter": _is_list(filter_obj.field)}}
+    return _outside_lists(filter_obj.field, clause)
+
+
+def _value_clause(op: Operator, filter_obj: Filter, types: FieldTypes) -> dict[str, Any] | None:
+    """The clause for any one value a field has indexed."""
     name = filter_obj.field
     path = _field_path(filter_obj, types)
     value = filter_obj.value
 
-    if op == Operator.EXISTS:
-        return _presence_clause(filter_obj, types)
     if op in _PATTERN_OPS:
         clause = _pattern_clause(op, path, value)
         if types.holds_no_strings(name):

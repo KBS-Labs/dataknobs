@@ -7,7 +7,7 @@ read ``"3"`` as a number and refused ``"red"`` or ``True``.
 
 One field per kind, because an index maps a field once. A bound of another kind
 against a string or date field is a declared variation (``KIND_IS_LOST``). A
-field of lists, which Elasticsearch compares element by element, is left out.
+field of lists is in ``test_elasticsearch_list_fields``.
 """
 
 from __future__ import annotations

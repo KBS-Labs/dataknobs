@@ -638,16 +638,14 @@ class Filter:
     SQL, and a terms *lookup* in Elasticsearch. Every backend then answers as
     :meth:`matches` does: nothing is in an empty list, a ``None`` member matches
     nothing, and ``NOT_IN`` selects only records whose field has a value, as
-    ``NEQ`` does. (Elasticsearch compares a list element by element, and a
-    string field with any bound as text.)
+    ``NEQ`` does. (Elasticsearch compares a string field with any bound as text.)
 
     **Elements.** ``CONTAINS`` and ``NOT_CONTAINS`` take one value, compared
     with each element of the list a field holds as ``EQ`` compares it; a
     collection is refused here. Only a list contains anything: a string is not
     searched for a substring, nor a mapping for a key. ``NOT_CONTAINS`` selects
-    every other record whose field has a value. (Elasticsearch cannot tell a
-    list from its elements: a value on its own contains itself, and an empty
-    list is no value.)
+    every other record whose field has a value. (Elasticsearch reads a list
+    inside a list as its elements.)
 
     **Range.** ``BETWEEN`` and ``NOT_BETWEEN`` take exactly two bounds, as a
     list or tuple, and anything else is refused here too.

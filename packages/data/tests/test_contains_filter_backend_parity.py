@@ -70,8 +70,7 @@ CORPUS: dict[str, dict[str, Any]] = {
     "in-object": {"o": {"t": ["a"]}},
     "object-in-list": {"l": [{"k": "a"}]},
 }
-#: What Elasticsearch cannot tell from a list: the value on its own. It also
-#: reaches into a list's mappings, and has nothing for an empty list.
+#: What one Elasticsearch field cannot hold together.
 MIXED: dict[str, dict[str, Any]] = {
     "scalar": {"m": "a"},
     "list": {"m": ["a"]},
@@ -83,7 +82,6 @@ MIXED: dict[str, dict[str, Any]] = {
 
 C, NC = Operator.CONTAINS, Operator.NOT_CONTAINS
 STRINGS = {"ab", "b", "quoted", "upper"}
-#: Elasticsearch has no value for a list of nothing.
 EMPTIES = {"empty", "nulls"}
 
 CASES: list[tuple[str, Filter, set[str]]] = [
@@ -132,13 +130,8 @@ MIXED_CASES: list[tuple[str, Filter, set[str]]] = [
     ("boolean-among-kinds", Filter("m", C, True), {"kinds"}),
     ("inside-a-mapping", Filter("m.a", C, "a"), set()),
 ]
-#: Where Elasticsearch differs: a time is text there, and the corpus's note.
+#: Where Elasticsearch differs: a time is text there.
 ELASTICSEARCH: dict[str, set[str]] = {
-    "not": {"quoted", "upper"},
-    "not-absent": STRINGS,
-    "not-none": STRINGS,
-    "int": {"ints", "one"},
-    "numpy": {"ints", "one"},
     # The corpus has the field mapped as a ``long``, which holds no fraction.
     "real": set(),
     "naive-time": {"times"},

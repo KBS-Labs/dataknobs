@@ -12,6 +12,7 @@ import numpy as np
 
 from ..fields import Field, FieldType, VectorField
 from ..records import Record
+from .elasticsearch_query import LIST_FIELDS, list_paths
 
 if TYPE_CHECKING:
     from ..query import Query
@@ -178,6 +179,13 @@ class ElasticsearchIndexManager:
                 "id": {"type": "keyword"},
                 "data": {"type": "object", "properties": {}},
                 "metadata": {"type": "object", "enabled": True},
+                # Matched through the sub-field; see ``elasticsearch_query``.
+                LIST_FIELDS: {
+                    "type": "keyword",
+                    "index": False,
+                    "doc_values": False,
+                    "fields": {"keyword": {"type": "keyword"}},
+                },
                 "created_at": {"type": "date"},
                 "updated_at": {"type": "date"},
             },
@@ -370,6 +378,9 @@ class ElasticsearchRecordSerializer:
             "data": data_dict,
             "metadata": record.metadata,
         }
+        lists = list_paths(data_dict)
+        if lists:
+            doc[LIST_FIELDS] = lists
 
         # Add timestamps if they exist as attributes
         if hasattr(record, "created_at") and record.created_at:

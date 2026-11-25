@@ -104,21 +104,6 @@ CASES: list[tuple[str, Filter, set[str]]] = [
 ]
 
 
-#: Elasticsearch compares a list element by element, so a field holding one
-#: answers as each of its elements does.
-PER_ELEMENT: dict[tuple[str, Operator], set[str]] = {
-    ("tags", Operator.IN): {"tags-a", "tags-list"},
-    ("tags", Operator.NOT_IN): set(),
-}
-
-
-def _answer(db: Any, filter_spec: Filter, expected: set[str]) -> set[str]:
-    """What a backend is expected to answer."""
-    if "Elasticsearch" in type(db).__name__:
-        return PER_ELEMENT.get((filter_spec.field, filter_spec.operator), expected)
-    return expected
-
-
 def _oracle(filter_spec: Filter) -> set[str]:
     """The ids ``Filter.matches`` selects from the corpus."""
     selected = set()
@@ -275,14 +260,10 @@ class TestAMembershipFilterIsAnsweredAsTheMatcherAnswersIt:
         assert _oracle(filter_spec) == expected
 
     def test_sync(self, sync_db: Any, filter_spec: Filter, expected: set[str]) -> None:
-        assert _ids(sync_db.search(Query(filters=[filter_spec]))) == _answer(
-            sync_db, filter_spec, expected
-        )
+        assert _ids(sync_db.search(Query(filters=[filter_spec]))) == expected
 
     async def test_async(self, async_db: Any, filter_spec: Filter, expected: set[str]) -> None:
-        assert _ids(await async_db.search(Query(filters=[filter_spec]))) == _answer(
-            async_db, filter_spec, expected
-        )
+        assert _ids(await async_db.search(Query(filters=[filter_spec]))) == expected
 
 
 @pytest.mark.parametrize(
