@@ -476,14 +476,11 @@ or use `EQ`, and pass a mapping's keys rather than the mapping.
 has no order to say which bound is which) --- raises `ValueError` when the
 `Filter` is built.
 
-The SQL backends (SQLite, DuckDB, PostgreSQL) and the backends that filter in
-memory (memory, file, S3) answer a membership filter the same way: nothing is
-in an empty list, and a `None` member matches nothing. `NOT_IN` matches only
-records whose field has a value, as `NEQ` does, so `NOT_IN []` selects every
-record that has one. Elasticsearch differs in two ways: its `NOT_IN` also
-matches a document that lacks the field, as each of its negations does, and on
-a field that is not a string it reads the whole list as strings when the first
-member is one, which matches nothing.
+Every backend answers a membership filter the same way: nothing is in an empty
+list, and a `None` member matches nothing. `NOT_IN` matches only records whose
+field has a value, as `NEQ` does, so `NOT_IN []` selects every record that has
+one. [Elasticsearch](#elasticsearch-backend) compares two kinds of field
+differently: a list, and a string field with a bound that is not a string.
 
 A comparison (`EQ`, `NEQ`, `GT`, `GTE`, `LT`, `LTE`, `BETWEEN`, `NOT_BETWEEN`,
 `IN`, `NOT_IN`) relates a field's value only to a bound of the same kind, as
@@ -1399,14 +1396,25 @@ pre-filters agree:
   whatever that is called; a keyword, number, date or boolean field is used
   directly. A field the index does not map yet matches nothing, sorts as a
   missing value, and is asked about again by the next query. A pattern on
-  a number, date or boolean field matches nothing, and no string equals a number
-  or a boolean.
+  a number, date or boolean field matches nothing.
+- **A bound of another kind matches nothing on a number or boolean field**, in
+  equality, membership and range alike; nor does a number or boolean on `id`, a
+  boolean on a date field, or anything but a string on an `ip` field. On
+  a string field, unlike other backends, a bound that is not a string is compared
+  as text, because the index holds `5` and `"5"` alike. A number on a date field
+  is read as epoch milliseconds, whether the document holds a number or a string.
+- **A negated operator** (`NEQ`, `NOT_IN`, `NOT_LIKE`, `NOT_BETWEEN`) matches only
+  a document that has a value, as on every backend. `NOT_LIKE` matches no number
+  or boolean, and every value of a date or `ip` field, which `LIKE` cannot match.
+- **A list is compared element by element**, unlike other backends: a field holding `["a", "b"]` equals
+  `"a"`, and is not matched by `NEQ "a"`. Elasticsearch refuses `EQ` or `NEQ` with
+  a list as the value.
 - **A string compared with a date field is read as a date** by equality and range
   alike, and Elasticsearch refuses one that is not a date. An `ip` field reads
   its operand the same way.
 - **A `text` field with no keyword sub-field** (a mapping made elsewhere) has no
-  full value to reach: equality and patterns match nothing, a range compares its
-  analyzed words, and Elasticsearch refuses to sort by it.
+  full value to reach: equality and patterns match nothing, so `NEQ`, `NOT_IN` and
+  `NOT_LIKE` match every value; a range compares its analyzed words, and Elasticsearch refuses to sort by it.
 - **`REGEX`** matches the **full field value** (case-sensitive), like the
   in-memory and SQL backends — not a single analyzed token. Elasticsearch
   `regexp` is anchored and uses Lucene RegExp syntax (no `^`/`$` anchors, no
@@ -1428,8 +1436,9 @@ pre-filters agree:
 **The index it creates.** Both backends create a missing index with the same
 mapping. A string in a record's data is `text` with a `keyword` sub-field of up
 to 8191 characters; a longer string is stored and text-searched, but no
-comparison matches it and it sorts as a missing value. `date_detection` is off,
-so a string is compared as text whatever the first document held. A `datetime`
+comparison matches it, so a negated one does, and it sorts as a missing value.
+`date_detection` is off, so a string is compared as text whatever the first
+document held. A `datetime`
 bound is therefore compared as its ISO 8601 text, which orders with other values
 of that form; map a field as `date` to have it compared as time:
 

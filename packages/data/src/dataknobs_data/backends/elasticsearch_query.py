@@ -28,11 +28,14 @@ Field-path rules:
 * Other fields live under ``data.<field>``. A field mapped as analyzed text is
   reached through its keyword sub-field by every operator but existence, and by
   a sort, so a comparison is against the **full, un-analyzed** value. Any other
-  field (keyword, number, date, boolean) is reached directly. A string equality
-  or a pattern on a field that holds no strings matches nothing.
+  field (keyword, number, date, boolean) is reached directly. A pattern on a
+  field that holds no strings matches nothing.
 * A text field with no keyword sub-field (a custom mapping) has no full value to
   reach: an equality or pattern on it matches nothing, a range compares its
-  analyzed terms, and Elasticsearch refuses to sort by it.
+  analyzed terms, and Elasticsearch refuses to sort by it. Nothing being
+  matched, the negated forms match every value. So does ``NOT_LIKE`` on any
+  other field that is reached directly and holds neither strings nor numbers
+  nor booleans, such as a date.
 
 Semantics:
 
@@ -52,12 +55,20 @@ Semantics:
   match the entire value) and uses Lucene RegExp syntax, which differs from
   Python ``re`` (no ``^``/``$`` anchors, no look-around).
 * ``STARTS_WITH`` is a case-sensitive ``prefix`` query.
-* Every negation (``NEQ``/``NOT_IN``/``NOT_EXISTS``/``NOT_LIKE``/``NOT_BETWEEN``)
-  returns a self-contained ``{"bool": {"must_not": …}}`` clause, so callers only
-  ever wrap the returned clauses in ``bool``/``must``. Per Elasticsearch's
-  three-valued ``must_not`` semantics, a document that is *missing* the field is
-  included by a negation (e.g. ``NEQ`` matches docs without the field) — this
-  differs from SQL ``!=``, which excludes NULLs.
+* A bound relates only to values of its own kind, as ``Filter.matches`` has it.
+  The mapping says so for a number or boolean field, and the storage key is
+  always a string: a bound of another kind matches nothing there. Nor does a
+  boolean on a date field, or anything but a string on an ``ip`` field. ``None`` and
+  NaN match nothing anywhere, and a ``None`` member of a list is dropped. A
+  bound that is not a string is still compared as text with a string field,
+  whose index holds ``5`` and ``"5"`` alike, and a number with a date field as
+  epoch milliseconds. A list is compared element by
+  element, and equality with a list is refused by Elasticsearch.
+* A negated operator (``NEQ``/``NOT_IN``/``NOT_LIKE``/``NOT_BETWEEN``) matches a
+  document that **has a value** the operator it negates does not match: ``exists``
+  with a ``must_not``, because a bare ``must_not`` also keeps a document without
+  the field. Each clause is self-contained, so callers only ever wrap the
+  returned clauses in ``bool``/``must``.
 * An unsupported operator raises ``ValueError`` rather than silently matching
   every document — a dropped filter that falls back to ``match_all`` returns
   everything, the worst failure mode for a query engine. ``ValueError`` matches
@@ -68,7 +79,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..query import Operator, SortOrder, is_storage_key_field
+from ..query import (
+    Operator,
+    SortOrder,
+    is_storage_key_field,
+    value_kind,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping, Sequence
@@ -77,36 +93,56 @@ if TYPE_CHECKING:
     from ..query_logic import ComplexQuery, Condition
 
 
-# Operators that match a string exactly.
-_KEYWORD_EQUALITY_OPS = frozenset({Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN})
-# Operators whose operand is a pattern over the full, un-analyzed string.
-_KEYWORD_PATTERN_OPS = frozenset(
-    {Operator.LIKE, Operator.NOT_LIKE, Operator.STARTS_WITH, Operator.REGEX}
-)
-
-
+#: Each negated operator, and the one whose matches it leaves out.
+_NEGATED = {
+    Operator.NEQ: Operator.EQ,
+    Operator.NOT_IN: Operator.IN,
+    Operator.NOT_BETWEEN: Operator.BETWEEN,
+    Operator.NOT_LIKE: Operator.LIKE,
+}
+_RANGE_BOUNDS = {
+    Operator.GT: "gt",
+    Operator.GTE: "gte",
+    Operator.LT: "lt",
+    Operator.LTE: "lte",
+}
+#: Operators whose operand is a pattern over the full, un-analyzed string.
+_PATTERN_OPS = frozenset({Operator.LIKE, Operator.STARTS_WITH, Operator.REGEX})
 _EXISTENCE_OPS = frozenset({Operator.EXISTS, Operator.NOT_EXISTS})
 
 #: Elasticsearch types whose terms are words rather than the stored value.
 _ANALYZED_TYPES = frozenset({"text", "match_only_text"})
 #: Elasticsearch types that hold a string's full value.
 _EXACT_STRING_TYPES = frozenset({"keyword", "constant_keyword", "wildcard", "flattened"})
-#: Elasticsearch types for which a string is not a value but a spelling of one:
-#: it reads ``"3"`` as the number and refuses a string that spells none.
-_NOT_STRING_TYPES = frozenset(
-    {
-        "byte",
-        "short",
-        "integer",
-        "long",
-        "unsigned_long",
-        "half_float",
-        "float",
-        "double",
-        "scaled_float",
-        "boolean",
-    }
-)
+#: The Elasticsearch types that hold one kind of value alone, and it.
+_SCALAR_TYPES = {
+    **dict.fromkeys(
+        (
+            "byte",
+            "short",
+            "integer",
+            "long",
+            "unsigned_long",
+            "half_float",
+            "float",
+            "double",
+            "scaled_float",
+        ),
+        "number",
+    ),
+    "boolean": "boolean",
+}
+#: The kinds of bound (:func:`~dataknobs_data.query.value_kind`) that can relate
+#: to a value of an Elasticsearch type. It reads a bound of another kind as a
+#: spelling of its own (``"3"`` as the number) or refuses it. A date takes a
+#: number, because it can hold one: epoch milliseconds. A type not named here is
+#: left to read the bound itself; a string field may hold what was written as a
+#: number.
+_BOUND_KINDS: dict[str, frozenset[str]] = {
+    **{name: frozenset({kind}) for name, kind in _SCALAR_TYPES.items()},
+    **dict.fromkeys(("date", "date_nanos"), frozenset({"string", "timestamp", "number"})),
+    "ip": frozenset({"string"}),
+}
 
 
 class FieldTypes:
@@ -173,17 +209,37 @@ class FieldTypes:
             return True
         return bool(self._types[name] & _EXACT_STRING_TYPES)
 
-    def equals_no_string(self, name: str) -> bool:
-        """Whether no string equals a field's value, by how it is mapped.
+    def relates(self, name: str, bound: Any) -> bool:
+        """Whether a bound can relate to any value a field holds.
 
-        True for a number or a boolean, and for text whose full value nothing
-        holds: its own terms are words, and a word is not the value. False for a
-        date, an IP address or any other type a string is the way to write:
-        Elasticsearch reads the operand as the type, as it does a range's.
+        False for ``None`` and NaN, which relate to nothing, and for a bound of
+        a kind the field's type cannot hold. True for a field that is not
+        mapped, which has no value to relate to, and for a list or mapping,
+        which Elasticsearch refuses: a field of any type can hold a list.
         """
-        if name in self._exact or name not in self._types:
+        kind = value_kind(bound)
+        if kind == "never":
             return False
-        return self._types[name] <= _NOT_STRING_TYPES | _ANALYZED_TYPES
+        if is_storage_key_field(name):
+            # Always a string. A time is compared as the text it is written as.
+            return kind not in ("number", "boolean")
+        types = self._types.get(name)
+        if kind is None or types is None:
+            return True
+        return any(t not in _BOUND_KINDS or kind in _BOUND_KINDS[t] for t in types)
+
+    def holds_only_words(self, name: str) -> bool:
+        """Whether a field is text whose full value nothing holds.
+
+        Its own terms are words, and a word is not the value.
+        """
+        types = self._types.get(name)
+        return types is not None and name not in self._exact and types <= _ANALYZED_TYPES
+
+    def holds_no_strings(self, name: str) -> bool:
+        """Whether a field holds only numbers and booleans."""
+        types = self._types.get(name)
+        return types is not None and types <= _SCALAR_TYPES.keys()
 
 
 def condition_fields(condition: Condition | None) -> set[str]:
@@ -240,34 +296,20 @@ def build_sort(sort_specs: Sequence[SortSpec], types: FieldTypes) -> list[dict[s
     ]
 
 
-def _is_string_value(value: Any) -> bool:
-    """Whether a value (or the first element of a list) is a string.
-
-    For a membership list this inspects only the first element — a
-    heterogeneous ``IN``/``NOT_IN`` list keys its field path off ``value[0]``.
-    """
-    if isinstance(value, str):
-        return True
-    return bool(value) and isinstance(value, list) and isinstance(value[0], str)
-
-
 def _field_path(filter_obj: Filter, types: FieldTypes) -> str:
     """The document path an operator's clause should target for this filter."""
     name = filter_obj.field
-    op = filter_obj.operator
-    if op in _EXISTENCE_OPS and not is_storage_key_field(name):
-        # A sub-field leaves out a value past its ``ignore_above``.
-        return f"data.{name}"
-    if op in _KEYWORD_PATTERN_OPS:
-        matches_nothing = not types.holds_exact_strings(name)
-    elif op in _KEYWORD_EQUALITY_OPS and _is_string_value(filter_obj.value):
-        matches_nothing = types.equals_no_string(name)
-    else:
-        matches_nothing = False
-    if matches_nothing:
-        # No string is there to match, and a path nothing maps says so.
-        return f"data.{name}.keyword"
+    if filter_obj.operator in _EXISTENCE_OPS:
+        return _presence_path(name)
     return types.value_path(name)
+
+
+def _presence_path(name: str) -> str:
+    """The path that says whether a field has a value.
+
+    Not a sub-field, which leaves out a value past its ``ignore_above``.
+    """
+    return name if is_storage_key_field(name) else f"data.{name}"
 
 
 def _sql_wildcard_to_es(pattern: str) -> str:
@@ -292,71 +334,84 @@ def _sql_wildcard_to_es(pattern: str) -> str:
 def build_filter_es_query(filter_obj: Filter, types: FieldTypes) -> dict[str, Any]:
     """Translate one :class:`Filter` into an Elasticsearch Query-DSL clause.
 
-    Pure and self-contained: negations wrap themselves in ``bool``/``must_not``,
-    so a caller only ever composes the returned clauses under ``bool``/``must``.
-    Raises ``ValueError`` for an operator this translator cannot express.
+    Pure and self-contained, so a caller only ever composes the returned clauses
+    under ``bool``/``must``. A negated operator matches a document that has a
+    value the operator it negates does not match. Raises ``ValueError`` for an
+    operator this translator cannot express.
     """
     op = filter_obj.operator
-    field_path = _field_path(filter_obj, types)
+    if op == Operator.NOT_EXISTS:
+        return {"bool": {"must_not": {"exists": {"field": _field_path(filter_obj, types)}}}}
+    if op not in _NEGATED:
+        clause = _positive_clause(op, filter_obj, types)
+        return {"match_none": {}} if clause is None else clause
+
+    negated = _positive_clause(_NEGATED[op], filter_obj, types)
+    if op == Operator.NOT_LIKE and types.holds_no_strings(filter_obj.field):
+        # A pattern asks for a string, negated or not.
+        return {"match_none": {}}
+    present = {"exists": {"field": _presence_path(filter_obj.field)}}
+    if negated is None:
+        return present
+    return {"bool": {"filter": present, "must_not": negated}}
+
+
+def _positive_clause(op: Operator, filter_obj: Filter, types: FieldTypes) -> dict[str, Any] | None:
+    """The clause for an operator that is not negated; ``None`` if nothing can match."""
+    name = filter_obj.field
+    path = _field_path(filter_obj, types)
     value = filter_obj.value
 
-    if op == Operator.EQ:
-        return {"term": {field_path: value}}
-    if op == Operator.NEQ:
-        return {"bool": {"must_not": {"term": {field_path: value}}}}
-    if op == Operator.GT:
-        return {"range": {field_path: {"gt": value}}}
-    if op == Operator.GTE:
-        return {"range": {field_path: {"gte": value}}}
-    if op == Operator.LT:
-        return {"range": {field_path: {"lt": value}}}
-    if op == Operator.LTE:
-        return {"range": {field_path: {"lte": value}}}
-    if op == Operator.LIKE:
-        return {
-            "wildcard": {
-                field_path: {
-                    "value": _sql_wildcard_to_es(value),
-                    "case_insensitive": True,
-                }
-            }
-        }
-    if op == Operator.NOT_LIKE:
-        return {
-            "bool": {
-                "must_not": {
-                    "wildcard": {
-                        field_path: {
-                            "value": _sql_wildcard_to_es(value),
-                            "case_insensitive": True,
-                        }
-                    }
-                }
-            }
-        }
-    if op == Operator.IN:
-        return {"terms": {field_path: value}}
-    if op == Operator.NOT_IN:
-        return {"bool": {"must_not": {"terms": {field_path: value}}}}
     if op == Operator.EXISTS:
-        return {"exists": {"field": field_path}}
-    if op == Operator.NOT_EXISTS:
-        return {"bool": {"must_not": {"exists": {"field": field_path}}}}
-    if op == Operator.REGEX:
-        # ``field_path`` holds the full value, not a single analyzed token.
-        return {"regexp": {field_path: value}}
-    if op == Operator.STARTS_WITH:
-        # Literal, case-sensitive prefix — no case_insensitive flag.
-        return {"prefix": {field_path: value}}
+        return {"exists": {"field": path}}
+    if op in _PATTERN_OPS:
+        clause = _pattern_clause(op, path, value)
+        return clause if types.holds_exact_strings(name) else None
+    if op == Operator.EQ:
+        return {"term": {path: value}} if _can_equal(name, value, types) else None
+    if op == Operator.IN:
+        members = [m for m in value if _can_equal(name, m, types)]
+        return {"terms": {path: members}} if members else None
+    if op in _RANGE_BOUNDS:
+        if not types.relates(name, value):
+            return None
+        return {"range": {path: {_RANGE_BOUNDS[op]: value}}}
     if op == Operator.BETWEEN:
         # A Filter refuses a range that is not two bounds when it is built.
         lower, upper = value
-        return {"range": {field_path: {"gte": lower, "lte": upper}}}
-    if op == Operator.NOT_BETWEEN:
-        lower, upper = value
-        return {"bool": {"must_not": {"range": {field_path: {"gte": lower, "lte": upper}}}}}
+        if not (types.relates(name, lower) and types.relates(name, upper)):
+            return None
+        if not _same_kind(lower, upper):
+            return None
+        return {"range": {path: {"gte": lower, "lte": upper}}}
 
     raise ValueError(f"Unsupported operator: {op}")
+
+
+def _pattern_clause(op: Operator, path: str, value: Any) -> dict[str, Any]:
+    if op == Operator.LIKE:
+        return {"wildcard": {path: {"value": _sql_wildcard_to_es(value), "case_insensitive": True}}}
+    if op == Operator.REGEX:
+        # ``path`` holds the full value, not a single analyzed token.
+        return {"regexp": {path: value}}
+    # Literal, case-sensitive prefix: no case_insensitive flag.
+    return {"prefix": {path: value}}
+
+
+def _can_equal(name: str, value: Any, types: FieldTypes) -> bool:
+    """Whether equality with ``value`` can match, by how the field is mapped."""
+    if isinstance(value, str) and types.holds_only_words(name):
+        return False
+    return types.relates(name, value)
+
+
+def _same_kind(lower: Any, upper: Any) -> bool:
+    """Whether one value can lie between two bounds.
+
+    A time may be given as a string, so it goes with any other kind here and
+    Elasticsearch reads both bounds as the field's type.
+    """
+    return len({value_kind(lower), value_kind(upper)} - {"timestamp"}) < 2
 
 
 def build_bool_query(filters: Sequence[Filter], types: FieldTypes) -> dict[str, Any]:

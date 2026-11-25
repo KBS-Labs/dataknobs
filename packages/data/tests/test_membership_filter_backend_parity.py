@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from dataknobs_common.testing import requires_postgres
+from dataknobs_common.testing import requires_postgres, requires_real_elasticsearch
 
 from dataknobs_data import Filter, Operator, Record
 from dataknobs_data.backends.duckdb import AsyncDuckDBDatabase, SyncDuckDBDatabase
@@ -62,6 +62,7 @@ BACKENDS = [
     "sqlite",
     "duckdb",
     pytest.param("postgres", marks=requires_postgres),
+    pytest.param("elasticsearch", marks=requires_real_elasticsearch),
 ]
 
 #: Each record is keyed by what distinguishes it. The ``n`` records carry no
@@ -101,6 +102,21 @@ CASES: list[tuple[str, Filter, set[str]]] = [
         {"tags-list"},
     ),
 ]
+
+
+#: Elasticsearch compares a list element by element, so a field holding one
+#: answers as each of its elements does.
+PER_ELEMENT: dict[tuple[str, Operator], set[str]] = {
+    ("tags", Operator.IN): {"tags-a", "tags-list"},
+    ("tags", Operator.NOT_IN): set(),
+}
+
+
+def _answer(db: Any, filter_spec: Filter, expected: set[str]) -> set[str]:
+    """What a backend is expected to answer."""
+    if "Elasticsearch" in type(db).__name__:
+        return PER_ELEMENT.get((filter_spec.field, filter_spec.operator), expected)
+    return expected
 
 
 def _oracle(filter_spec: Filter) -> set[str]:
@@ -163,6 +179,17 @@ def _make_sync_db(kind: str, root: Path, request: pytest.FixtureRequest) -> Iter
             finally:
                 db.close()
         return
+    if kind == "elasticsearch":
+        from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
+
+        for config in request.getfixturevalue("make_elasticsearch_test_index")("test_member_"):
+            db = SyncElasticsearchDatabase(config)
+            db.connect()
+            try:
+                yield db
+            finally:
+                db.close()
+        return
     if kind == "sqlite":
         db = SyncSQLiteDatabase({"path": str(root / "records.db")})
     else:
@@ -189,6 +216,17 @@ async def _make_async_db(
 
         for config in request.getfixturevalue("make_postgres_test_db")("test_membership_async_"):
             db: Any = AsyncPostgresDatabase(config)
+            await db.connect()
+            try:
+                yield db
+            finally:
+                await db.close()
+        return
+    if kind == "elasticsearch":
+        from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
+
+        for config in request.getfixturevalue("make_elasticsearch_test_index")("test_member_"):
+            db = AsyncElasticsearchDatabase(config)
             await db.connect()
             try:
                 yield db
@@ -237,10 +275,14 @@ class TestAMembershipFilterIsAnsweredAsTheMatcherAnswersIt:
         assert _oracle(filter_spec) == expected
 
     def test_sync(self, sync_db: Any, filter_spec: Filter, expected: set[str]) -> None:
-        assert _ids(sync_db.search(Query(filters=[filter_spec]))) == expected
+        assert _ids(sync_db.search(Query(filters=[filter_spec]))) == _answer(
+            sync_db, filter_spec, expected
+        )
 
     async def test_async(self, async_db: Any, filter_spec: Filter, expected: set[str]) -> None:
-        assert _ids(await async_db.search(Query(filters=[filter_spec]))) == expected
+        assert _ids(await async_db.search(Query(filters=[filter_spec]))) == _answer(
+            async_db, filter_spec, expected
+        )
 
 
 @pytest.mark.parametrize(

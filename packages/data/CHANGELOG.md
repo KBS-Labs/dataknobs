@@ -25,6 +25,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The first query naming a field asks the index about it, one request per query
   until the field is known. The functions in `backends.elasticsearch_query` that
   build a clause take a `FieldTypes`.
+- **BREAKING: an Elasticsearch comparison answers as the other backends do.**
+
+  | Filter | Before | Now |
+  |---|---|---|
+  | `NEQ`, `NOT_IN`, `NOT_LIKE`, `NOT_BETWEEN` | also matched a record without the field | matches a record that has a value |
+  | `NOT_LIKE` on a number or boolean field | matched every record | matches nothing |
+  | range with a numeric string on a number field | compared it as the number | matches nothing |
+  | a bound of another kind on a number or boolean field | raised, or matched nothing when a string | matches nothing; its negation matches every value |
+  | a boolean on a date field; a bound that is not a string on an `ip` field | raised | matches nothing; its negation matches every value |
+  | range with a number or boolean bound on `id` | compared as text | matches nothing |
+  | `None` or NaN bound | raised, or an unbounded range | matches nothing; its negation matches every value |
+  | `None` member, or a set or `dict.keys()` of members | raised | the member is dropped; the members are sent as a list |
+  | a list mixing kinds | read by its first member's kind | each member by its own |
+  | `BETWEEN` a number and a string | compared as text, or raised | matches nothing |
+
+  Use `NOT_EXISTS` in an `OR` to keep the records without the field.
 - **BREAKING: an index the Elasticsearch backends create maps strings the same
   way whatever it first holds.** A data string is `text` with a `keyword`
   sub-field of up to 8191 characters, where it was 256, and `date_detection` is

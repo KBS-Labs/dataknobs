@@ -135,10 +135,8 @@ query = Query().or_(
 
 ## Backend Support
 
-Every backend answers a `ComplexQuery` as `LogicCondition.matches` does. The
-one exception is on Elasticsearch: a negated operator (`NEQ`, `NOT_IN`,
-`NOT_LIKE`, `NOT_BETWEEN`) keeps a document without the field there, with or
-without a `NOT` around it.
+Every backend combines the conditions of a `ComplexQuery` as
+`LogicCondition.matches` does.
 
 ### Memory, File and S3 Backends
 - Evaluate `LogicCondition.matches` over the stored records

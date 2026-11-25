@@ -26,6 +26,7 @@ Contract pinned here:
 
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -75,6 +76,13 @@ TYPES = _learned(
 )
 
 
+def _has_value_but_not(path: str, clause: dict[str, Any]) -> dict[str, Any]:
+    return {"bool": {"filter": {"exists": {"field": path}}, "must_not": clause}}
+
+
+NOTHING = {"match_none": {}}
+
+
 # --- equality / inequality -------------------------------------------------
 
 
@@ -99,9 +107,9 @@ def test_eq_bool_passes_native_value() -> None:
 
 
 def test_neq_wraps_in_must_not() -> None:
-    assert build_filter_es_query(Filter("name", Operator.NEQ, "alice"), TYPES) == {
-        "bool": {"must_not": {"term": {"data.name.keyword": "alice"}}}
-    }
+    assert build_filter_es_query(
+        Filter("name", Operator.NEQ, "alice"), TYPES
+    ) == _has_value_but_not("data.name", {"term": {"data.name.keyword": "alice"}})
 
 
 # --- range -----------------------------------------------------------------
@@ -129,9 +137,9 @@ def test_between() -> None:
 
 
 def test_not_between_wraps_in_must_not() -> None:
-    assert build_filter_es_query(Filter("age", Operator.NOT_BETWEEN, [18, 65]), TYPES) == {
-        "bool": {"must_not": {"range": {"data.age": {"gte": 18, "lte": 65}}}}
-    }
+    assert build_filter_es_query(
+        Filter("age", Operator.NOT_BETWEEN, [18, 65]), TYPES
+    ) == _has_value_but_not("data.age", {"range": {"data.age": {"gte": 18, "lte": 65}}})
 
 
 # --- LIKE: SQL-wildcard AND case-insensitive -------------------------------
@@ -147,13 +155,11 @@ def test_like_translates_sql_wildcards_case_insensitive() -> None:
 
 
 def test_not_like_wraps_case_insensitive_wildcard() -> None:
-    assert build_filter_es_query(Filter("f", Operator.NOT_LIKE, "a_b%"), TYPES) == {
-        "bool": {
-            "must_not": {
-                "wildcard": {"data.f.keyword": {"value": "a?b*", "case_insensitive": True}}
-            }
-        }
-    }
+    assert build_filter_es_query(
+        Filter("f", Operator.NOT_LIKE, "a_b%"), TYPES
+    ) == _has_value_but_not(
+        "data.f", {"wildcard": {"data.f.keyword": {"value": "a?b*", "case_insensitive": True}}}
+    )
 
 
 @pytest.mark.parametrize(
@@ -199,9 +205,9 @@ def test_in_int_list_uses_base_field() -> None:
 
 
 def test_not_in_wraps_in_must_not() -> None:
-    assert build_filter_es_query(Filter("status", Operator.NOT_IN, ["a", "b"]), TYPES) == {
-        "bool": {"must_not": {"terms": {"data.status.keyword": ["a", "b"]}}}
-    }
+    assert build_filter_es_query(
+        Filter("status", Operator.NOT_IN, ["a", "b"]), TYPES
+    ) == _has_value_but_not("data.status", {"terms": {"data.status.keyword": ["a", "b"]}})
 
 
 # --- existence -------------------------------------------------------------
@@ -257,7 +263,7 @@ def test_starts_with_is_case_sensitive_prefix() -> None:
         (Filter("id", Operator.EQ, "orders/1"), {"term": {"id": "orders/1"}}),
         (
             Filter("id", Operator.NEQ, "orders/1"),
-            {"bool": {"must_not": {"term": {"id": "orders/1"}}}},
+            _has_value_but_not("id", {"term": {"id": "orders/1"}}),
         ),
         (
             Filter("id", Operator.IN, ["orders/1", "orders/2"]),
@@ -519,49 +525,142 @@ class TestAFieldThatHoldsNoStrings:
     @pytest.mark.parametrize("op", [Operator.LIKE, Operator.STARTS_WITH, Operator.REGEX])
     def test_matches_no_pattern(self, kind: str, op: Operator) -> None:
         # Elasticsearch refuses these on the field itself.
-        assert _field_path(Filter("x", op, "p"), _learned(x=kind)) == "data.x.keyword"
+        assert build_filter_es_query(Filter("x", op, "p"), _learned(x=kind)) == NOTHING
 
 
-STRING_EQUALITIES = [
-    (Operator.EQ, "s"),
-    (Operator.NEQ, "s"),
-    (Operator.IN, ["s"]),
-    (Operator.NOT_IN, ["s"]),
+# --- a bound relates to its own kind ---------------------------------------
+
+
+NUMBER_TYPES = [
+    "byte",
+    "short",
+    "integer",
+    "long",
+    "unsigned_long",
+    "half_float",
+    "float",
+    "double",
+    "scaled_float",
+]
+NAN = float("nan")
+NOON = datetime(2024, 1, 1, 12)
+
+
+def _positives(bound: Any) -> list[Filter]:
+    return [
+        Filter("x", Operator.EQ, bound),
+        Filter("x", Operator.IN, [bound]),
+        Filter("x", Operator.GT, bound),
+        Filter("x", Operator.GTE, bound),
+        Filter("x", Operator.LT, bound),
+        Filter("x", Operator.LTE, bound),
+        Filter("x", Operator.BETWEEN, [bound, bound]),
+    ]
+
+
+def _negatives(bound: Any) -> list[Filter]:
+    return [
+        Filter("x", Operator.NEQ, bound),
+        Filter("x", Operator.NOT_IN, [bound]),
+        Filter("x", Operator.NOT_BETWEEN, [bound, bound]),
+    ]
+
+
+OTHER_KINDS = [
+    *((kind, bound) for kind in NUMBER_TYPES for bound in ("3", "red", True, NOON)),
+    *(("boolean", bound) for bound in ("true", 1, 0, NOON)),
+    *((kind, bound) for kind in ("long", "boolean", "date", "text") for bound in (None, NAN)),
 ]
 
 
-@pytest.mark.parametrize(("op", "value"), STRING_EQUALITIES)
-@pytest.mark.parametrize(
-    "kind",
-    [
-        "byte",
-        "short",
-        "integer",
-        "long",
-        "unsigned_long",
-        "half_float",
-        "float",
-        "double",
-        "scaled_float",
-        "boolean",
-    ],
-)
-def test_no_string_equals_a_number_or_boolean(kind: str, op: Operator, value: object) -> None:
-    assert _field_path(Filter("x", op, value), _learned(x=kind)) == "data.x.keyword"
+@pytest.mark.parametrize(("kind", "bound"), OTHER_KINDS)
+def test_a_bound_that_relates_to_no_value_matches_none(kind: str, bound: Any) -> None:
+    types = _learned(x=kind)
+    for spec in _positives(bound):
+        assert build_filter_es_query(spec, types) == NOTHING, spec
+    for spec in _negatives(bound):
+        assert build_filter_es_query(spec, types) == {"exists": {"field": "data.x"}}, spec
 
 
-@pytest.mark.parametrize(("op", "value"), STRING_EQUALITIES)
+@pytest.mark.parametrize("bound", ["3", True, None, NAN])
+def test_a_member_that_relates_to_no_value_is_dropped(bound: Any) -> None:
+    for members in ([bound, 5], [5, bound]):
+        assert build_filter_es_query(Filter("n", Operator.IN, members), TYPES) == {
+            "terms": {"data.n": [5]}
+        }
+
+
+@pytest.mark.parametrize("members", [(5,), {5}, {5: 1}.keys()])
+def test_any_collection_of_members_is_sent_as_a_list(members: Any) -> None:
+    clause = {"terms": {"data.n": [5]}}
+    assert build_filter_es_query(Filter("n", Operator.IN, members), TYPES) == clause
+    assert build_filter_es_query(
+        Filter("n", Operator.NOT_IN, members), TYPES
+    ) == _has_value_but_not("data.n", clause)
+
+
+def test_an_empty_list() -> None:
+    assert build_filter_es_query(Filter("n", Operator.IN, []), TYPES) == NOTHING
+    assert build_filter_es_query(Filter("n", Operator.NOT_IN, []), TYPES) == {
+        "exists": {"field": "data.n"}
+    }
+
+
 @pytest.mark.parametrize("kind", ["date", "date_nanos", "ip", "version", "date_range"])
-def test_a_string_is_how_other_values_are_written(kind: str, op: Operator, value: object) -> None:
-    assert _field_path(Filter("x", op, value), _learned(x=kind)) == "data.x"
+def test_a_string_is_how_other_values_are_written(kind: str) -> None:
+    types = _learned(x=kind)
+    assert build_filter_es_query(Filter("x", Operator.EQ, "s"), types) == {"term": {"data.x": "s"}}
+    assert build_filter_es_query(Filter("x", Operator.IN, ["s"]), types) == {
+        "terms": {"data.x": ["s"]}
+    }
+    assert build_filter_es_query(Filter("x", Operator.GT, "s"), types) == {
+        "range": {"data.x": {"gt": "s"}}
+    }
 
 
-@pytest.mark.parametrize(("op", "value"), STRING_EQUALITIES)
+def test_a_range_mixing_a_string_and_a_number_matches_none() -> None:
+    assert build_filter_es_query(Filter("f", Operator.BETWEEN, [0, "z"]), TYPES) == NOTHING
+
+
+@pytest.mark.parametrize("bounds", [[5, NOON], [NOON, 5]])
+def test_a_range_with_one_bound_of_another_kind_matches_none(bounds: list[Any]) -> None:
+    assert build_filter_es_query(Filter("n", Operator.BETWEEN, bounds), TYPES) == NOTHING
+
+
+def test_a_range_may_give_one_time_as_a_string() -> None:
+    assert build_filter_es_query(
+        Filter("x", Operator.BETWEEN, ["2024-01-01", NOON]), _learned(x="date")
+    ) == {"range": {"data.x": {"gte": "2024-01-01", "lte": NOON}}}
+
+
 @pytest.mark.parametrize("kind", ["text", "match_only_text"])
-def test_no_string_equals_text_with_no_full_value(kind: str, op: Operator, value: object) -> None:
+def test_no_string_equals_text_with_no_full_value(kind: str) -> None:
     types = FieldTypes()
     types.learn(["x"], {"data.x": {kind: {}}})
-    assert _field_path(Filter("x", op, value), types) == "data.x.keyword"
+    assert build_filter_es_query(Filter("x", Operator.EQ, "s"), types) == NOTHING
+    assert build_filter_es_query(Filter("x", Operator.IN, ["s"]), types) == NOTHING
+    assert build_filter_es_query(Filter("x", Operator.NEQ, "s"), types) == {
+        "exists": {"field": "data.x"}
+    }
+    # A range is over the words.
+    assert build_filter_es_query(Filter("x", Operator.GT, "s"), types) == {
+        "range": {"data.x": {"gt": "s"}}
+    }
+
+
+@pytest.mark.parametrize("kind", [*NUMBER_TYPES, "boolean"])
+def test_a_negated_pattern_asks_for_a_string(kind: str) -> None:
+    assert build_filter_es_query(Filter("x", Operator.NOT_LIKE, "p"), _learned(x=kind)) == NOTHING
+
+
+def test_an_alias_over_indices_of_two_kinds_relates_to_either() -> None:
+    types = FieldTypes()
+    types.learn(["x"], {"data.x": {"long": {}, "boolean": {}}})
+    for bound in (1, True):
+        assert build_filter_es_query(Filter("x", Operator.EQ, bound), types) == {
+            "term": {"data.x": bound}
+        }
+    assert build_filter_es_query(Filter("x", Operator.EQ, "1"), types) == NOTHING
 
 
 def test_an_alias_over_indices_that_map_a_field_both_ways_asks_the_field() -> None:
@@ -644,3 +743,31 @@ def test_a_sort_reaches_each_fields_full_value() -> None:
         ("data.age", "asc"),
         ("id", "asc"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("kind", "bound", "relates"),
+    [
+        ("date", True, False),
+        ("date", 5, True),
+        ("date_nanos", 5, True),
+        ("date_nanos", False, False),
+        ("ip", 5, False),
+        ("ip", NOON, False),
+        ("ip", "10.0.0.1", True),
+        ("long", [1], True),
+        ("boolean", [True], True),
+        ("version", True, True),
+    ],
+)
+def test_a_type_says_which_bounds_it_can_hold(kind: str, bound: Any, relates: bool) -> None:
+    """A date holds epoch milliseconds, and any field can hold a list."""
+    assert _learned(x=kind).relates("x", bound) is relates
+
+
+@pytest.mark.parametrize("kind", ["date", "ip"])
+def test_a_negated_pattern_on_a_field_no_pattern_reaches(kind: str) -> None:
+    """Its values are strings, which a pattern cannot be tried against."""
+    assert build_filter_es_query(Filter("x", Operator.NOT_LIKE, "a%"), _learned(x=kind)) == {
+        "exists": {"field": "data.x"}
+    }
