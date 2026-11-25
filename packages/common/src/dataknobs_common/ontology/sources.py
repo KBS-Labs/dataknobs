@@ -629,12 +629,13 @@ class _EntityIndex:
 
         **Seen, not proven.** The check reads the forms the vocabulary
         declares, so it cannot see a fold that merges only on some query no
-        declared form resembles -- ``default_normalizer`` casefolds the
-        non-alphanumeric ``U+0345`` to the alphanumeric ``iota``, so a
-        vocabulary declaring the folded spelling and a query using the
-        combining one part here undetected. A rung that folds for itself is
-        outside this entirely, and declines the bound for that reason rather
-        than this one.
+        declared form resembles. ``default_normalizer`` is not such a fold:
+        no character's case-fold changes the token count of the text around
+        it, because a combining mark is in a token before and after folding
+        exactly when its letter is (:func:`~dataknobs_common.text.in_token`). A
+        normalizer of the caller's own can be, and only what its declared
+        forms show is caught. A rung that folds for itself is outside this
+        entirely, and declines the bound for that reason rather than this one.
         """
         return len(token_spans(folded)) < len(token_spans(form))
 

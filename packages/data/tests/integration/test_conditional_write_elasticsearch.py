@@ -4,8 +4,7 @@
 pair as one opaque token; passing it back as ``expected_version`` carries ES's
 ``if_seq_no``/``if_primary_term`` guards so the compare-and-set is enforced
 server-side. A stale token raises ``ConcurrencyError`` instead of last-writer-
-wins. Pinned on both the sync backend (``SimplifiedElasticsearchIndex`` REST
-wrapper) and the async backend (native ``elasticsearch-py`` client).
+wins. Pinned on both the sync backend and the async backend.
 
 Enable with ``TEST_ELASTICSEARCH=true`` and a running Elasticsearch; the
 module skips otherwise.

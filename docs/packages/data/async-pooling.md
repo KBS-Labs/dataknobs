@@ -425,11 +425,11 @@ databases:
 ```
 
 Pool settings are ordinary connection fields, not a nested section: Postgres
-derives its pool from them in `_setup`. The other two backends have no pool
-key to write here -- Elasticsearch takes its sizing from the client, and
-`S3PoolConfig` is keyed on bucket, prefix, region and credentials with no
-sizing field at all. `max_pool_connections` belongs to the **sync** S3 config
-alone, so writing it in an async config raises rather than being ignored.
+derives its pool from them in `_setup`. S3 takes `max_pool_connections` (alias
+`max_workers`, default 10) on both twins; it sizes the client each operation
+opens and bounds how many objects `search` and `stream_read` fetch at once.
+Elasticsearch takes its sizing from the client and has no pool key to write
+here.
 
 ## Error Handling
 

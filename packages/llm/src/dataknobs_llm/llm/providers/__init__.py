@@ -14,6 +14,7 @@ import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, TypeGuard, overload
 
+from dataknobs_common.exceptions import _written_by_dataknobs
 from dataknobs_common.registry import PluginRegistry
 from dataknobs_common.structured_config import StructuredConfig, config_registries
 
@@ -207,8 +208,10 @@ class LLMProviderFactory:
             # supported read-side query cannot disagree — and so the list is
             # sorted rather than in registration order.
             available = self.list_providers()
-            raise ValueError(
-                f"Unknown provider: {llm_config.provider}. Available providers: {available}"
+            raise _written_by_dataknobs(
+                ValueError(
+                    f"Unknown provider: {llm_config.provider}. Available providers: {available}"
+                )
             )
 
         # Create provider instance. ``**kwargs`` is forwarded — the signature

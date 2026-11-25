@@ -153,7 +153,7 @@ def _entry_points(ops: BatchOperations, tmp_path: Any) -> dict[str, Any]:
         "query_as_dataframe": lambda: ops.query_as_dataframe(Query()),
         "update_from_dataframe": lambda: ops.update_from_dataframe(frame(), id_column=None),
         "aggregate": lambda: ops.aggregate(Query(), {"n": "sum"}),
-        "transform_and_save": lambda: ops.transform_and_save(Query(), lambda df: df),
+        "transform_and_save": lambda: ops.transform_and_save(Query(), lambda df: df.assign(seen=1)),
         "export_to_csv": lambda: ops.export_to_csv(Query(), str(tmp_path / "out.csv")),
         "export_to_parquet": lambda: _export_to_parquet(ops, str(tmp_path / "out.pq")),
     }
@@ -253,7 +253,7 @@ def test_a_composite_operation_drives_both_halves_on_one_loop():
     ops.bulk_insert_dataframe(frame(3))
     db.loops.clear()
 
-    ops.transform_and_save(Query(), lambda df: df)
+    ops.transform_and_save(Query(), lambda df: df.assign(seen=1))
 
     assert len(db.loops) > 1, "the composite reached the database only once"
     assert db.distinct_loops == 1, f"{db.distinct_loops} loops served one operation"
@@ -306,7 +306,7 @@ def test_the_caller_supplied_bridge_serves_every_operation():
 
         ops.bulk_insert_dataframe(frame(2))
         ops.query_as_dataframe(Query())
-        ops.transform_and_save(Query(), lambda df: df)
+        ops.transform_and_save(Query(), lambda df: df.assign(seen=1))
 
         assert db.distinct_loops == 1
 
@@ -496,6 +496,9 @@ def test_a_timeout_reaches_the_caller_through_a_skipping_update():
     going after a row raises without even logging it.
     """
     db = StallingWitness()
+    # A row whose record is not stored never reaches the write that stalls.
+    for i in range(8):
+        asyncio.run(db.upsert(f"r{i}", Record({"n": i})))
     ops = BatchOperations(db, timeout=0.1)
 
     with pytest.raises(OperationTimeoutError):

@@ -21,6 +21,8 @@ from dataknobs_common.text import (
     edge_extensions,
     narrowest,
     probe_spans,
+    in_token,
+    is_token_boundary,
     punctuation_edges,
     token_spans,
 )
@@ -351,3 +353,106 @@ def test_narrowest_trims_every_default_probe_as_the_extension_rule_did() -> None
                 assert _core(text, span) == _punctuation_core(text, span), (text, span)
                 checked += 1
     assert checked > 10_000
+
+
+# A combining mark is part of the word it is written on. ``str.isalnum`` is
+# False for every one (Unicode category M*), so a predicate built on it alone
+# split such a word at the mark and left the mark in no token at all.
+
+_DUNIYA = "\u0926\u0941\u0928\u093f\u092f\u093e"  # दुनिया: three letters, three vowel signs
+_DECOMPOSED = "e\u0301te"  # e + COMBINING ACUTE ACCENT + te
+
+
+@pytest.mark.parametrize(
+    ("text", "spans"),
+    [
+        (_DUNIYA, ((0, 6),)),
+        (_DECOMPOSED, ((0, 4),)),
+        (f"hello {_DUNIYA}!", ((0, 5), (6, 12))),
+        # Precomposed and decomposed spellings tokenize alike.
+        ("\u00e9te", ((0, 3),)),
+        # A mark continues a token and never starts one: with no letter or
+        # digit before it, it is a boundary like punctuation.
+        (" \u0301x", ((2, 3),)),
+        # Stacked marks all belong to the letter they follow.
+        ("a\u0301\u0302b", ((0, 4),)),
+        # U+FE0F (VARIATION SELECTOR-16) is a mark, and follows most emoji.
+        ("I \u2708\ufe0fParis", ((0, 1), (4, 9))),
+        ("I\u2764\ufe0fNY", ((0, 1), (3, 5))),
+        ("\u2764\ufe0f", ()),
+        # A keycap is marks written on its digit.
+        ("1\ufe0f\u20e3", ((0, 3),)),
+    ],
+)
+def test_a_combining_mark_stays_in_the_token_it_is_written_on(
+    text: str, spans: tuple[tuple[int, int], ...]
+) -> None:
+    assert token_spans(text) == spans
+
+
+@pytest.mark.parametrize("mark", ["\u0301", "\u093f", "\u094d", "\u20dd"])
+def test_every_kind_of_mark_continues_a_token_and_none_starts_one(mark: str) -> None:
+    """Nonspacing (Mn), spacing (Mc) and enclosing (Me) marks alike."""
+    assert not mark.isalnum()
+    assert in_token(f"a{mark}", 1)
+    assert in_token(f"a{mark}{mark}", 2)
+    assert not in_token(mark, 0)
+    assert not in_token(f" {mark}", 1)
+    assert not in_token(f"-{mark}", 1)
+
+
+def test_in_token_is_alphanumeric_and_nothing_else_starts_one() -> None:
+    for text in ("a", "7", "\u00df", "\u6771"):
+        assert in_token(text, 0), repr(text)
+    for character in (" ", "_", "-", "'", "\u2019", "$", "\u200c", "\u200d"):
+        assert not in_token(f"a{character}b", 1), repr(character)
+
+
+@pytest.mark.parametrize("index", [-1, 2])
+def test_in_token_refuses_an_index_outside_the_string(index: int) -> None:
+    with pytest.raises(IndexError):
+        in_token("ab", index)
+
+
+def test_a_boundary_is_any_gap_one_token_does_not_cross() -> None:
+    text = "x-5 cafe\u0301!"
+    boundaries = [i for i in range(len(text) + 1) if is_token_boundary(text, i)]
+    # Both ends; around the hyphen; around the space; before "!" -- but not
+    # between "e" and its accent, nor inside a word.
+    assert boundaries == [0, 1, 2, 3, 4, 9, 10]
+    assert is_token_boundary("", 0)
+
+
+def test_the_boundaries_are_exactly_the_ends_of_the_default_tokens_and_the_gaps_between() -> None:
+    """Measured over random text: no gap inside a token, every other gap free."""
+    rng = random.Random(1605)
+    alphabet = "ab -'\u0301\ufe0f\u2708."
+    for _ in range(2000):
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 16)))
+        inside = {i for start, end in token_spans(text) for i in range(start + 1, end)}
+        for index in range(len(text) + 1):
+            assert is_token_boundary(text, index) == (index not in inside), (text, index)
+
+
+@pytest.mark.parametrize("index", [-1, 3])
+def test_is_token_boundary_refuses_a_gap_outside_the_string(index: int) -> None:
+    with pytest.raises(IndexError):
+        is_token_boundary("ab", index)
+
+
+def test_a_mark_with_no_letter_before_it_is_punctuation_at_a_form_s_edge() -> None:
+    assert punctuation_edges("\u2764\ufe0f") == (2, 2)
+    assert punctuation_edges("(\u0301)") == (3, 3)
+
+
+def test_a_combining_mark_is_not_punctuation_at_a_form_s_edge() -> None:
+    """The edge rule measures the complement of the token predicate, so it moves too."""
+    assert punctuation_edges(_DECOMPOSED) == (0, 0)
+    assert punctuation_edges(f"({_DUNIYA})") == (1, 1)
+    # A span ending on the base letter is not widened over its own accent.
+    assert edge_extensions(_DECOMPOSED, (0, 1), None) == ()
+
+
+def test_narrowest_does_not_trim_a_combining_mark() -> None:
+    text = f"({_DECOMPOSED})"
+    assert _core(text, (0, len(text))) == (1, 5)

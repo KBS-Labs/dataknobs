@@ -70,16 +70,19 @@ async def test_first_render_emits_proposal_no_llm() -> None:
 
 @pytest.mark.asyncio
 async def test_accept_keyword_routes_to_accept_target() -> None:
-    async with await BotTestHarness.create(
-        wizard_config=_wizard_with_intent_confirm(),
-    ) as harness:
+    config = _wizard_with_intent_confirm()
+    config["stages"][1]["response_template"] = "Activated ({{ _intent }})."
+    async with await BotTestHarness.create(wizard_config=config) as harness:
         await harness.greet()
-        await harness.chat("yes")
+        result = await harness.chat("yes")
         assert harness.wizard_stage == "accepted"
         # Per-intent boolean (the synthesizer's per_intent_booleans flag)
         assert harness.wizard_data.get("accept") is True
-        # Back-compat: the existing _intent key is ALSO written
-        assert harness.wizard_data.get("_intent") == "accept"
+        # Back-compat: the existing _intent key is ALSO written. It is
+        # ephemeral, so it reaches the turn's templates and response but not
+        # the persisted state that ``wizard_data`` reads.
+        assert result.response == "Activated (accept)."
+        assert "_intent" not in harness.wizard_data
 
 
 @pytest.mark.asyncio

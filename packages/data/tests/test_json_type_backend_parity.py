@@ -230,7 +230,7 @@ def _raised(exc: Exception) -> str:
 
 
 def test_every_backend_matches_only_the_bounds_json_type_sync(
-    backend: tuple[str, dict[str, Any]],
+    backend: tuple[str, dict[str, Any]], filters_to_ask: Any
 ) -> None:
     """Each filter answers as ``Filter.matches`` does, on every backend."""
     kind, config = backend
@@ -245,7 +245,7 @@ def test_every_backend_matches_only_the_bounds_json_type_sync(
     try:
         for record in _records():
             db.create(record)
-        answers = [(spec, run(Query(filters=[spec]))) for spec in FILTERS]
+        answers = [(spec, run(Query(filters=[spec]))) for spec in filters_to_ask(kind, FILTERS)]
         negated = [(spec, run(_negated(spec))) for spec in NEGATED]
     finally:
         if kind == "s3":
@@ -255,7 +255,7 @@ def test_every_backend_matches_only_the_bounds_json_type_sync(
 
 
 async def test_every_backend_matches_only_the_bounds_json_type_async(
-    backend: tuple[str, dict[str, Any]],
+    backend: tuple[str, dict[str, Any]], filters_to_ask: Any
 ) -> None:
     kind, config = backend
     db = await AsyncDatabase.from_backend(kind, config=config)
@@ -269,7 +269,9 @@ async def test_every_backend_matches_only_the_bounds_json_type_async(
     try:
         for record in _records():
             await db.create(record)
-        answers = [(spec, await run(Query(filters=[spec]))) for spec in FILTERS]
+        answers = [
+            (spec, await run(Query(filters=[spec]))) for spec in filters_to_ask(kind, FILTERS)
+        ]
         negated = [(spec, await run(_negated(spec))) for spec in NEGATED]
     finally:
         if kind == "s3":
@@ -428,7 +430,7 @@ NOT_A_TIME_FILTERS: list[Filter] = [
 
 
 def test_a_string_naming_no_real_time_is_not_a_timestamp(
-    backend: tuple[str, dict[str, Any]],
+    backend: tuple[str, dict[str, Any]], filters_to_ask: Any
 ) -> None:
     """Of timestamp shape, it is a string: unmatched, and matched by a negation.
 
@@ -437,7 +439,7 @@ def test_a_string_naming_no_real_time_is_not_a_timestamp(
     """
     kind, config = backend
     values = {k: v for k, v in NOT_A_TIME.items() if not (kind == "postgres" and k == "feb30")}
-    assert _answers(kind, config, values, NOT_A_TIME_FILTERS) == {}
+    assert _answers(kind, config, values, filters_to_ask(kind, NOT_A_TIME_FILTERS)) == {}
 
 
 #: A range that is not two bounds: one, three, a string, a set (no order), a
@@ -582,7 +584,7 @@ EVERY_KIND_FILTERS: list[Filter] = [
 
 
 def test_every_kind_of_bound_answers_as_the_oracle_does(
-    backend: tuple[str, dict[str, Any]],
+    backend: tuple[str, dict[str, Any]], filters_to_ask: Any
 ) -> None:
     """A date, Decimal, numpy scalar, ``None`` or NaN bound, and ``id`` against a time.
 
@@ -591,7 +593,7 @@ def test_every_kind_of_bound_answers_as_the_oracle_does(
     against a datetime matched every key on SQLite and raised on DuckDB.
     """
     kind, config = backend
-    assert _answers(kind, config, EVERY_KIND, EVERY_KIND_FILTERS) == {}
+    assert _answers(kind, config, EVERY_KIND, filters_to_ask(kind, EVERY_KIND_FILTERS)) == {}
 
 
 @pytest.mark.parametrize(
@@ -764,10 +766,10 @@ def test_a_memory_filter_agrees_with_the_memory_sort() -> None:
 
 
 def test_two_strings_compare_as_text_on_every_backend(
-    backend: tuple[str, dict[str, Any]],
+    backend: tuple[str, dict[str, Any]], filters_to_ask: Any
 ) -> None:
     kind, config = backend
-    assert _answers(kind, config, TIME_STRINGS, TIME_STRING_FILTERS) == {}
+    assert _answers(kind, config, TIME_STRINGS, filters_to_ask(kind, TIME_STRING_FILTERS)) == {}
     # The oracle itself: every answer is the text answer.
     for spec in TIME_STRING_FILTERS:
         for value in TIME_STRINGS.values():
@@ -869,7 +871,7 @@ ZONED_FILTERS: list[Filter] = [
 
 
 def test_an_aware_bound_matches_zoned_times_by_instant(
-    backend: tuple[str, dict[str, Any]],
+    backend: tuple[str, dict[str, Any]], filters_to_ask: Any
 ) -> None:
     """Naive and aware times are different kinds, as Python has them.
 
@@ -885,7 +887,7 @@ def test_an_aware_bound_matches_zoned_times_by_instant(
     """
     kind, config = backend
     values = {k: v for k, v in ZONED.items() if not (kind == "postgres" and k == "zFeb30")}
-    assert _answers(kind, config, values, ZONED_FILTERS) == {}
+    assert _answers(kind, config, values, filters_to_ask(kind, ZONED_FILTERS)) == {}
 
 
 #: Session time zones far from UTC and from each other.

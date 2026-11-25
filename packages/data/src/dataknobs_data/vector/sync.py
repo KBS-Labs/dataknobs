@@ -9,11 +9,12 @@ import asyncio
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from dataknobs_common.clock import utc_now
 from dataknobs_common.callbacks import run_callback
 
 from ..fields import VectorField
@@ -670,7 +671,7 @@ class VectorTextSynchronizer:
         Returns:
             Synchronization status
         """
-        status = SyncStatus(start_time=datetime.now(UTC))
+        status = SyncStatus(start_time=utc_now())
 
         try:
             # Get records if not provided
@@ -715,7 +716,7 @@ class VectorTextSynchronizer:
                     await run_callback(progress_callback, status)
 
         finally:
-            status.end_time = datetime.now(UTC)
+            status.end_time = utc_now()
 
         logger.info(
             f"Sync completed: {status.updated_records} updated, "

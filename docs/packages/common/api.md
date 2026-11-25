@@ -43,6 +43,9 @@ in full in the [auto-generated reference](../../api/reference/common.md):
 | `callbacks`, `async_iter`, `sync_bridge` | Callback registries, sync-iterator offloading, and the sync/async bridge |
 | `expressions` | Safe expression evaluation over a restricted builtin set |
 | `imports`, `copying`, `bounded_cache`, `aws` | Dotted-path resolution, structure copying, an LRU cache, and the shared aioboto3 session |
+| `reply_schema` | `strict`, `array` and `STRING`: JSON Schemas for a model's reply, closed at every depth, as OpenAI's strict mode and Anthropic ask. Imported from the module, not the package |
+| `provenance` | `ProvenanceRecord` and the records it holds (`SourceReference`, `ToolInvocation`, `LLMInvocation`, `RevisionRecord`), with `create_provenance`: frozen records of where content came from and how it was revised. Re-exported by `dataknobs_bots.artifacts.provenance`. Imported from the module, not the package |
+| `clock` | `utc_now`, `now_iso`, `use_clock`, `system_clock` and the `Clock` type: the one read of the current time for a timestamp, and the seam a test fixes it with (`FixedClock` is in `testing`). Imported from the module, not the package |
 | `ontology`, `hierarchy`, `entity_resolution`, `text` | An authored vocabulary and what reads it: `load_ontology`, the entity and assertion sources, the structural protocols and the walks over them, and the resolution cascade |
 | `testing` | Test utilities, skip markers, and configuration factories |
 
@@ -159,6 +162,75 @@ except ConfigFieldError as e:
 ```
 
 See [A mapping that does not fit its class](structured-config.md#a-mapping-that-does-not-fit-its-class-configfielderror).
+
+#### `PluginConfigError`
+
+Raised by `PluginRegistry.get`, `get_async`, `create` and `create_async` when
+the factory's failure is, or was raised `from`, a `ConfigFieldError` that
+`StructuredConfig` wrote. A `NotFoundError` raised `from` one stays a bounded
+`NotFoundError`. Every other factory error is bounded to
+`"Failed to create plugin '<key>' (<type>)"`; this one keeps the refusal's
+words, because they name no value.
+
+```python
+class PluginConfigError(ConfigFieldError, OperationError):
+    """A config refusal raised while a registry built a plugin."""
+```
+
+The message is `"Failed to create plugin '<key>': "` followed by the refusal's.
+`context` is the refusal's as `from_dict` wrote it — `config_class`, with
+`missing`, or `unknown` and `accepted`, or `non_string_keys` — plus `key` and
+`registry`. What the factory raised is on `__cause__`. An
+`except OperationError` written against the bounded error still catches it.
+
+**Example:**
+```python
+from dataknobs_common import PluginConfigError
+
+try:
+    source = sources.create(config=spec)
+except PluginConfigError as e:
+    print(e)                         # Failed to create plugin 'file': ...
+    print(e.context.get("unknown"))  # e.g. ['pth']
+```
+
+See [Errors from a factory](plugin-registry.md#errors-from-a-factory).
+
+#### `FactoryValueError`
+
+The bounded stand-in for a `ValueError` or `ValidationError` a factory raised
+in its own words,
+raised by `create_surfacing` and `create_surfacing_async`. The factory's text
+may carry what it was handed, so it is not shown: the message is
+`"Failed to create <subject> '<key>' (<type>)"`, `context` carries `key`,
+`registry` and `cause_type`, and the factory's error is on `__cause__`.
+
+```python
+class FactoryValueError(ValidationError, ValueError):
+    """A bounded stand-in for a factory's own ``ValueError``."""
+```
+
+Caught by `except ValueError` and by `except ValidationError`.
+
+#### `PluginUnavailableError`
+
+Raised by `PluginRegistry.create`, `create_async`, `get` and `get_async` for
+a key declared with `declare_unavailable`: a plugin the registry knows of but
+cannot create here, usually because its optional dependency is not installed.
+The message is `"<kind> '<key>' is not available here: <reason>"`, and
+`context` carries `key`, `registry`, `available` and `unavailable` (the
+reason). `get` raises it even when the registry has a `default_factory`,
+rather than building the default in place of the plugin it was named.
+`create_surfacing` passes it through as itself rather than calling its
+`unknown` hook. On `create`, a registry whose `not_found_exception` is not
+`NotFoundError` raises that type instead; `get` always raises this one.
+
+```python
+class PluginUnavailableError(NotFoundError, ValueError):
+    """A plugin a registry knows of but cannot create here."""
+```
+
+Caught by `except NotFoundError` and by `except ValueError`.
 
 #### `ConfigurationError`
 
@@ -309,6 +381,14 @@ It is amended rather than rebuilt, so a subclass such as `DottedPathError`
 keeps its type and its attributes (`ref`, `reason`), and a handler a caller
 already has for it still catches it. Nested blocks prefix outermost first.
 Any other exception passes through untouched.
+
+The origin is the caller's text, so it is never vouched for as dataknobs'
+own. Raised to a caller directly, the amended error reads as above. Behind a
+`PluginRegistry` the origin never arrives, because it can hold what the caller
+tried — a connection URL included. A refusal `StructuredConfig` wrote arrives
+as its own words, bounded under the outer key
+(`Failed to create plugin '<key>': <refusal>`); any other refusal is named by
+its type alone (`Failed to create plugin '<key>' (ValidationError)`).
 
 **Example:**
 ```python
@@ -778,7 +858,8 @@ Get or create a cached plugin instance. Factories are called with `(key, config)
 **Returns:** Plugin instance
 
 **Raises:**
-- `NotFoundError`: If key not registered and no default — or raised by the factory itself, in which case it reaches the caller unchanged
+- `PluginUnavailableError`: If the key was declared unavailable, with the reason in the message and in `context["unavailable"]`
+- `NotFoundError`: If key not registered and no default, whatever `not_found_exception` the registry was given — or wrapping a `NotFoundError` the factory raised
 - `OperationError`: If the factory returns an awaitable — `get()` cannot await one. The message names `get_async()`. Nothing is cached in that case. Also if the instance fails `validate_type`, or wrapping any other exception the factory raised
 
 ##### `create(key=None, config=None, **kwargs) -> T`
@@ -795,16 +876,18 @@ Create a fresh instance without caching. Uses `(config, **kwargs)` factory signa
 **Raises:**
 - `ValueError`: If `key` is None and cannot be resolved
 - `TypeError`: If `key` is None and `config` is not a mapping, such as a `StructuredConfig`. The message names the registry and its `config_key`, and says to pass `key=`. Raised before `config_key_default` is consulted, and not wrapped in `OperationError`
-- `NotFoundError`: If resolved key is not registered — or whatever class `not_found_exception` names — or raised by the factory itself, in which case it reaches the caller unchanged
+- `NotFoundError`: If resolved key is not registered — or whatever class `not_found_exception` names — or wrapping a `NotFoundError` the factory raised
 - `OperationError`: If the factory returns an awaitable (the message names `create_async()`), if the factory raises, or if it returns something that is not a `validate_type`. The factory's own message is not copied into the wrapper; it travels on `__cause__`
 
-A `NotFoundError` or an `OperationError` raised *by the factory* is passed
-through by all four entry points rather than wrapped. The wrapper exists to
-keep a driver's or an SDK's failure text — which can carry the connection URL
-the factory was handed — out of the message; that reason does not reach our
-own error types, whose text is already bounded. So a composite factory that
-resolves a sub-component through another registry and misses raises
-`NotFoundError`, and the caller's `except NotFoundError` catches it.
+All four entry points bound what a factory raises: the message names the key
+and the original type, the original is on `__cause__`, and the factory's text
+and `context` stay out, since either can carry the connection URL the factory
+was handed. A `NotFoundError` (or subclass) from the factory comes back as a
+`NotFoundError`, and anything else as an `OperationError`, so `except
+NotFoundError` and `except OperationError` keep catching what they did. A
+`NotFoundError` or `OperationError` a registry raised passes through unchanged, so a composite factory whose
+own lookup through another registry misses raises that registry's
+`NotFoundError`, naming the inner key.
 
 ##### `get_factory(key) -> PluginFactory[T] | None`
 
@@ -871,6 +954,37 @@ handler_cls = handlers.get_factory("custom")
 - `name` (property) — Registry name
 - `cached_instances` (property) — Direct access to instance cache dict
 - Supports `len()`, `in` operator, and `repr()`
+
+#### Helpers in front of a registry
+
+```python
+def surfaced_cause(exc: BaseException) -> BaseException | None: ...
+
+def create_surfacing(
+    registry: PluginRegistry[T],
+    *,
+    subject: str,
+    unknown: Callable[[NotFoundError], BaseException] | None = None,
+    key: str | None = None,
+    config: PluginConfig | None = None,
+    **kwargs: Any,
+) -> T: ...
+
+async def create_surfacing_async(...) -> T: ...  # same parameters, over create_async
+```
+
+`surfaced_cause` returns a registry error's `__cause__` when a registry or
+another part of dataknobs wrote it and its words have not changed since, else
+`None`.
+`create_surfacing` is the shared body of a helper over a registry: the
+registry's miss becomes `unknown(error)`, a `PluginConfigError` is raised as
+built, a surfaced cause is raised as itself, and any other factory error is
+bounded — a `ValueError` or `ValidationError` as `FactoryValueError`, a `ResourceError`,
+`TimeoutError`, `ConcurrencyError`, `SerializationError` or
+`ConfigurationError` as a bounded error of its family, anything else as the
+registry's bounded `OperationError`.
+
+See [Wrapping a registry in a helper](plugin-registry.md#wrapping-a-registry-in-a-helper).
 
 ---
 
@@ -1050,21 +1164,40 @@ if is_deserializable(User):
 
 ### JSON Safety Functions
 
-#### `sanitize_for_json(value: Any, on_drop: str = "silent") -> Any`
+Two policies over one walk: `sanitize_for_json` drops what has no JSON form,
+for state that may hold live objects; `as_data` refuses it, for a value that
+must arrive whole. The
+[serialization guide](https://kbs-labs.github.io/dataknobs/packages/common/serialization/#json-safety-utilities)
+sets them side by side.
 
-Recursively traverse a value and drop anything not JSON-serializable. Handles
-dicts, lists, dataclasses, sets, tuples, bytes, datetime, Enum, and objects
-with `to_dict()`.
+#### `sanitize_for_json(value: Any, on_drop: OnDrop = "silent") -> Any`
+
+Recursively traverse a value and drop anything not JSON-serializable. Keeps
+`None`, booleans, numbers, strings, dicts and lists; converts tuples to lists,
+dataclasses to dicts, an `Enum` to its value, and an object whose `to_dict()`
+returns a dict to that dict. A dataclass is converted field by field even when
+it defines its own `to_dict()`. A set becomes a list of its members, sorted by
+each member's JSON. A `datetime`, `date` or `time` is written as `isoformat()`,
+and a `Decimal`, `UUID` or path as `str()`. Anything else is dropped, including
+`bytes` and `timedelta`. A NaN or infinite float, which JSON cannot write, becomes
+`None`, as `JSON.stringify` writes it (a non-finite `Decimal` too). These are
+conversions and are not reported, so a list keeps every position. A
+dict keeps the keys `json.dumps` can write (`str`, `int`, a finite `float`,
+`bool`, `None`), an `Enum` key becomes its value, and an entry with any other
+key, a NaN or infinite one included, is dropped. A container that holds itself
+is dropped where it repeats, reported as a `cycle`.
 
 **Parameters:**
 - `value` (Any): The value to sanitize
-- `on_drop` (str): Drop behavior — `"silent"` (DEBUG log, default), `"warn"` (WARNING log with key path), `"error"` (raises `SerializationError` listing all dropped paths)
+- `on_drop` (`OnDrop`, `Literal["silent", "warn", "error"]`): Drop behavior — `"silent"` (DEBUG log, default), `"warn"` (WARNING log with key path), `"error"` (raises `SerializationError` listing all dropped paths)
 
 **Returns:**
-- `Any`: JSON-safe copy with non-serializable values removed
+- `Any`: JSON-safe copy with non-serializable values removed; `None` when
+  `value` itself is dropped
 
 **Raises:**
 - `SerializationError`: When `on_drop="error"` and non-serializable values are found
+- `ValueError`: When `on_drop` is not one of the three modes
 
 **Example:**
 ```python
@@ -1087,6 +1220,8 @@ safe = sanitize_for_json(data, on_drop="error")
 #### `validate_json_safe(value: Any) -> list[str]`
 
 Read-only traversal returning paths to non-serializable values. Does not modify the input.
+The same walk as `sanitize_for_json(value, on_drop="error")`, returning the
+paths that call would raise for.
 
 **Parameters:**
 - `value` (Any): The value to check
@@ -1103,6 +1238,88 @@ problems = validate_json_safe({"name": "ok", "fn": some_function})
 
 if not problems:
     print("Fully JSON-safe")
+```
+
+#### `sanitize_and_report(value: Any) -> tuple[Any, list[str]]`
+
+What `sanitize_for_json` returns and what it would report, from one walk, for a
+caller that decides by the report what to do with the data. Nothing is logged
+or raised, and the input is not modified.
+
+**Parameters:**
+- `value` (Any): The value to sanitize
+
+**Returns:**
+- `tuple[Any, list[str]]`: the data, as `sanitize_for_json` returns it, and
+  the dropped paths, as `validate_json_safe` returns them
+
+**Example:**
+```python
+from dataknobs_common.serialization import sanitize_and_report
+
+data, dropped = sanitize_and_report({"name": "ok", "fn": some_function})
+# ({"name": "ok"}, ["fn (type=function)"])
+```
+
+#### `as_data(value: Any, *, using: Using | None = None) -> Any`
+
+Walk a value into JSON-shaped data, refusing what has no rule rather than
+dropping it. In order: a type in `using` → its serialiser, not applied again to
+the value it returned (exact type first, then the first listed base); an `Enum`
+→ its value; `None`, `bool`, `int`, `str` and a finite `float` → itself (NaN and
+infinity are refused); an object with a callable `to_dict()` → its
+result, walked (before the dataclass rule); a dataclass → its fields in
+declaration order; any `Mapping` → its items with keys written as `json.dumps`
+writes them (`None` as `"null"`; an `Enum` key as its value; a non-scalar key
+with `str()`), two keys written the same refused; a list or tuple →
+a list; a set or frozenset → a list sorted by each item's JSON; anything else →
+refused.
+
+**Parameters:**
+- `value` (Any): The value to walk
+- `using` (`Using`, i.e. `Mapping[type, Callable[[Any], Any]]`): per-call serialisers by type
+
+**Returns:**
+- `Any`: dicts with `str` keys, lists and JSON scalars
+
+**Raises:**
+- `SerializationError`: for a value no rule takes, two keys written the same,
+  a non-finite float, a container that holds itself, a value nested past the
+  recursion limit, or a `to_dict()` or serialiser that raised (the original as
+  `__cause__`). The message and `context["path"]` name the path,
+  as in `value.notes['tare']`.
+
+**Example:**
+```python
+from enum import Enum
+
+from dataknobs_common.serialization import as_data
+
+
+class Status(Enum):
+    ACTIVE = "active"
+
+
+as_data({"tags": frozenset({"b", "a"}), "status": Status.ACTIVE})
+# {"tags": ["a", "b"], "status": "active"}
+```
+
+#### `fields_data(value: Any, /, *, using: Using | None = None, **replaced: Any) -> dict[str, Any]`
+
+A dataclass instance's fields as data, by the rules of `as_data`, with each
+field named in `replaced` given the value passed instead.
+
+**Raises:**
+- `SerializationError`: when `value` is not a dataclass instance, when a name in
+  `replaced` is not a field, or as for `as_data` (paths start at the class name,
+  as in `Order.lines[0]`)
+
+**Example:**
+```python
+from dataknobs_common.serialization import fields_data
+
+fields_data(order, lines={"count": len(order.lines)})
+# {"order_id": "ORD-88", "lines": {"count": 200}, "placed_by": "warehouse-2"}
 ```
 
 ## Metadata Module

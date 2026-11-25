@@ -9,6 +9,177 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`make_elasticsearch_test_index` logs an index deletion Elasticsearch
+  refused**, at WARNING; it went unreported.
+- **A registry bounds its own error once a factory has added words to it.**
+  An error a `PluginRegistry` raised -- a nested lookup that missed, a nested
+  factory's bounded failure -- passes through an outer factory as itself,
+  because the registry wrote its text. A factory that caught one, appended the
+  connection URL it tried and re-raised the same instance got that URL past
+  `create`, `create_async`, `get` and `get_async`, since the registry
+  recognised its error by a mark on the instance rather than by its words. It
+  now passes one through only while its message and `context` are what the
+  registry wrote, and while it carries no note added since; an amended one
+  is bounded like any factory error, `"Failed to create plugin '<outer key>'
+  (<type>)"`, with the amended error on `__cause__`. An error a dataknobs
+  component names with an origin from the config it was given -- a grounded
+  source, an ontology binding -- still passes through, origin included; an
+  origin added with the public `naming_refusals` is the caller's text and is
+  not. The same
+  record now covers notes everywhere the written-by mark is read: an error
+  given a note after it was marked (`add_note`) is no longer shown as
+  dataknobs' words, since a note prints with it in every traceback and log
+  line.
+
+- **A backend declared unavailable is reported with its reason through the
+  helpers.** `create_surfacing` called its `unknown` hook for every miss, so a
+  helper turned `"Plugin 'vector' is not available here: needs the 'faiss'
+  extra"` into `"Unknown memory type: vector"`, and the reader went looking
+  for a typo in a name spelled correctly. The registry's own text now reaches
+  the caller, as a `PluginUnavailableError`, and `unknown` is called only for
+  a key the registry has never heard of. The miss's `context` carries the
+  reason as `unavailable`.
+
+- **Registering a plugin clears the unavailable marks of its aliases.**
+  `declare_unavailable(key, aliases=...)` marks every spelling, and
+  `register(key, ...)` cleared only the canonical key's mark, so an alias went
+  on refusing, "not available here", a plugin that was registered.
+  `register` now drops every mark that answers through the key, as
+  `unregister` already did; the alias becomes an ordinary unknown key.
+
+- **A factory's own words stay bounded past the doors that write around a
+  registry.** `tokenizer_from_config` and `rules_from_config` caught a
+  registry's bounded failure and interpolated the factory's error from
+  `__cause__` into their own `ValidationError`, so a consumer tokenizer or
+  variant-rule factory refusing with a connection URL put it in front of a
+  document's author. The ontology loader's rung builder read back any
+  `ValidationError` a rung factory raised, with the same effect for a consumer
+  rung. Each now repeats a factory's words only when dataknobs wrote them and
+  names anything else by its type — `tokenizer 'x' could not be built
+  (ValidationError)`, `Failed to create plugin '<kind>' (ValidationError)` —
+  with the original on `__cause__`. Every refusal a built-in tokenizer,
+  variant rule or rung writes still reaches the author word for word: a
+  parameter typo such as `{name: words, apostrophe: keep}` reads exactly as
+  before. A factory returning something not callable is named by its type
+  rather than its `repr`, and so is a value in one of these refusals that a
+  configuration document could not have written: a live object handed to
+  `tokenizer_from_config`, `rules_from_config`, a rung's count, threshold or
+  callable parameter, or a dotted path that resolves to an instance where
+  `resolve_class` wanted a class.
+
+- **`token_spans` keeps a combining mark in the word it is written on.** It
+  decided a token character by `str.isalnum`, which is False for every
+  combining mark, so `दुनिया` was three tokens with its vowel signs in none,
+  and a decomposed `é` split its word. A token is now a run of alphanumerics
+  and the combining marks (Unicode category `M*`) written on them: a mark
+  continues a token and never starts one, so the U+FE0F that follows most
+  emoji stays a boundary (`✈️Paris` holds the token `Paris`). The new
+  `in_token(text, index)` says it for one position, and the edge rule
+  (`punctuation_edges`, `edge_extensions`) and `narrowest` ask it, so a mark
+  on a word is no longer punctuation a window is widened over or trimmed off.
+  The scanning rungs inherit it: a declared name written with marks is one
+  window, where `LexicalSignal` used to report it short by its last vowel
+  sign. Two consequences: `default_normalizer` no longer changes any form's
+  token count, so a vocabulary declaring a mark that case-folds to a letter
+  (`U+0345`) keeps its `longest_form_tokens` bound; and a
+  `longest_form_tokens` or `form_edge` declared by hand on a live binding,
+  counted under the old rule, is still a valid upper bound — tokens only
+  merge and edges only shrink — though a looser one for scripts with marks.
+  A zero-width joiner (U+200C, U+200D) inside a word still splits it.
+
+- **`PluginRegistry` keeps a factory's text out of every error it raises.**
+  `get`, `get_async`, `create` and `create_async` bounded what a factory
+  raised to `"Failed to create plugin '<key>' (<type>)"`, except a
+  `NotFoundError` or `OperationError`, or any subclass of either, which passed
+  through with the factory's message and `context`. A factory raising
+  `OperationError(f"connection refused: {dsn}")` put the connection URL in
+  the message a caller sees. Now:
+  - a factory's `NotFoundError`, or a subclass, becomes a bounded
+    `NotFoundError`;
+  - anything else, `OperationError` and its subclasses included, becomes a
+    bounded `OperationError`;
+  - the original is on `__cause__`;
+  - a `NotFoundError` or `OperationError` a registry raised, such as a
+    nested registry's miss inside a composite factory, still passes through
+    as itself;
+  - a `ConfigFieldError` that `StructuredConfig` wrote (a missing field, an
+    unknown or misspelt key, a key that is not a string), or an error other
+    than a `NotFoundError` that a factory raised `from` one, becomes a
+    `PluginConfigError` that keeps the refusal's words:
+    `"Failed to create plugin '<key>': <refusal>"`, with the refusal's
+    `context` plus `key` and `registry`. It is both a `ConfigFieldError` and
+    an `OperationError`. The registry recognises the refusal by a mark only
+    `StructuredConfig` sets, so a factory's own `ConfigFieldError` is bounded
+    like any other error. The mark records the refusal's words as written,
+    and those are what is carried: a factory that amends the refusal before
+    raising it, with `naming_refusals` or by hand, adds nothing of its own.
+    Only an error dataknobs wrote and marked as its own, raised `from` the
+    refusal and unchanged since, is carried in its place, its `context`
+    merged over the refusal's; that is how a grounded `database` source's
+    `"Source '<name>': <refusal>"` reaches the caller of
+    `create_source_from_config` with the source named.
+
+  `except NotFoundError` and `except OperationError` catch what they caught
+  before. **A caller catching a narrower class raised inside a factory**, for
+  example a data backend's `DatabaseOperationError` from `registry.create`,
+  finds it on `__cause__` instead.
+
+- **`sanitize_for_json` writes a NaN or infinite float as `None`.** It passed
+  them through, and `json.dumps` wrote them as `NaN` / `Infinity`, which is
+  not JSON: `JSON.parse` and a Postgres `jsonb` column refuse the document.
+  They are now written as `null`, as `JSON.stringify` writes them, so the
+  key that holds one, the rest of its record and every position in its list
+  are kept: `[1.0, nan, 3.0]` gives `[1.0, None, 3.0]`. It is a conversion,
+  like an `Enum`'s, so it is not reported in any `on_drop` mode and
+  `validate_json_safe` does not list it. It is lossy: a caller that stored
+  such a value through Python's own `json`, which reads `NaN` back, now reads
+  `None`, the same as for an infinity or a `None`. A dict entry whose key is a
+  NaN or infinite float is dropped and reported (`x.nan (non-finite float key
+  nan)`): `json.dumps` refuses that key under `allow_nan=False`, and two NaN
+  keys are two entries it would write as one.
+
+- **A value that holds itself no longer crashes `sanitize_for_json` or
+  `validate_json_safe`.** A dict, list or dataclass that contained itself
+  raised `RecursionError` in every `on_drop` mode. It is now dropped where it
+  repeats and reported as a `cycle` (`items[1] (cycle)`), like any other drop;
+  a value reached twice by different routes is not a cycle and is kept.
+
+- **`sanitize_for_json` refuses an unknown `on_drop`.** Any value other than
+  `"warn"` or `"error"` was treated as `"silent"`, so a misspelt `"error"`
+  dropped data without saying so. Anything but the three modes now raises
+  `ValueError`, and the parameter is typed `OnDrop`
+  (`Literal["silent", "warn", "error"]`). A caller that passes a variable
+  typed `str` now needs it typed `OnDrop` to pass mypy.
+
+- **`sanitize_for_json` returns `None` for a value it drops at the top
+  level.** A dropped value is left out of the container holding it, but a
+  top-level value has none, and the function returned its private marker
+  object instead: not JSON, so `json.dumps` of the result raised `TypeError`.
+  This reached a bare `object()`, a `bytes` value, an `Enum` whose value has
+  no rule, and an object whose `to_dict()` raises or returns something other
+  than a dict, under `on_drop="silent"` (the default) and `"warn"`.
+  `on_drop="error"` still raises.
+
+- **`sanitize_for_json` writes a set, a date or time, a `Decimal`, a `UUID`
+  and a path instead of dropping them.** The docs said sets and `datetime`
+  values were handled, and they were dropped. A set or frozenset is now a
+  list of its members, sorted by each member's JSON, as `as_data` writes one;
+  a `datetime`, `date` or `time` is its `isoformat()`; a `Decimal` is its
+  `str()` (a NaN or infinite one is `None`); a `UUID` and a path are their
+  `str()`. These are conversions, so `validate_json_safe` and
+  `sanitize_and_report` no longer list them. Each reads back as a `str`
+  rather than its type. A caller that relied on such a value being left out
+  now receives it. `bytes` and `timedelta` still have no rule and are
+  dropped. A dropped set member is reported at `tags{}`.
+
+- **`sanitize_for_json` and `validate_json_safe` read dict keys too.** A key
+  `json.dumps` cannot write, such as a tuple, passed through both unchanged,
+  so `json.dumps` of a "sanitized" result raised `TypeError` and
+  `validate_json_safe` called it safe. An `Enum` key now becomes its value,
+  as an `Enum` value does. An entry with any other key is dropped by
+  `sanitize_for_json`, reported at its path under every `on_drop` mode
+  (`"error"` raises), and flagged by `validate_json_safe`.
+
 - **An ontology document's own top level is read for its shape**, as its rows
   are. `OntologyConfig` is a closed key set, so a misspelt section is refused
   by name with the nearest one (`entites:` is asked about `entities:`) instead
@@ -419,6 +590,160 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`PluginUnavailableError`, for a plugin a registry knows of but cannot
+  create here.** Raised by `PluginRegistry.create`, `create_async`, `get`
+  and `get_async` for a key declared with `declare_unavailable`, whose
+  message says it is not available here and why, in the same words on every
+  lane. It is both a `NotFoundError`, which a registry raises for a key it
+  cannot create, and a `ValueError`, which the helpers in front of
+  registries promise for a configuration problem, so an `except` of either
+  kind keeps catching it. On `create`, a registry with its own
+  `not_found_exception` keeps raising that type. The metadata
+  `declare_unavailable` attaches is the plugin's: a later `register` with no
+  metadata keeps it.
+
+- **`surfaced_cause`, `create_surfacing` and `create_surfacing_async`: the one
+  answer to "may a caller see this factory's error?".** A `PluginRegistry`
+  bounds a factory's failure and keeps the factory's error on `__cause__`. A
+  helper in front of a registry that reads `__cause__` back by type undoes
+  that, because a `ValueError` dataknobs wrote and one a driver raised with a
+  DSN in it are the same type. `surfaced_cause(exc)` decides by who wrote the
+  text instead: it returns the cause when a registry or another part of
+  dataknobs wrote it and its words have not changed since, else `None`. A
+  registry's error a factory amends before re-raising -- appending the
+  connection URL it tried -- is therefore no longer shown as the registry's.
+  `create_surfacing(registry, *, subject, unknown=None, key=None, config=None,
+  **kwargs)` is the shared body of such a helper: the registry's miss becomes
+  the helper's own `unknown(error)` text, a `PluginConfigError` is raised as
+  built, an error dataknobs wrote arrives as itself, and anything else a
+  factory raised is bounded to `"Failed to create <subject> '<key>' (<type>)"`
+  — a `ValueError` or `ValidationError` as `FactoryValueError`; a
+  `ResourceError`, `TimeoutError`, `ConcurrencyError`, `SerializationError`
+  or `ConfigurationError` as a bounded error of the same family; anything
+  else as the registry's bounded `OperationError`. A nested registry's
+  bounded failure passed through by an outer one is raised as itself, naming
+  the inner key. `create_surfacing_async` is its
+  twin over `create_async`. The plugin-registry guide's *Wrapping a registry
+  in a helper* section shows the pattern.
+
+- **`FactoryValueError(ValidationError, ValueError)`.** The bounded stand-in
+  for a `ValueError` or `ValidationError` a factory raised in its own words. Caught by
+  `except ValueError`, which is what the helpers built on `create_surfacing`
+  promised before, and by `except ValidationError`. `context` carries `key`,
+  `registry` and `cause_type`.
+
+- **`assert_no_cause_read` in `dataknobs_common.testing`.** A source scan that
+  fails on every read of an error's chain outside an allow-list of reviewed
+  readers — not only in `except` handlers, since a helper taking the
+  exception as a parameter reads it just the same. A read is a load of
+  `__cause__` or `__context__`, a string naming either (`getattr(exc,
+  "__cause__")`), or a `traceback` formatter, which renders the whole chain —
+  through the module under any alias it is imported as. Reading only `type(x.__cause__)` is not flagged. An allow-list entry matching nothing is
+  an error. `assert_no_broad_except_in_error_text` now reads through a raise
+  wrapped in a marking call, so marking a raise does not hide it from that
+  guard.
+
+- **`word_spans` and the `words` tokenizer: the default tokens with an in-word
+  apostrophe kept.** `word_spans(text)` joins the tokens `token_spans` returns
+  where one U+0027 or U+2019 sits between two of them, so *don't*
+  and *what’s* are one token each; `apostrophes="clitic"` starts a token at
+  each such apostrophe instead (`don` `'t`). A trailing or doubled apostrophe
+  stays a boundary, and tokens are slices of the text. Registered in
+  `TOKENIZERS` as `words`, so a configuration writes `tokenizer: words` or
+  `{name: words, apostrophes: clitic}`; an unknown key or mode is refused with
+  `ValidationError`. Also exported: `in_token(text, index)`, the one rule
+  every token boundary in `dataknobs_common.text` asks;
+  `is_token_boundary(text, index)`, whether a token straddles a gap, so
+  `text[start:end]` is a whole word exactly when both ends are boundaries;
+  and `ApostropheMode`. All are re-exported from
+  `dataknobs_common.entity_resolution`.
+
+- **`dataknobs_common.clock`: one read of the current time, and a seam a
+  test fixes it with.** `utc_now()` returns the current time as an aware UTC
+  `datetime` and `now_iso()` as an ISO 8601 string; with no clock set they are
+  `datetime.now(UTC)` and its `isoformat()`. `use_clock(clock)` sets the clock
+  for the current context, so it reaches every aware stamp made under it,
+  dataclass defaults included, and restores the previous clock when the block
+  ends. `asyncio` tasks, `asyncio.to_thread` and
+  `asyncio.run_coroutine_threadsafe` carry it; `loop.run_in_executor`, a
+  `ThreadPoolExecutor` worker, a bare thread and the `aiter_sync_in_thread`
+  producer read `system_clock`. A clock returning a value in
+  another zone is read as UTC, and one returning a naive value is refused
+  with `ValueError`. Every aware timestamp in `dataknobs_common` (provenance
+  records, `Event.timestamp`, `Subscription.created_at`) reads it; the
+  registries' `registered_at`, an epoch float from `time.time()`, does not. Import the
+  names from the module; they are not exported from `dataknobs_common`.
+
+- **`dataknobs_common.testing.FixedClock`.** A clock that returns the instant
+  it holds, with `advance(delta)` and `set(at)`; `set` accepts an earlier
+  instant, so a test can reproduce a wall clock corrected backwards. A naive
+  instant is refused with `ValueError`, and anything other than a `datetime`
+  with `TypeError`. It works under `use_clock` and wherever a constructor
+  takes a clock.
+
+- **`dataknobs_common.provenance`: provenance records outside bots, frozen.**
+  `SourceReference`, `ToolInvocation`, `LLMInvocation`, `RevisionRecord` and
+  `ProvenanceRecord`, with `create_provenance`, move here from
+  `dataknobs_bots.artifacts.provenance`, which re-exports the same objects, so
+  content written with a model can record its sources, tools, model calls and
+  revisions without dataknobs-bots. The records are frozen dataclasses: a
+  field holding several values keeps a tuple of any iterable it is given, and
+  refuses a single string; `creation_context` and `parameters` hold a frozen
+  copy of the mapping given, a `FrozenMapping` (nested dicts frozen too,
+  nested lists held as tuples), so neither the caller nor a reader can change
+  it, and `to_dict` returns plain, new dicts and lists. The three records
+  holding no mapping are hashable; `ToolInvocation` and `ProvenanceRecord`,
+  and any frozen dataclass subclassing them, declare themselves unhashable.
+  `from_dict` reads a stored `null` mapping as empty. A revision is a new record, made with
+  `dataclasses.replace`. Three optional fields describe a part of the content
+  rather than the whole: `LLMInvocation.invocation_id`, and
+  `RevisionRecord.part`, `after` (`""` where the part was removed, `None`
+  where not recorded) and `sources`. Each is written by `to_dict` only when
+  set, so a record that uses none of them serialises exactly as before and a
+  stored record reads back unchanged. `create_provenance` takes its optional
+  fields as typed keywords (any iterable, any mapping) rather than
+  `**kwargs`. `from_dict` reads any mapping. A timestamp left unset reads
+  `dataknobs_common.clock.now_iso`. Import the names from the module; they
+  are not exported from `dataknobs_common`.
+
+- **`dataknobs_common.reply_schema`: JSON Schemas for a model's reply, closed
+  by construction.** `strict(properties)` builds an object from a mapping of
+  name to schema, listing every property in `required` in the order given and
+  setting `additionalProperties` to false; `array(items)` and `STRING` add no
+  object of their own. A schema composed only from them is closed at every
+  depth, which is the form OpenAI's strict mode (`LLMConfig.response_schema_strict`)
+  and Anthropic ask of every object, where an open object is refused with a
+  400. Closed is not accepted: a keyword a caller adds, such as a length or
+  count bound, may still be refused by a vendor. Each part is rebuilt with
+  `as_data`, so a built schema shares no container with its parts, with
+  another schema or within itself, and comes out as `json` writes it (a set as
+  a sorted list). A part that is not a mapping raises `TypeError`, and one
+  holding a value JSON cannot write raises `SerializationError` naming the
+  property. `STRING` is frozen. Import the builders from the module; they are
+  not exported from `dataknobs_common`. `jsonschema` joins the package's dev
+  group, for the tests that validate what the builders produce.
+
+- **`sanitize_and_report`: what `sanitize_for_json` returns and what it would
+  report, in one walk.** It returns `(data, dropped)`, the two answers
+  `sanitize_for_json` and `validate_json_safe` give, for a caller that decides
+  by the report what to do with the data and would otherwise walk the value
+  twice, calling each `to_dict()` twice. Nothing is logged or raised.
+
+- **`as_data` and `fields_data`: values as data, refused rather than dropped.**
+  `as_data(value, *, using=None)` walks a value into JSON-shaped data for a
+  value that must arrive whole, such as a reply made of nested frozen
+  dataclasses. Where `sanitize_for_json` drops what it cannot convert, it
+  raises `SerializationError` naming the path (`value.notes['tare']`, also in
+  `context["path"]`). It uses a dataclass's own `to_dict()` before its fields,
+  carries a set as a sorted list and any `Mapping` as a dict with text keys
+  written as `json.dumps` writes them, and refuses two keys that would be
+  written the same, a NaN or infinite float, and a value that holds itself.
+  `using` is a per-call table of serialisers by type (exported as `Using`),
+  applied at every depth but not again to a serialiser's own result.
+  `fields_data(value, **replaced)` is a dataclass's fields with some given in
+  place of their value, refusing a name that is not a field. Both run on one traversal with
+  `sanitize_for_json` and `validate_json_safe`, each a policy over it.
+
 - **A source says which state of its vocabulary is answering.**
   `EntitySource.revision()` and `AsyncEntitySource.revision()` (awaitable on
   the async twin) answer an opaque string that changes when what the source
@@ -495,10 +820,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prefix from a field of the context the caller hands each form. Rules are
   named in `VARIANT_RULES`, a `PluginRegistry`, so a configuration names them
   and a consumer registers rules of their own; `rules_from_config` builds a
-  list of rule specs and refuses an unknown name or parameter by name. Any
-  other failure in a rule's factory is named by its type alone and chained as
-  the cause, so the factory's own text, which can carry a path or a URL, stays
-  out of the message.
+  list of rule specs and refuses an unknown name or parameter by name.
   `dataknobs_common.text` is now a package of two modules, `scan` and
   `variants`, and every name stays importable from `dataknobs_common.text`.
 
@@ -553,7 +875,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ConfigurationError` (a subclass included) as the same exception, its
   message prefixed with the origin and the caller's context merged into its
   own, so its type and attributes survive and an existing handler for a
-  subclass still catches it. Any other exception passes through.
+  subclass still catches it. Any other exception passes through. The origin
+  is the caller's text and can hold what the caller tried, so it is never
+  vouched for as dataknobs' own: behind a `PluginRegistry` it never arrives.
+  A refusal `StructuredConfig` wrote arrives as its own words, bounded under
+  the outer key; any other refusal is named by its type alone.
 
 - **An entity's aliases can be indexed in its own row.** `aliases` joins
   `TEXT_FIELDS`, so `EntitySourceIndexSource(onto, fields=("name",
@@ -1430,14 +1756,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The vocabulary surface is on the package door.** `dataknobs_common` now
   exports the ontology family, the structural protocols and their walks, and
-  the resolution cascade — 134 names, taking the package's `__all__` to 367,
-  the twenty-seven beyond them being the operation family, the near-spelling
+  the resolution cascade — 134 names, taking the package's `__all__` to 373,
+  the thirty-three beyond them being the operation family, the near-spelling
   rung, the surface-form catalogue, the index-source family, the edge rule's
   three functions, `narrowest`, the tokenizer family (`Tokenizer`,
   `TOKENIZERS`, `tokenizer_from_config`), `aclosing_iter`, `PluginConfig`,
   `naming_refusals`, `fingerprint_value`, `freeze_structure`,
-  `thaw_structure`, `FrozenMapping` and `ConfigFieldError`, each added by its
-  own entry. `declared_candidates` is inside the 134 rather than beyond them,
+  `thaw_structure`, `FrozenMapping`, `ConfigFieldError`, `PluginConfigError`,
+  `FactoryValueError`, `PluginUnavailableError`, `surfaced_cause`,
+  `create_surfacing` and `create_surfacing_async`, each added by its own entry. `declared_candidates` is inside the 134 rather than beyond them,
   which is what took that figure from 133.
   Every one of them was already importable by module path; what changes is that
   they are now a promise this package keeps rather than a path that happened to
@@ -2088,10 +2415,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TOKENIZERS`, or `{name: ..., <params>}` — and an unknown name is refused
   with `ValidationError` listing the registered ones, at the document doors;
   through `signal_backends.create` it arrives as the `OperationError` wrapping
-  it. A factory refusing its parameters (`ValueError` or `ValidationError`) is
-  quoted in that error; any other failure is named by its type alone and
-  chained as the cause, because a factory's own text can carry a path or a
-  URL. `default` is registered
+  it. `default` is registered
   and is `token_spans` itself. A scan with any other tokenizer does not take
   its window or edge bound from the source, whose counts are in default
   tokens, so `max_window` and `max_edge` are its only caps — as for a rung with
@@ -2151,6 +2475,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`PluginRegistry.get` and `get_async` refuse a key declared unavailable,
+  even with a `default_factory`.** They reported such a key as `"Plugin
+  '<key>' not registered and no default available"`, and on a registry with
+  a `default_factory` built the default in its place -- a different plugin
+  from the one named, while `create` refused it. They now raise
+  `PluginUnavailableError` with the declared reason, as `create` does, before
+  the default is tried. It is a `NotFoundError`, so an existing `except
+  NotFoundError` keeps catching it; a caller that relied on the default
+  standing in for an unavailable key now gets the refusal. An unknown key
+  still gets the default, and its message is unchanged.
+
+- **`sanitize_for_json` and `validate_json_safe` take only their documented
+  parameters.** `sanitize_for_json` also accepted `_path` and `_dropped`,
+  and `validate_json_safe` accepted `_path`, all marked internal. Passing
+  `_dropped` turned `on_drop="error"` off: the call returned without
+  raising. Both are removed; passing either is now a `TypeError`. A caller
+  that passed `_path` to prefix its diagnostics prefixes the reported paths
+  itself.
+
 - **BREAKING: a mapping that does not fit its `StructuredConfig` raises
   `ConfigFieldError`.** `from_dict` used to pass a mapping missing a required
   field straight to the dataclass constructor, which raised CPython's
@@ -2166,9 +2509,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documents `ValidationError` meets that contract with no translation. Its
   message names only the class, its fields and the keys the caller wrote,
   never a value, and its `context` carries `config_class` with `missing` or
-  `unknown` and `accepted`. A required field written `None` is still supplied,
-  not missing. On a class with `_UNKNOWN_KEYS = "raise"`, a key that is not a
-  string (YAML's reading of an unquoted `yes:`, `on:` or `null:`) raises the
+  `unknown` and `accepted`. Built through a `PluginRegistry`, the refusal
+  reaches the caller as a `PluginConfigError` carrying the same message and
+  `context` (see the `PluginRegistry` entry under Fixed). A required field
+  written `None` is still supplied, not missing. On a class with
+  `_UNKNOWN_KEYS = "raise"`, a key that is not a string (YAML's reading of an unquoted `yes:`, `on:` or `null:`) raises the
   same type, naming the key, instead of a `TypeError` from sorting the keys.
 
   - **Migration:** a caller that catches `TypeError` around `from_dict`,

@@ -16,7 +16,6 @@ still serves a range and sort on ``id`` for a table created now.
 
 from __future__ import annotations
 
-import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -134,63 +133,17 @@ def _expected_sort(spec: SortSpec) -> list[str]:
     return sorted(IDS, key=T_OF.__getitem__, reverse=reverse)
 
 
-def _analyzed_range(spec: Filter) -> list[str]:
-    """What a range answers when run against a text field's analyzed terms.
-
-    A record matches when any of its lowercased terms is in range; the bound
-    itself is compared as given.
-    """
-
-    def in_range(term: str) -> bool:
-        if spec.operator in (Operator.BETWEEN, Operator.NOT_BETWEEN):
-            lower, upper = spec.value
-            return bool(lower <= term <= upper)
-        return bool(Filter("t", spec.operator, spec.value).matches(term))
-
-    hits = {
-        row_id
-        for row_id, value in ROWS
-        if any(in_range(term) for term in re.findall(r"\w+", value.lower()))
-    }
-    if spec.operator == Operator.NOT_BETWEEN:
-        hits = set(IDS) - hits
-    return sorted(hits)
-
-
-def _known_answer(kind: str, flavour: str, spec: Filter | SortSpec) -> Answer | None:
-    """A backend's answer where a defect outside this test's subject decides it.
-
-    The defect's answer replaces the oracle's, so the backend is still held to
-    an exact answer: the test fails when a defect is fixed, and the entry
-    here goes with it, as it does when a defect changes shape.
-    """
-    if kind != "elasticsearch" or spec.field != "t":
-        return None
-    if isinstance(spec, Filter):
-        # A range with a string bound runs against the analyzed field.
-        return _analyzed_range(spec)
-    if flavour == "async":
-        # The async backend sorts a text field without its keyword
-        # sub-field, and Elasticsearch refuses the request.
-        return "raises BadRequestError"
-    return None
-
-
 def _disagreements(
-    kind: str,
-    flavour: str,
     filtered: list[tuple[Filter, Answer]],
     ordered: list[tuple[SortSpec, Answer]],
 ) -> dict[str, object]:
     wrong: dict[str, object] = {}
     for spec, got in filtered:
-        known = _known_answer(kind, flavour, spec)
-        want = _expected_filter(spec) if known is None else known
+        want = _expected_filter(spec)
         if got != want:
             wrong[f"{spec.field} {spec.operator.value} {spec.value!r}"] = {"got": got, "want": want}
     for sort, got in ordered:
-        known = _known_answer(kind, flavour, sort)
-        want = _expected_sort(sort) if known is None else known
+        want = _expected_sort(sort)
         if got != want:
             wrong[f"sort {sort.field} {sort.order.value}"] = {"got": got, "want": want}
     return wrong
@@ -204,7 +157,7 @@ def _raised(exc: Exception) -> str:
     return f"raises {type(exc).__name__}"
 
 
-def _search_all(db: SyncDatabase, kind: str) -> dict[str, object]:
+def _search_all(db: SyncDatabase) -> dict[str, object]:
     def run(query: Query) -> Answer:
         try:
             return _ids(db.search(query))
@@ -213,10 +166,10 @@ def _search_all(db: SyncDatabase, kind: str) -> dict[str, object]:
 
     filtered = [(f, _sorted(run(Query(filters=[f])))) for f in FILTERS]
     ordered = [(s, run(Query(sort_specs=[s]))) for s in SORTS]
-    return _disagreements(kind, "sync", filtered, ordered)
+    return _disagreements(filtered, ordered)
 
 
-async def _asearch_all(db: AsyncDatabase, kind: str) -> dict[str, object]:
+async def _asearch_all(db: AsyncDatabase) -> dict[str, object]:
     async def run(query: Query) -> Answer:
         try:
             return _ids(await db.search(query))
@@ -225,7 +178,7 @@ async def _asearch_all(db: AsyncDatabase, kind: str) -> dict[str, object]:
 
     filtered = [(f, _sorted(await run(Query(filters=[f])))) for f in FILTERS]
     ordered = [(s, await run(Query(sort_specs=[s]))) for s in SORTS]
-    return _disagreements(kind, "async", filtered, ordered)
+    return _disagreements(filtered, ordered)
 
 
 def _sorted(answer: Answer) -> Answer:
@@ -245,7 +198,7 @@ def test_every_backend_orders_text_by_code_point_sync(
     try:
         for row_id, value in ROWS:
             db.create(Record({"t": value}, storage_id=row_id))
-        wrong = _search_all(db, kind)
+        wrong = _search_all(db)
     finally:
         if kind == "s3":
             db.clear()
@@ -261,7 +214,7 @@ async def test_every_backend_orders_text_by_code_point_async(
     try:
         for row_id, value in ROWS:
             await db.create(Record({"t": value}, storage_id=row_id))
-        wrong = await _asearch_all(db, kind)
+        wrong = await _asearch_all(db)
     finally:
         if kind == "s3":
             await db.clear()
@@ -359,7 +312,7 @@ def test_a_postgres_table_created_before_answers_by_code_point_too(
     try:
         for row_id, value in ROWS:
             db.create(Record({"t": value}, storage_id=row_id))
-        wrong = _search_all(db, "postgres")
+        wrong = _search_all(db)
     finally:
         db.close()
     assert wrong == {}

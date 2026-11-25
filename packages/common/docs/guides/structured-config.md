@@ -294,6 +294,22 @@ its `context`. YAML 1.1 reads an unquoted `yes:` or `on:` as `True` and
 `null:` as `None`, so a closed class meets such a key from any document; the
 remedy is to quote it.
 
+**Through a registry, the refusal keeps its words.** A
+[`PluginRegistry`](plugin-registry.md#errors-from-a-factory) bounds the text of
+whatever a factory raises, because a factory's text can carry the connection
+URL it was handed. A refusal `from_dict` wrote is the exception: building a
+plugin from a config that does not fit its class raises a `PluginConfigError`,
+whose message is `"Failed to create plugin '<key>': "` followed by the refusal,
+and whose `context` is the refusal's plus `key` and `registry`. This holds
+whether the registry calls a factory that reads its config with `from_dict`, or
+a `StructuredConfigConsumer` class registered as itself.
+
+`PluginConfigError` is both a `ConfigFieldError` and an `OperationError`, so an
+`except OperationError` around `create` still catches it. The registry
+recognises a refusal by a mark that only `StructuredConfig` sets, not by its
+type, so a `ConfigFieldError` a factory raises with its own words is bounded
+like any other error.
+
 A required field written as `None` is **supplied**, not missing: some required
 fields are legitimately optional-typed, and only a caller knows whether `None`
 means absent there. A section that needs that reading checks for it itself.

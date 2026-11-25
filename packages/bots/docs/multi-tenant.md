@@ -310,8 +310,11 @@ The pairing is:
 #### Handler coverage
 
 `register_exception_handlers` registers handlers for `APIError`, for
-`DataknobsError`, for FastAPI's `HTTPException`, and a catch-all for
-`Exception`. The `DataknobsError` handler is what gives DataKnobs' own errors a
+`DataknobsError`, for Starlette's `HTTPException`, and a catch-all for
+`Exception`. The `HTTPException` handler covers FastAPI's subclass too, and the
+router's own refusals: an unknown path answers 404 and a method a route does
+not take answers 405, both in the same body as every other error, with the
+exception's headers (a 405's `Allow`) kept. The `DataknobsError` handler is what gives DataKnobs' own errors a
 status matching the failure — a `ConfigurationError` from config validation, a
 `RateLimitError` from `RateLimitMiddleware`, a `RecordNotFoundError` from a
 database backend. You do not need to catch these and re-raise them as API
@@ -364,11 +367,14 @@ values while its message can be a database driver's.
 |---|---|---|---|
 | `ValidationError` | 422 | yes | yes |
 | `ConfigFieldError` | 422 | yes | yes |
+| `PluginConfigError` | 422 | yes | yes |
+| `FactoryValueError` | 422 | yes | yes |
 | `ConsentRequiredError` | 403 | yes | yes |
 | `ConcurrencyError` | 409 | yes | yes |
 | `InvalidTransitionError` | 409 | yes | yes |
 | `RateLimitError` | 429 | yes | yes |
 | `NotFoundError` | 404 | yes | no — the context lists a registry's keys |
+| `PluginUnavailableError` | 404 | yes | no — the context lists a registry's keys |
 | `TimeoutError` | 504 | yes | no — the context can carry a query |
 | `ConfigurationError` | 500 | no — masked, see below | no |
 | `DottedPathError` | 500 | no — masked | no |
@@ -420,6 +426,32 @@ over the defaults, so rows you do not mention keep working. The third argument
 defaults to `False`, so a row written as `ErrorPolicy(402, True)` discloses the
 message and withholds the `context`: forgetting to think about `context` fails
 closed.
+
+An override reaches the type it names and the subclasses with no row of their
+own. `PluginConfigError` has one: it is the `ConfigFieldError` a plugin
+registry raises when a tenant's knowledge-base, memory or source section does
+not fit its class, and it carries the same refusal. So a deployment that
+tightens `ConfigFieldError` — to withhold `detail`, say — writes the same row
+for `PluginConfigError`.
+
+`FactoryValueError` is what a tenant meets when a memory, knowledge-base or
+source backend refuses its section in its own words rather than through its
+config class, with a `ValueError` or a `ValidationError`. Those words can carry
+what the backend was handed — a connection URL, a credential — so the message
+is bounded to `Failed to create memory backend 'acme_store' (ValueError)` and
+the backend's text goes only to the log, on `__cause__`. DataKnobs' own refusals ("Summary memory requires an LLM
+provider", "Unknown backend type: …") are not bounded: they arrive under their
+own type with their words. A backend that fails to *connect* keeps its family
+the same way — a `ResourceError` is still a 503 and a `TimeoutError` a 504 —
+with a bounded message.
+
+A grounded source's refusal is a `SourceConfigError`
+(`dataknobs_bots.knowledge.sources`): a 422 under `ValidationError`'s row, with
+the source's name in `detail["source"]`. It covers an unknown source type or
+database backend, a setting the backend refuses in DataKnobs' words, a missing knowledge base,
+and a database that could not be opened because its backend raised a
+`ValueError` of its own, which is named by type only. A key no one reads stays
+a `PluginConfigError`, with `source` in its `detail` too.
 
 **Adding a row means reading what that type's raise sites put in `context`, not
 only what its message says.** They are separate arguments precisely because the

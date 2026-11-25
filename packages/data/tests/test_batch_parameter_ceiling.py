@@ -32,6 +32,10 @@ if TYPE_CHECKING:
 
 N = 33_000
 
+#: DuckDB has no cap, so its batch is one statement of one shape at any size
+#: and 33,000 rows through every verb cost seconds. One test writes it ``N``.
+DUCKDB_N = 2_000
+
 SQL_BACKENDS = [
     "sqlite",
     "duckdb",
@@ -81,6 +85,10 @@ def any_backend(request: pytest.FixtureRequest) -> Iterator[tuple[str, dict[str,
         )
 
 
+def _batch_size(kind: str) -> int:
+    return DUCKDB_N if kind == "duckdb" else N
+
+
 def _ids(n: int) -> list[str]:
     return [f"r{i}" for i in range(n)]
 
@@ -96,28 +104,29 @@ def _found(records: list[Record]) -> set[str]:
 def test_every_batch_verb_takes_a_batch_past_the_ceiling_sync(
     backend: tuple[str, dict[str, Any]],
 ) -> None:
-    """Each verb and a membership filter take N items in one call."""
+    """Each verb and a membership filter take the whole batch in one call."""
     kind, config = backend
+    n = _batch_size(kind)
     db = SyncDatabase.from_backend(kind, config=config)
     try:
-        assert db.create_batch(_records(N)) == _ids(N)
-        assert db.count() == N
+        assert db.create_batch(_records(n)) == _ids(n)
+        assert db.count() == n
 
-        assert db.upsert_batch(_records(N, offset=1)) == _ids(N)
-        assert db.read(f"r{N - 1}").get_value("v") == N
+        assert db.upsert_batch(_records(n, offset=1)) == _ids(n)
+        assert db.read(f"r{n - 1}").get_value("v") == n
 
-        updates = [(f"r{i}", Record({"v": -i})) for i in range(N)]
-        assert db.update_batch(updates) == [True] * N
-        assert db.read(f"r{N - 1}").get_value("v") == -(N - 1)
+        updates = [(f"r{i}", Record({"v": -i})) for i in range(n)]
+        assert db.update_batch(updates) == [True] * n
+        assert db.read(f"r{n - 1}").get_value("v") == -(n - 1)
 
         db.create(Record({"v": 1}, storage_id="extra"))
-        wanted = [-i for i in range(N)]
-        assert _found(db.search(Query(filters=[Filter("v", Operator.IN, wanted)]))) == set(_ids(N))
+        wanted = [-i for i in range(n)]
+        assert _found(db.search(Query(filters=[Filter("v", Operator.IN, wanted)]))) == set(_ids(n))
         assert _found(db.search(Query(filters=[Filter("v", Operator.NOT_IN, wanted)]))) == {"extra"}
-        by_id = Query(filters=[Filter("id", Operator.IN, _ids(N))])
-        assert _found(db.search(by_id)) == set(_ids(N))
+        by_id = Query(filters=[Filter("id", Operator.IN, _ids(n))])
+        assert _found(db.search(by_id)) == set(_ids(n))
 
-        assert db.delete_batch([*_ids(N), "absent"]) == [True] * N + [False]
+        assert db.delete_batch([*_ids(n), "absent"]) == [True] * n + [False]
         assert db.count() == 1
     finally:
         db.close()
@@ -128,28 +137,29 @@ async def test_every_batch_verb_takes_a_batch_past_the_ceiling_async(
 ) -> None:
     """The async twin of the sync test."""
     kind, config = backend
+    n = _batch_size(kind)
     db = await AsyncDatabase.from_backend(kind, config=config)
     try:
-        assert await db.create_batch(_records(N)) == _ids(N)
-        assert await db.count() == N
+        assert await db.create_batch(_records(n)) == _ids(n)
+        assert await db.count() == n
 
-        assert await db.upsert_batch(_records(N, offset=1)) == _ids(N)
-        assert (await db.read(f"r{N - 1}")).get_value("v") == N
+        assert await db.upsert_batch(_records(n, offset=1)) == _ids(n)
+        assert (await db.read(f"r{n - 1}")).get_value("v") == n
 
-        updates = [(f"r{i}", Record({"v": -i})) for i in range(N)]
-        assert await db.update_batch(updates) == [True] * N
-        assert (await db.read(f"r{N - 1}")).get_value("v") == -(N - 1)
+        updates = [(f"r{i}", Record({"v": -i})) for i in range(n)]
+        assert await db.update_batch(updates) == [True] * n
+        assert (await db.read(f"r{n - 1}")).get_value("v") == -(n - 1)
 
         await db.create(Record({"v": 1}, storage_id="extra"))
-        wanted = [-i for i in range(N)]
+        wanted = [-i for i in range(n)]
         found = await db.search(Query(filters=[Filter("v", Operator.IN, wanted)]))
-        assert _found(found) == set(_ids(N))
+        assert _found(found) == set(_ids(n))
         found = await db.search(Query(filters=[Filter("v", Operator.NOT_IN, wanted)]))
         assert _found(found) == {"extra"}
-        found = await db.search(Query(filters=[Filter("id", Operator.IN, _ids(N))]))
-        assert _found(found) == set(_ids(N))
+        found = await db.search(Query(filters=[Filter("id", Operator.IN, _ids(n))]))
+        assert _found(found) == set(_ids(n))
 
-        assert await db.delete_batch([*_ids(N), "absent"]) == [True] * N + [False]
+        assert await db.delete_batch([*_ids(n), "absent"]) == [True] * n + [False]
         assert await db.count() == 1
     finally:
         await db.close()
@@ -160,13 +170,14 @@ def test_a_batch_past_the_ceiling_is_all_or_nothing_sync(
 ) -> None:
     """A colliding id at the end of a long batch writes none of it."""
     kind, config = backend
+    n = _batch_size(kind)
     db = SyncDatabase.from_backend(kind, config=config)
     try:
-        db.create(Record({"v": "kept"}, storage_id=f"r{N - 1}"))
+        db.create(Record({"v": "kept"}, storage_id=f"r{n - 1}"))
         with pytest.raises(DuplicateRecordError):
-            db.create_batch(_records(N))
+            db.create_batch(_records(n))
         assert db.count() == 1
-        assert db.read(f"r{N - 1}").get_value("v") == "kept"
+        assert db.read(f"r{n - 1}").get_value("v") == "kept"
     finally:
         db.close()
 
@@ -176,15 +187,27 @@ async def test_a_batch_past_the_ceiling_is_all_or_nothing_async(
 ) -> None:
     """The async twin of the sync test."""
     kind, config = backend
+    n = _batch_size(kind)
     db = await AsyncDatabase.from_backend(kind, config=config)
     try:
-        await db.create(Record({"v": "kept"}, storage_id=f"r{N - 1}"))
+        await db.create(Record({"v": "kept"}, storage_id=f"r{n - 1}"))
         with pytest.raises(DuplicateRecordError):
-            await db.create_batch(_records(N))
+            await db.create_batch(_records(n))
         assert await db.count() == 1
-        assert (await db.read(f"r{N - 1}")).get_value("v") == "kept"
+        assert (await db.read(f"r{n - 1}")).get_value("v") == "kept"
     finally:
         await db.close()
+
+
+def test_duckdb_takes_a_statement_past_the_other_drivers_caps(tmp_path: Path) -> None:
+    """DuckDB's one statement carries ``N`` rows, so no cap is needed for it."""
+    config = {"path": str(tmp_path / "records.duckdb"), "table": "records"}
+    db = SyncDatabase.from_backend("duckdb", config=config)
+    try:
+        assert db.create_batch(_records(N)) == _ids(N)
+        assert db.count() == N
+    finally:
+        db.close()
 
 
 def _own_updates(n: int) -> list[tuple[str, Record]]:
@@ -322,16 +345,17 @@ async def test_a_colliding_id_is_named_inside_a_wider_transaction(
     statements' rows still visible.
     """
     kind, config = backend
+    n = _batch_size(kind)
     db = await AsyncDatabase.from_backend(kind, config=config)
     try:
-        await db.create(Record({"v": "kept"}, storage_id=f"r{N - 1}"))
+        await db.create(Record({"v": "kept"}, storage_id=f"r{n - 1}"))
         tx = await db.begin_transaction()
         await tx.delete("absent")
-        for record in _records(N):
+        for record in _records(n):
             await tx.create(record)
         with pytest.raises(DuplicateRecordError) as raised:
             await tx.commit()
-        assert raised.value.id == f"r{N - 1}"
+        assert raised.value.id == f"r{n - 1}"
         assert await db.count() == 1
     finally:
         await db.close()

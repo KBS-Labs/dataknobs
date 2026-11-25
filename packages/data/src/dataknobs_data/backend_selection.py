@@ -40,6 +40,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, NamedTuple
 
+from dataknobs_common.exceptions import _written_by_dataknobs
 from dataknobs_common.registry import PluginRegistry
 
 
@@ -248,8 +249,18 @@ def register_backend(
             backend_class = load()
         except ImportError as exc:
             # The declared driver is present but something else the module
-            # needs is not. Reported verbatim -- it names the real gap.
-            reason = str(exc)
+            # needs is not. The reason is shown to whoever asks for this
+            # backend -- through an HTTP API, a 404's message -- and an
+            # ImportError's own text can carry the absolute path of the
+            # package that failed to load, or a native loader's output. So it
+            # names the module, which is the real gap, and the full text goes
+            # to the log for the operator.
+            module = exc.name or "a module it needs"
+            reason = f"{module} could not be imported"
+            hint = metadata.get("requires_install")
+            if hint:
+                reason = f"{reason}. Install with: {hint}"
+            logger.debug("Backend '%s' failed to import: %s", key, exc)
 
     if reason is not None:
         # `load` goes with the declaration, not just the registration. A
@@ -462,11 +473,13 @@ def build_backend(
     from_config = getattr(backend_class, "from_config", None)
     if from_config is None:
         registered = getattr(backend_class, "__name__", type(backend_class).__name__)
-        raise ValueError(
-            f"The {kind} backend registered as '{backend_type}' cannot be built "
-            f"from a config: {registered} has no 'from_config' classmethod. "
-            "Register a backend class rather than a bare callable, or build it "
-            "through the registry's own create()."
+        raise _written_by_dataknobs(
+            ValueError(
+                f"The {kind} backend registered as '{backend_type}' cannot be built "
+                f"from a config: {registered} has no 'from_config' classmethod. "
+                "Register a backend class rather than a bare callable, or build it "
+                "through the registry's own create()."
+            )
         )
     return from_config(options)
 
@@ -532,13 +545,15 @@ def select_backend(
         declared = registry.get_metadata(backend_type, follow_alias=True)
         hint = declared.get("requires_install") if declared else None
         if hint:
-            raise ValueError(
-                f"Backend '{backend_type}' is known but not available here. Install with: {hint}"
+            raise _written_by_dataknobs(
+                ValueError(
+                    f"Backend '{backend_type}' is known but not available here. Install with: {hint}"
+                )
             )
         if unknown_message is None:
-            raise ValueError(
-                f"Unknown backend type: {backend_type}. Available backends: {rendered}"
+            raise _written_by_dataknobs(
+                ValueError(f"Unknown backend type: {backend_type}. Available backends: {rendered}")
             )
-        raise ValueError(unknown_message(backend_type, rendered))
+        raise _written_by_dataknobs(ValueError(unknown_message(backend_type, rendered)))
 
     return backend_class, backend_type, remaining

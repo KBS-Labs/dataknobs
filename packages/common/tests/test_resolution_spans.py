@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import dataclasses
 import re
+import sys
+import unicodedata
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -831,28 +833,42 @@ async def test_no_number_bounds_a_window_once_the_fold_merges_tokens() -> None:
     )
 
 
-async def test_the_default_fold_merges_tokens_too_and_is_caught() -> None:
-    """The check is about the fold's behaviour, not about custom normalizers.
+def _case_changing_characters() -> list[str]:
+    return [
+        chr(cp)
+        for cp in range(sys.maxunicode + 1)
+        if unicodedata.category(chr(cp)) != "Cs" and chr(cp).casefold() != chr(cp)
+    ]
 
-    ``default_normalizer`` strips and case-folds, and case-folding is not
-    boundary-preserving in general: ``U+0345 COMBINING GREEK YPOGEGRAMMENI``
-    is a non-spacing mark, so :func:`token_spans` reads it as a boundary and
-    ``a<U+0345>b`` is two tokens -- but it case-folds to ``iota``, which is
-    alphanumeric, so the folded key is one. A vocabulary declaring the
-    combining spelling therefore trips the same implication a squashing
-    normalizer does, under the fold every caller gets by default.
 
-    Exotic, and that is the point: the condition detected is a property of the
-    fold rather than of who supplied it, so it is caught here without
-    ``_squash`` anywhere in sight. Measured before the check existed: the
-    query below returned no candidates.
+def test_the_default_fold_never_changes_a_token_count() -> None:
+    """Measured over every character case-folding changes, so the default bound holds.
+
+    The implication a source's window bound rests on -- a query window of *L*
+    tokens matches only a key of *L* or more -- needs a fold that preserves
+    token boundaries, and :meth:`MappingEntitySource._merges_tokens` declines
+    the bound when a declared form shows one that does not. ``U+0345 COMBINING
+    GREEK YPOGEGRAMMENI`` once made the default fold such a fold: it is a
+    mark, which :func:`token_spans` read as a boundary, and it case-folds to
+    the letter ``iota``. A mark is a token character now, so no character's
+    fold moves a boundary, and a vocabulary declaring that spelling keeps its
+    bound and is still found.
     """
+    characters = _case_changing_characters()
+    assert len(characters) > 1000
+    for character in characters:
+        form = f"a{character}b"
+        assert len(token_spans(default_normalizer(form))) == len(token_spans(form)), hex(
+            ord(character)
+        )
+
+
+async def test_a_vocabulary_declaring_a_folding_mark_keeps_its_bound() -> None:
     combining = {"x": Entity(id="x", type="Thing", name="a\u0345b")}
     source = MappingEntitySource(combining)
 
-    assert len(token_spans("a\u0345b")) == 2, "the combining mark is a token boundary"
-    assert len(token_spans(default_normalizer("a\u0345b"))) == 1, "and folds away to one"
-    assert source.longest_form_tokens() is None
+    assert len(token_spans("a\u0345b")) == 1
+    assert source.longest_form_tokens() == 1
     assert await _agreeing_scan(combining, "a\u0345b") == ["x"]
 
 
@@ -2127,3 +2143,46 @@ def test_only_a_class_that_answers_for_itself_publishes_edge_bounded() -> None:
         metadata = declared_signal_metadata(lexical, {})
         assert metadata["bounded_by_form_edge"] is False, "a lexical rung never widens over an edge"
         assert "edge_bounded" not in metadata
+
+
+#: दुनिया, whose vowel signs are combining marks. Written in a sentence after
+#: नमस्ते, which carries a virama -- a mark too.
+DUNIYA = "दुनिया"
+WORLD = {"world": Entity(id="world", type="Place", name=DUNIYA)}
+
+
+async def test_every_rung_reaches_a_name_written_with_combining_marks() -> None:
+    """The default tokens kept every mark, so a declared name is one window.
+
+    While ``token_spans`` decided by ``str.isalnum`` alone, the marks were in
+    no token: the widest window over the word ended before its last vowel
+    sign, so the slice a rung looked up was never the declared form.
+    """
+    query = f"नमस्ते {DUNIYA}"
+    expected = [("world", (7, 13))]
+    for rung in (ScanningSignal, LexicalSignal):
+        found = rung(MappingEntitySource(WORLD)).candidates(query, k=5)
+        assert [(c.entity_id, c.evidence[0].span) for c in found] == expected, rung.__name__
+    for async_rung in (AsyncScanningSignal, AsyncLexicalSignal):
+        found = await async_rung(AsyncMappingEntitySource(WORLD)).candidates(query, k=5)
+        assert [(c.entity_id, c.evidence[0].span) for c in found] == expected, async_rung.__name__
+
+
+PARIS = {"paris": Entity(id="paris", type="Place", name="Paris")}
+
+
+async def test_every_rung_reaches_a_name_written_right_after_an_emoji() -> None:
+    """U+FE0F after an emoji is a mark with no letter before it: a boundary.
+
+    A mark counted as a token character wherever it stood glued the selector
+    to the next word, so the window over ``Paris`` was ``\ufe0fParis`` and the
+    declared name was never looked up.
+    """
+    query = "Fly \u2708\ufe0fParis"
+    expected = [("paris", (6, 11))]
+    for rung in (ScanningSignal, LexicalSignal):
+        found = rung(MappingEntitySource(PARIS)).candidates(query, k=5)
+        assert [(c.entity_id, c.evidence[0].span) for c in found] == expected, rung.__name__
+    for async_rung in (AsyncScanningSignal, AsyncLexicalSignal):
+        found = await async_rung(AsyncMappingEntitySource(PARIS)).candidates(query, k=5)
+        assert [(c.entity_id, c.evidence[0].span) for c in found] == expected, async_rung.__name__

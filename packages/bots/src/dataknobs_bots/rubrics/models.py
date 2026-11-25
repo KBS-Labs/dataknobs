@@ -29,9 +29,10 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
+
+from dataknobs_common.clock import now_iso
 
 
 class ScoringType(str, Enum):
@@ -45,11 +46,6 @@ class ScoringType(str, Enum):
 def _generate_id(prefix: str) -> str:
     """Generate a unique ID with the given prefix."""
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
-
-
-def _now_iso() -> str:
-    """Return current UTC time as ISO 8601 string."""
-    return datetime.now(UTC).isoformat()
 
 
 @dataclass
@@ -333,7 +329,7 @@ class RubricEvaluation:
     weighted_score: float = 0.0
     passed: bool = False
     feedback_summary: str = ""
-    evaluated_at: str = field(default_factory=_now_iso)
+    evaluated_at: str = field(default_factory=now_iso)
     evaluated_by: str = "system"
 
     def to_dict(self) -> dict[str, Any]:

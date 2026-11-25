@@ -17,10 +17,10 @@ import os
 import shutil
 import tempfile
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, ClassVar
 
+from dataknobs_common.clock import utc_now
 from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConcurrencyError
 from dataknobs_common.paths import safe_join_or_raise
@@ -358,7 +358,8 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
         if not meta_path.exists():
             return {}
         with open(meta_path, encoding="utf-8") as f:
-            return json.load(f)
+            metadata: dict = json.load(f)
+        return metadata
 
     async def _load_metadata(self, domain_id: str, ctx: TenantContext | None = None) -> dict:
         """Load metadata from disk, off the event loop (tenant-scoped via ``ctx``)."""
@@ -545,7 +546,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
             content_type=content_type,
             size_bytes=len(data),
             checksum=checksum,
-            uploaded_at=datetime.now(UTC),
+            uploaded_at=utc_now(),
             metadata=metadata or {},
         )
 
@@ -558,7 +559,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
 
         # Update KB info
         kb_info = KnowledgeBaseInfo.from_dict(kb_metadata.get("info", {"domain_id": domain_id}))
-        kb_info.last_updated = datetime.now(UTC)
+        kb_info.last_updated = utc_now()
         kb_info.increment_version()
         kb_info.file_count = len(files)
         kb_info.total_size_bytes = sum(f.get("size_bytes", 0) for f in files.values())
@@ -628,7 +629,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
 
         # Update KB info
         kb_info = KnowledgeBaseInfo.from_dict(kb_metadata.get("info", {"domain_id": domain_id}))
-        kb_info.last_updated = datetime.now(UTC)
+        kb_info.last_updated = utc_now()
         kb_info.increment_version()
         kb_info.file_count = len(files)
         kb_info.total_size_bytes = sum(f.get("size_bytes", 0) for f in files.values())
@@ -698,7 +699,7 @@ class FileKnowledgeBackend(KnowledgeResourceBackendMixin):
             domain_id=domain_id,
             file_count=0,
             total_size_bytes=0,
-            last_updated=datetime.now(UTC),
+            last_updated=utc_now(),
             version="1",
             ingestion_status=IngestionStatus.PENDING,
             metadata=metadata or {},

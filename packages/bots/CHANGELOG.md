@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A config refusal built through a plugin registry reaches the HTTP caller
+  as a 422 naming the plugin.** `DEFAULT_ERROR_POLICY` gains a row for
+  `dataknobs_common`'s new `PluginConfigError`, disclosing message and context
+  as `ConfigFieldError`'s row does. A config with a misspelt or missing key,
+  built through a `PluginRegistry`, returns 422 with the refusal's text and a
+  `detail` carrying the plugin `key`; a factory's own error is still bounded
+  and masked. A deployment that overrides the `ConfigFieldError` row should
+  write the same row for `PluginConfigError`.
+
+  `create_memory_from_config`, `create_knowledge_base_from_config` and
+  `create_source_from_config` raise that `PluginConfigError` as the registry
+  built it rather than unwrapping it to the bare refusal, so the error names
+  the backend the section selected. It is still a `ConfigFieldError` and a
+  `ValueError`, so an existing handler keeps catching it.
+
+  A config refusal raised while a wizard stage builds its strategy -- the
+  stage's `reasoning_config`, or a section the strategy builds through another
+  registry -- raises a `ConfigurationError` that keeps the refusal's words:
+  `"Wizard stage '<stage>': Failed to create plugin '<key>': <refusal>"`, with
+  the refusal's `context` (its plugin `key` and `registry` included) plus
+  `stage` and `strategy`, rather than one naming only `(PluginConfigError)`.
+  Any other error a strategy constructor raises is still bounded to its type.
+
 - **A knowledge base or vector memory can let its embedder truncate an
   over-long text.** `RAGKnowledgeBaseConfig` and `VectorMemoryConfig` take
   `embedding_overflow` as a flat key beside `embedding_provider`, typed as
@@ -22,6 +45,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Ollama's embedding endpoint in `dataknobs-llm` is not detected here: a
   persisted store holding `nomic-embed-text` vectors under a non-cosine metric
   must be rebuilt.
+- **`WizardReasoning.serialize_state(state)` returns the `fsm_state` a
+  conversation's save writes for a state**, for a caller of `advance()`, which
+  leaves persistence to its caller. Memory banks and the artifact, which a
+  conversation's save persists beside `fsm_state`, are not part of it. It is
+  `state.to_dict(reasoning.ephemeral_keys)`;
+  `WizardReasoning.ephemeral_keys` is the set the wizard never stores (the
+  framework's, `settings.ephemeral_keys` and `settings.per_turn_keys`). The
+  rule both apply is `partition_wizard_data(data, ephemeral_keys)` in
+  `dataknobs_bots.reasoning.wizard_types`, which returns the persistent,
+  transient and saved parts of one data dict.
 - **A grounded `database` source can read a Postgres table it does not
   own.** Its options take what `dataknobs-data`'s Postgres backend takes for
   one — `layout: native`, `id_column`, `scope` — and a field in its `schema:`
@@ -30,6 +63,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declared columns.
 
 ### Fixed
+
+- **A `database` source's backend refusing a key names the source.**
+  `create_source_from_config` with `{"backend": "memory", "nonsense_key": 1}`
+  raised `PluginConfigError: Failed to create plugin 'database':
+  MemoryDatabaseConfig does not accept 'nonsense_key'...`, so a bot config
+  declaring several sources did not say which one refused it. It now reads
+  `Failed to create plugin 'database': Source '<name>': MemoryDatabaseConfig
+  does not accept 'nonsense_key'...`, with `source` in `context`.
+
+- **A source that cannot be built is a `SourceConfigError`, with `source` in
+  its `context`.** An unknown source type, a `vector_kb` source with no
+  knowledge base, a `database` source naming an unknown backend, a setting
+  its backend refuses, and a backend failing in its own words were plain
+  `ValueError`s, naming the source only in their text, or for an unknown
+  type not at all. `SourceConfigError`, exported from
+  `dataknobs_bots.knowledge.sources`, is a `ValidationError` and a
+  `ValueError`; messages are unchanged. Through the API these are now a 422
+  with the message and context, where they were the generic 500.
+
+- **A backend this install cannot build is reported with its reason.**
+  `create_memory_from_config`, `create_knowledge_base_from_config` and
+  `create_source_from_config` reported a backend declared unavailable as
+  `"Unknown <type>: ..."`, dropping the registry's "is not available here:
+  <reason>". They now raise the registry's `PluginUnavailableError`, which is
+  still the `ValueError` they document, and also a `NotFoundError`. Through
+  the API it is a 404 with the message shown and the context withheld, the
+  `NotFoundError` row's policy; `DEFAULT_ERROR_POLICY` gives it a row of its
+  own, as it does every common type.
+
+- **A backend's own words no longer reach a caller of the subsystem
+  helpers.** `create_memory_from_config`, `create_knowledge_base_from_config`
+  and `create_source_from_config` unwrapped any `ValueError` or
+  `DataknobsError` off the registry's bounded error and raised it as itself,
+  so a memory, knowledge-base or source backend refusing with its connection
+  URL put it in the caller's message — and, for a `ValidationError`, in the
+  body of a 422 from the bots API. The helpers now build on
+  `dataknobs_common.registry.create_surfacing`:
+  - dataknobs' own refusals arrive as before, word for word: summary memory
+    with no LLM, a composite with no strategies or an unknown child, an
+    unknown vector backend or embedding provider, a `vector_kb` source with
+    no knowledge base, a `database` source's unknown backend or unreadable
+    `schema:`, a data backend's refusal of its own config (naming the
+    source), an unresolvable `dedup_key:`;
+  - a `ValueError` or `ValidationError` a backend raised in its own words
+    becomes a `FactoryValueError` — a `ValueError` and a `ValidationError`,
+    rendered as a 422 — reading
+    `Failed to create memory backend '<key>' (ValueError)`;
+  - a backend's `ResourceError`, `TimeoutError`, `ConcurrencyError`,
+    `SerializationError` or `ConfigurationError` keeps its family with a
+    bounded message, so the API still answers 503, 504 or 409;
+  - anything else is the registry's bounded `OperationError`, a masked 500.
+
+  The backend's error is on `__cause__`, which the API's log line carries.
+  `DEFAULT_ERROR_POLICY` gains a `FactoryValueError` row (422, message and
+  `detail` shown, both bounded).
+
+  Three outcomes change for a caller catching by type:
+  - a backend's own `NotFoundError` used to arrive as the helper's
+    `ValueError("Unknown memory type ...")`, misreporting a known type as
+    unknown. It now arrives as a bounded `NotFoundError`, which is not a
+    `ValueError`, and the API renders it as a 404;
+  - a backend's `RateLimitError` (a 429 with `Retry-After`) and
+    `ConsentRequiredError` (a 403) arrive as the bounded `OperationError`, a
+    masked 500, since a construction failure carries no retry or consent
+    contract for the caller;
+  - a backend's `ResourceError` and the other families above are no longer
+    `ValueError`s or their own instances: they are new, bounded instances of
+    the family.
+
+- **An unknown path or a wrong method answers in the standard error body.**
+  `register_exception_handlers` registered its `HTTPException` handler under
+  FastAPI's class, but the router raises Starlette's, of which FastAPI's is a
+  subclass, so a 404 or 405 from routing answered `{"detail": "Not Found"}`
+  instead of `{"error", "message", "detail", "timestamp"}`. The handler is now
+  registered under Starlette's `HTTPException`, and `http_exception_handler`
+  is typed to take it. A client that parsed the old `detail` string from a
+  routing 404 or 405 reads `message` instead.
+- **`http_exception_handler` keeps the exception's headers.** It dropped them,
+  so a 401 raised with `WWW-Authenticate` lost the header, and a 405 would
+  have lost the `Allow` that RFC 9110 requires.
+
+- **A stream from `S3KnowledgeBackend.stream_file` read after `close()`
+  raises `RuntimeError("Backend not initialized")`,** as every other call on a
+  closed backend does. It raised `AttributeError` on `None`, because the check
+  ran when `stream_file` was called and not when the stream was read.
 
 - **A persona review reaches the provider.** `ReviewExecutor` sent its
   prompt as a plain dict, which no shipped provider reads as a message
@@ -192,6 +310,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package that lives in.
 
 ### Changed
+
+- **Every aware timestamp bots writes reads `dataknobs_common.clock`**, so
+  `use_clock` fixes it in a test: artifacts, their provenance and revisions,
+  rubric evaluations, assessment sessions, the logging middleware's records,
+  config drafts, API error bodies, knowledge-base ingestion and storage
+  stamps, and bot registrations. No value changes. A config draft's expiry
+  is measured on the same clock, so a test ages a draft by advancing it.
+  Epoch-float stamps from `time.time()` (wizard stage-entry and snapshot
+  times, memory-bank `created_at` / `updated_at`, reasoning observability)
+  are not reached.
+  `dataknobs_bots.artifacts.provenance.now_iso` is still exported, and is now
+  the same function as `dataknobs_common.clock.now_iso`.
+
+- **BREAKING: provenance records are frozen, and live in `dataknobs-common`.**
+  `dataknobs_bots.artifacts.provenance` now re-exports the records from
+  `dataknobs_common.provenance`, and every import path is unchanged. The
+  records are frozen dataclasses, so a field can no longer be assigned or
+  appended to: `sources`, `tool_chain`, `llm_invocations`, `review_history`
+  and `revision_history` are tuples, and `provenance.sources.append(...)`
+  raises `AttributeError`. Pass the values when the record is made
+  (`create_provenance` takes any iterable, so a list built up first still
+  works; the constructors accept one at run time but are typed with tuples),
+  or make a new record with `dataclasses.replace`. A
+  test comparing one of those fields with a list (`== []`) now compares a
+  tuple with a list and fails; compare with a tuple. `creation_context` and
+  `ToolInvocation.parameters` are now a read-only `FrozenMapping`, a frozen
+  copy of the mapping given: assigning into one raises `TypeError`, a nested
+  list in it reads back as a tuple, and it is not a `dict`, so pass it
+  through `to_dict()` (or `thaw_structure`) before `json.dumps`. Changing the
+  caller's dict afterwards no longer changes the record. A single string
+  passed for `review_history` is refused with `TypeError`. `create_provenance`
+  takes typed keywords instead of `**kwargs`, so mypy now reports an unknown
+  field (the call raised `TypeError` at run time before, too). The private
+  `_now_iso` helpers in `artifacts.models`, `artifacts.assessment` and
+  `rubrics.models` are gone; every timestamp default is the one `now_iso`.
+  `ArtifactRegistry.revise` adds its revision with `dataclasses.replace`
+  rather than appending to a serialised copy. Stored provenance reads back
+  unchanged; see the dataknobs-common changelog for the fields added.
+
+- **A conversation's saved wizard data (`fsm_state.data`) is exactly what
+  its save keeps whole.** A key not declared ephemeral used to be routed by
+  `is_json_safe`, a separate copy of the JSON-safety rules that had drifted
+  from the `sanitize_for_json` call the save writes through. The split now
+  walks each value once with `dataknobs_common.serialization.sanitize_and_report`
+  and stores that walk's converted form, so the check and the save cannot
+  disagree, and a save converts each value once for storage instead of twice.
+  The visible effects:
+  - a plain `Enum` value (not a `str` or `int` subclass, which were already
+    stored as their value), an object whose `to_dict()` returns a dict, a
+    dict with non-`str` keys, a set, and a `datetime`, `date`, `time`,
+    `Decimal`, `UUID` or path are now persisted, in the form the save converts
+    them to, where they were kept live for the turn and absent after a
+    restore. A caller comparing the restored value with an `Enum` member now
+    sees its value (`"active"`), not a missing key; a `datetime` reads back
+    as its ISO text and a set as a sorted list. From storage that writes
+    JSON (SQLite, Postgres) an `int` key comes back as text (`"1"`); the
+    in-memory backend keeps it as it was;
+  - a NaN or infinite float is persisted as `None`, and reads back as `None`
+    on every backend. It used to be saved as it was: the in-memory backend,
+    and SQLite through Python's `json`, gave NaN back, and Postgres refused
+    the save. A transform or condition that tests `math.isnan(...)` on a
+    restored value now receives `None`. The response metadata's `data` reads
+    `None` for it too, where it carried the raw float;
+  - a value that holds itself is moved to transient, where the check raised
+    `RecursionError` and the save failed;
+  - the warning for a key moved to transient names what was found in it, the
+    first three things and a count of the rest (`Non-serializable key 'handle'
+    in data (type=dict) kept out of storage: conn (type=Connection)`). One
+    save warns once per key, wherever the key is first found; the copies
+    described below repeat it at DEBUG.
+
+  The same rule stores every data dict the wizard's state holds: the data,
+  each subflow frame's `parent_data` and each transition's `data_snapshot`.
+  In the frames and snapshots, keys declared ephemeral (`_message`,
+  `_intent`, `settings.ephemeral_keys`, `settings.per_turn_keys`) are no
+  longer persisted, so they no longer come back into the data when a subflow
+  returns after a restore. A value there that the save cannot keep whole (a
+  live object anywhere inside it) is left out whole, key and all, where it
+  was stored with the object removed from inside it. A checkpoint written
+  before this change still holds those keys in its frames, so an undo to one
+  and a later pop bring them back once. A transition's other fields are
+  written through `sanitize_for_json` too, so a consumer-recorded transition
+  with an `Enum` trigger is stored as its value.
+
+  The conversation-level `data` stored beside `fsm_state` in
+  `metadata["wizard"]` follows the same rule. It was the turn's working
+  view, transient keys included, and it is persisted with the rest of the
+  metadata, so a `_message` (the user's raw text), an `_intent` or a
+  declared ephemeral key reached the conversation store. It now holds what
+  `fsm_state.data` holds. **`DynaBot.get_wizard_state()["data"]`, and
+  `BotTestHarness.wizard_data` with it, no longer show transient keys**,
+  which `normalize_wizard_state` read from there. They are still in the
+  turn's response metadata, built for the UI, and in the stage's templates.
+
+  `WizardState.to_dict()` applies the rule too, so what a caller of
+  `advance()` persists is what a conversation's save would write, and
+  `json.dumps(..., allow_nan=False)` can write it. It used to return the
+  data as it was: ephemeral keys were persisted, a live object made
+  `json.dumps` raise `TypeError`, a NaN was written as `NaN`, which Postgres
+  refuses, and a transition snapshot holding a value that cannot be
+  deep-copied (a lock, a task) made `to_dict()` itself raise. Called
+  without arguments it knows only the framework's ephemeral keys; persist
+  with `WizardReasoning.serialize_state(state)` to leave out the keys a
+  wizard's settings declare as well.
+
+- **`is_json_safe` means "the save keeps it whole", not "`json.dumps`
+  accepts it".** It answers with `validate_json_safe`, so a value the save
+  converts (an `Enum`, an object with a `to_dict()`, a NaN) is safe, and a
+  value that holds itself is unsafe rather than a `RecursionError`.
 
 - **A config that does not fit its class answers 422 through the API
   handlers.** `DEFAULT_ERROR_POLICY` has a row for `ConfigFieldError`

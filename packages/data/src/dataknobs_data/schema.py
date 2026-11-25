@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
-from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.exceptions import ValidationError, _written_by_dataknobs
 
 from .fields import FieldType
 
@@ -433,25 +433,31 @@ class DatabaseSchema:
         prefix = f"{origin}: " if origin else ""
         base: dict[str, Any] = dict(context or {})
         if not isinstance(data, Mapping):
-            raise ValidationError(
-                f"{prefix}a schema declaration is a mapping, got {type(data).__name__}",
-                context={**base, "got": type(data).__name__},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"{prefix}a schema declaration is a mapping, got {type(data).__name__}",
+                    context={**base, "got": type(data).__name__},
+                )
             )
         unknown = sorted(str(key) for key in data if key not in SCHEMA_KEYS)
         if unknown:
-            raise ValidationError(
-                f"{prefix}a schema declaration takes `fields:` and `metadata:` and nothing "
-                f"else, and this one declares {unknown}. Columns go under `fields:` -- "
-                f"`{{fields: {{<column>: <type>}}}}` or "
-                f"`{{fields: [{{name: <column>, type: <type>}}]}}`",
-                context={**base, "keys": unknown},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"{prefix}a schema declaration takes `fields:` and `metadata:` and nothing "
+                    f"else, and this one declares {unknown}. Columns go under `fields:` -- "
+                    f"`{{fields: {{<column>: <type>}}}}` or "
+                    f"`{{fields: [{{name: <column>, type: <type>}}]}}`",
+                    context={**base, "keys": unknown},
+                )
             )
         # An explicit `null` is the key left out, as it is for a field's keys.
         metadata = data.get("metadata") or {}
         if not isinstance(metadata, Mapping):
-            raise ValidationError(
-                f"{prefix}a schema's `metadata:` is a mapping, got {type(metadata).__name__}",
-                context={**base, "got": type(metadata).__name__},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"{prefix}a schema's `metadata:` is a mapping, got {type(metadata).__name__}",
+                    context={**base, "got": type(metadata).__name__},
+                )
             )
         return cls(
             fields=read_field_declarations(
@@ -530,18 +536,22 @@ def read_field_declarations(
             # would turn `{5: integer}` into a field called "5", which the row
             # spelling refuses.
             if not isinstance(name, str) or not name:
-                raise ValidationError(
-                    f"{prefix}a field's name is a non-empty string, got {name!r}",
-                    context={**base, "name": name},
+                raise _written_by_dataknobs(
+                    ValidationError(
+                        f"{prefix}a field's name is a non-empty string, got {name!r}",
+                        context={**base, "name": name},
+                    )
                 )
         entries = list(declared.items())
     elif isinstance(declared, Sequence) and not isinstance(declared, (str, bytes)):
         entries = [(None, row) for row in declared]
     else:
-        raise ValidationError(
-            f"{prefix}fields are declared as a mapping of `{{<column>: <type>}}` or a list "
-            f"of `{{name: <column>, type: <type>}}` rows, got {type(declared).__name__}",
-            context={**base, "got": type(declared).__name__},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"{prefix}fields are declared as a mapping of `{{<column>: <type>}}` or a list "
+                f"of `{{name: <column>, type: <type>}}` rows, got {type(declared).__name__}",
+                context={**base, "got": type(declared).__name__},
+            )
         )
 
     fields: dict[str, FieldSchema] = {}
@@ -552,16 +562,20 @@ def read_field_declarations(
         )
         if not isinstance(declaration, Mapping):
             label = f"field {key!r}" if key is not None else f"row {value!r}"
-            raise ValidationError(
-                f"{prefix}{label} is not a field declaration: a field is a type name "
-                f"(`string`) or a mapping (`{{name: <column>, type: <type>}}`)",
-                context={**base, "field": key},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"{prefix}{label} is not a field declaration: a field is a type name "
+                    f"(`string`) or a mapping (`{{name: <column>, type: <type>}}`)",
+                    context={**base, "field": key},
+                )
             )
         declaration = _without_nulls(declaration, keys)
         name = _declared_name(key, declaration, prefix=prefix, context=base)
         if name in fields:
-            raise ValidationError(
-                f"{prefix}field {name!r} is declared twice", context={**base, "field": name}
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"{prefix}field {name!r} is declared twice", context={**base, "field": name}
+                )
             )
         fields[name] = _field_schema(name, declaration, keys=keys, prefix=prefix, context=base)
     return fields
@@ -582,24 +596,30 @@ def _declared_name(
     """A field's name: the mapping key, or the row's ``name``, and never both disagreeing."""
     if key is None:
         if "name" not in value:
-            raise ValidationError(
-                f"{prefix}every field row names its column -- "
-                f"`{{name: <column>, type: <type>}}` -- and this one is {dict(value)!r}",
-                context={**context, "row": dict(value)},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"{prefix}every field row names its column -- "
+                    f"`{{name: <column>, type: <type>}}` -- and this one is {dict(value)!r}",
+                    context={**context, "row": dict(value)},
+                )
             )
         name = value["name"]
     else:
         name = value.get("name", key)
         if name != key:
-            raise ValidationError(
-                f"{prefix}field {key!r} names itself {name!r}; a mapping entry's `name` "
-                f"is its key or absent",
-                context={**context, "field": key, "name": name},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"{prefix}field {key!r} names itself {name!r}; a mapping entry's `name` "
+                    f"is its key or absent",
+                    context={**context, "field": key, "name": name},
+                )
             )
     if not isinstance(name, str) or not name:
-        raise ValidationError(
-            f"{prefix}a field's name is a non-empty string, got {name!r}",
-            context={**context, "name": name},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"{prefix}a field's name is a non-empty string, got {name!r}",
+                context={**context, "name": name},
+            )
         )
     return name
 
@@ -616,10 +636,12 @@ def _field_schema(
     field_context = {**context, "field": name}
     unknown = sorted(str(key) for key in value if key not in keys)
     if unknown:
-        raise ValidationError(
-            f"{prefix}field {name!r} declares {unknown}, which a field does not take "
-            f"here. A field here takes {sorted(keys)}",
-            context={**field_context, "keys": unknown},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"{prefix}field {name!r} declares {unknown}, which a field does not take "
+                f"here. A field here takes {sorted(keys)}",
+                context={**field_context, "keys": unknown},
+            )
         )
 
     declared_type = value.get("type", FieldType.STRING)
@@ -627,27 +649,33 @@ def _field_schema(
     # `field_type:`, so the two readers of one word cannot drift apart.
     field_type = FieldType.lookup(declared_type)
     if field_type is None:
-        raise ValidationError(
-            f"{prefix}field {name!r} declares type {declared_type!r}, which is not a "
-            f"field type. Field types: {sorted(member.value for member in FieldType)}",
-            context={**field_context, "type": declared_type},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"{prefix}field {name!r} declares type {declared_type!r}, which is not a "
+                f"field type. Field types: {sorted(member.value for member in FieldType)}",
+                context={**field_context, "type": declared_type},
+            )
         )
 
     required = value.get("required", False)
     if not isinstance(required, bool):
         # Checked for being a boolean rather than for truthiness: `required: "no"`
         # is truthy, so the value that most obviously means *off* turned it on.
-        raise ValidationError(
-            f"{prefix}field {name!r} declares `required: {required!r}`; it is `true` or `false`",
-            context={**field_context, "required": required},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"{prefix}field {name!r} declares `required: {required!r}`; it is `true` or `false`",
+                context={**field_context, "required": required},
+            )
         )
 
     declared_metadata = value.get("metadata", {})
     if not isinstance(declared_metadata, Mapping):
-        raise ValidationError(
-            f"{prefix}field {name!r} declares `metadata:` as "
-            f"{type(declared_metadata).__name__}; it is a mapping",
-            context=field_context,
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"{prefix}field {name!r} declares `metadata:` as "
+                f"{type(declared_metadata).__name__}; it is a mapping",
+                context=field_context,
+            )
         )
     metadata: dict[str, Any] = {}
     for shorthand in _METADATA_SHORTHANDS:
@@ -662,18 +690,22 @@ def _field_schema(
         spelled = "metadata.enum" if "enum" in declared_metadata else "enum"
         problem = enum_problem(enum, field_type)
         if problem:
-            raise ValidationError(
-                f"{prefix}field {name!r} declares `{spelled}: {enum!r}`; {problem}",
-                context={**field_context, "enum": enum},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"{prefix}field {name!r} declares `{spelled}: {enum!r}`; {problem}",
+                    context={**field_context, "enum": enum},
+                )
             )
 
     sql_type = metadata.get(SQL_TYPE_KEY)
     if sql_type is not None and (not isinstance(sql_type, str) or not sql_type):
         spelled = f"metadata.{SQL_TYPE_KEY}" if SQL_TYPE_KEY in declared_metadata else SQL_TYPE_KEY
-        raise ValidationError(
-            f"{prefix}field {name!r} declares `{spelled}: {sql_type!r}`; it is the name of a "
-            f"SQL type, such as `uuid`",
-            context={**field_context, SQL_TYPE_KEY: sql_type},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"{prefix}field {name!r} declares `{spelled}: {sql_type!r}`; it is the name of a "
+                f"SQL type, such as `uuid`",
+                context={**field_context, SQL_TYPE_KEY: sql_type},
+            )
         )
 
     return FieldSchema(

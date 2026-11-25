@@ -18,12 +18,14 @@ limit fails here too.
 
 from __future__ import annotations
 
+import math
 import tempfile
 import uuid
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import pytest
 from dataknobs_common.testing import requires_localstack, requires_postgres
 
@@ -41,6 +43,10 @@ ROWS: list[tuple[str, int | float]] = [
     ("minus-five", -5),
     ("tiny", 1e-5),
     ("minus-half", -0.5),
+    ("tenth", 0.1),
+    ("minus-tenth", -0.1),
+    ("three-tenths", 0.1 + 0.2),
+    ("smallest", 5e-324),
     ("two-and-a-half", 2.5),
     ("ten-float", 10.0),
     ("two-53", 2**53),
@@ -63,6 +69,14 @@ BOUNDS: list[Any] = [
     0,
     2.5,
     Decimal("2.5"),
+    np.float64(0.1),
+    0.1,
+    -0.1,
+    0.1 + 0.2,
+    5e-324,
+    float(2**70),
+    math.inf,
+    -math.inf,
     2**53,
     2**53 + 1,
     2**63 - 1,
@@ -81,10 +95,14 @@ MEMBERS: list[list[Any]] = [
     [2**70 + 1],
     [2**53, 10**30, 2.5],
     [2**63, 1e30, -(2**70)],
+    [0.1, 0.1 + 0.2],
+    [0.1, 5],
 ]
 RANGES: list[list[Any]] = [
     [2**53, 2**70],
     [2.5, 2**63],
+    [0.1, 0.1],
+    [-0.1, 0.1],
     [-(2**70), 0],
     [1e30, 10**40],
     [2**53 + 1, 2**70 + 1],
@@ -170,33 +188,32 @@ def _held(kind: str, value: float) -> int | float | Decimal:
     return value
 
 
-def _sent(kind: str, flavour: str, bound: Any) -> Any:
+def _sent(kind: str, bound: Any) -> Any:
     """A bound as the engine compares it, where it is not the bound itself.
 
-    psycopg2 sends a ``float`` as the decimal Python writes for it, as
-    ``jsonb`` holds a stored one; asyncpg sends its exact value.
+    A ``float`` is sent to PostgreSQL as the decimal Python writes for it, as
+    ``jsonb`` holds a stored one.
     """
     if isinstance(bound, list):
-        return [_sent(kind, flavour, b) for b in bound]
-    if kind == "postgres" and flavour == "sync" and isinstance(bound, float):
-        return Decimal(repr(bound))
+        return [_sent(kind, b) for b in bound]
+    if kind == "postgres" and isinstance(bound, float):
+        return Decimal(repr(float(bound)))
     return bound
 
 
-def _expected_filter(kind: str, flavour: str, spec: Filter) -> list[str]:
-    asked = Filter(spec.field, spec.operator, _sent(kind, flavour, spec.value))
+def _expected_filter(kind: str, spec: Filter) -> list[str]:
+    asked = Filter(spec.field, spec.operator, _sent(kind, spec.value))
     return sorted(row_id for row_id, value in ROWS if asked.matches(_held(kind, value)))
 
 
 def _disagreements(
     kind: str,
-    flavour: str,
     filtered: list[tuple[Filter, Answer]],
     ordered: list[tuple[SortSpec, Answer]],
 ) -> dict[str, object]:
     wrong: dict[str, object] = {}
     for spec, got in filtered:
-        want = _expected_filter(kind, flavour, spec)
+        want = _expected_filter(kind, spec)
         if got != want:
             wrong[f"n {spec.operator.value} {spec.value!r}"] = {"got": got, "want": want}
     for sort, got in ordered:
@@ -225,7 +242,7 @@ def _sorted(answer: Answer) -> Answer:
 
 
 def test_every_backend_compares_and_sorts_numbers_exactly_sync(
-    backend: tuple[str, dict[str, Any]],
+    backend: tuple[str, dict[str, Any]], filters_to_ask: Any
 ) -> None:
     """Comparison and sort agree with the oracle on every backend.
 
@@ -244,17 +261,17 @@ def test_every_backend_compares_and_sorts_numbers_exactly_sync(
     try:
         for row_id, value in ROWS:
             db.create(Record({"n": value}, storage_id=row_id))
-        filtered = [(f, _sorted(run(Query(filters=[f])))) for f in FILTERS]
+        filtered = [(f, _sorted(run(Query(filters=[f])))) for f in filters_to_ask(kind, FILTERS)]
         ordered = [(s, run(Query(sort_specs=[s]))) for s in SORTS]
     finally:
         if kind == "s3":
             db.clear()
         db.close()
-    assert _disagreements(kind, "sync", filtered, ordered) == {}
+    assert _disagreements(kind, filtered, ordered) == {}
 
 
 async def test_every_backend_compares_and_sorts_numbers_exactly_async(
-    backend: tuple[str, dict[str, Any]],
+    backend: tuple[str, dict[str, Any]], filters_to_ask: Any
 ) -> None:
     kind, config = backend
     db = await AsyncDatabase.from_backend(kind, config=config)
@@ -268,10 +285,12 @@ async def test_every_backend_compares_and_sorts_numbers_exactly_async(
     try:
         for row_id, value in ROWS:
             await db.create(Record({"n": value}, storage_id=row_id))
-        filtered = [(f, _sorted(await run(Query(filters=[f])))) for f in FILTERS]
+        filtered = [
+            (f, _sorted(await run(Query(filters=[f])))) for f in filters_to_ask(kind, FILTERS)
+        ]
         ordered = [(s, await run(Query(sort_specs=[s]))) for s in SORTS]
     finally:
         if kind == "s3":
             await db.clear()
         await db.close()
-    assert _disagreements(kind, "async", filtered, ordered) == {}
+    assert _disagreements(kind, filtered, ordered) == {}

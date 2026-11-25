@@ -37,11 +37,11 @@ import importlib.resources
 import inspect
 import os
 from dataclasses import dataclass
-from datetime import datetime as _datetime
-from datetime import UTC
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from collections.abc import Callable, Coroutine
+from typing import Any
 
+from dataknobs_common.clock import utc_now
 from dataknobs_common.config_loading import load_yaml_or_json
 
 from dataknobs_llm.llm.base import ModelCapability
@@ -134,10 +134,10 @@ async def fetch_live_limits(client: Any) -> dict[str, _ModelLimits]:
 def _output_map(limits: dict[str, _ModelLimits]) -> dict[str, int]:
     """Project a nested limits map to its output-ceiling-only ``{id: int}`` view."""
     return {
-        model_id: entry["max_tokens"]
+        model_id: ceiling
         for model_id, entry in limits.items()
-        if entry.get("max_tokens") is not None
-    }  # type: ignore[misc]  # filtered to non-None above
+        if (ceiling := entry.get("max_tokens")) is not None
+    }
 
 
 def diff_limits(
@@ -332,7 +332,7 @@ class _ProviderBinding:
     gate: Callable[[], str | None]
     build_client: Callable[[], Any]
     skip_errors: Callable[[], tuple[type[BaseException], ...]]
-    fetch: Callable[[Any], Awaitable[dict[str, Any]]]
+    fetch: Callable[[Any], Coroutine[Any, Any, dict[str, Any]]]
     load_resource: Callable[[Path], dict[str, Any]]
     drift_lines: Callable[[dict[str, Any], dict[str, Any]], list[str]]
     drift_header: str
@@ -451,7 +451,7 @@ def main(
 
     if args.update:
         assert binding.render is not None  # supports_update gate above
-        stamp = verified_date or _datetime.now(UTC).date().isoformat()
+        stamp = verified_date or utc_now().date().isoformat()
         path.write_text(binding.render(live, stamp), encoding="utf-8")
         print(f"model_limits: updated {path} ({len(live)} models).")
         return 0

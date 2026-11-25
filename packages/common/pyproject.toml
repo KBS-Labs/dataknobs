@@ -100,6 +100,10 @@ dev = [
     # (dataknobs_common.testing.assert_no_blocking). Dev/test-only —
     # never imported by shipped runtime code.
     "blockbuster>=1.5.26,<2.0.0",
+    # Validates the schemas dataknobs_common.reply_schema builds
+    # (tests/test_reply_schema.py). Test-only: the module builds plain
+    # dicts and never imports it.
+    "jsonschema>=4.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]

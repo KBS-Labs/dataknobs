@@ -177,6 +177,24 @@ async def test_get_missing_file_returns_none(s3_kb_config) -> None:
         await backend.close()
 
 
+async def test_a_stream_read_after_close_says_the_backend_is_closed(s3_kb_config) -> None:
+    """A stream iterated after ``close()`` refuses as every other call does.
+
+    ``stream_file`` checks the session when called, but the stream runs when it
+    is iterated. Without the same check in the stream itself, the closed
+    backend surfaced as an ``AttributeError`` on ``None``.
+    """
+    backend = await _backend(s3_kb_config)
+    await backend.create_kb("d")
+    await backend.put_file("d", "doc.md", b"text")
+    stream = await backend.stream_file("d", "doc.md")
+    assert stream is not None
+    await backend.close()
+    with pytest.raises(RuntimeError, match="not initialized"):
+        async for _ in stream:
+            pass
+
+
 async def test_put_file_requires_existing_kb(s3_kb_config) -> None:
     backend = await _backend(s3_kb_config)
     try:

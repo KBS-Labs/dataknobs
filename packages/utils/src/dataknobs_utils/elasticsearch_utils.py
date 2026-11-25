@@ -19,6 +19,13 @@ import pandas as pd
 
 import dataknobs_utils.pandas_utils as pd_utils
 from dataknobs_utils import requests_utils
+from dataknobs_utils.elasticsearch_responses import (
+    error_reason,
+    error_type,
+    incomplete_reason,
+    says_document_missing,
+    says_index_exists,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +43,26 @@ class ElasticsearchConflictError(Exception):
     def __init__(self, doc_id: str | None = None):
         self.doc_id = doc_id
         super().__init__(f"Document id already exists: {doc_id!r}")
+
+
+class ElasticsearchRequestError(Exception):
+    """Raised when Elasticsearch refuses, never answers, or only partly answers a request.
+
+    Attributes:
+        status: HTTP status, or ``None`` when there was no response.
+        body: Parsed response body, if any.
+    """
+
+    def __init__(self, method: str, path: str, response: requests_utils.ServerResponse):
+        self.status = response.status
+        self.body = response.result
+        detail = (
+            "no response"
+            if self.status is None
+            else incomplete_reason(self.body)
+            or f"{self.status} {error_type(self.body)}: {error_reason(self.body)}"
+        )
+        super().__init__(f"Elasticsearch {method} {path} failed ({detail})")
 
 
 def build_field_query_dict(
@@ -491,6 +518,8 @@ class ElasticsearchIndex:
             ServerResponse | None: Response with results. If successful,
                 resp.extra contains 'hits_df' and/or 'aggs_df' DataFrames.
                 Returns None if no table is available.
+                A search that some shard did not answer succeeds with what the
+                others found, and ``resp.result["_shards"]`` says so.
         """
         if table is None:
             if len(self.tables) > 0:
@@ -591,7 +620,11 @@ class SimplifiedElasticsearchIndex:
     """Simplified Elasticsearch index wrapper for single index operations.
 
     This class provides a simpler API for working with a single Elasticsearch index,
-    suitable for use as a database backend.
+    for code that speaks HTTP rather than the official client.
+
+    A request that fails raises ``ElasticsearchRequestError``, except where a
+    method documents the failure as an answer (a missing document, an index
+    already there) and for ``search``, which returns the response as it came.
     """
 
     def __init__(
@@ -640,7 +673,25 @@ class SimplifiedElasticsearchIndex:
             full_path,
             payload=body,
             params=params,
+            verbose=False,
         )
+
+    def _index_request(
+        self, method: str, payload: str | None = None
+    ) -> requests_utils.ServerResponse:
+        """Make a request about the index itself."""
+        return self.request_helper.request(method, self.index_name, payload=payload, verbose=False)
+
+    def _failure(
+        self, method: str, path: str, response: requests_utils.ServerResponse
+    ) -> ElasticsearchRequestError:
+        """The error for a failed request against this index."""
+        return ElasticsearchRequestError(method, f"{self.index_name}/{path}", response)
+
+    @staticmethod
+    def _document_missing(response: requests_utils.ServerResponse) -> bool:
+        """Whether a failed request says the document, not its index, is missing."""
+        return response.status == 404 and says_document_missing(response.result)
 
     def exists(self, doc_id: str | None = None) -> bool:
         """Check if index or document exists.
@@ -651,20 +702,19 @@ class SimplifiedElasticsearchIndex:
         Returns:
             True if exists, False otherwise
         """
-        if doc_id:
-            # Check if document exists
-            response = self._request("head", f"_doc/{_encode_doc_id(doc_id)}")
+        path = f"_doc/{_encode_doc_id(doc_id)}" if doc_id else ""
+        response = self._request("head", path) if doc_id else self._index_request("head")
+        # A HEAD has no body, so a missing document and a missing index are
+        # one answer here.
+        if response.succeeded or response.status == 404:
             return response.succeeded
-        else:
-            # Check if index exists
-            response = self.request_helper.request("head", self.index_name)
-            return response.succeeded
+        raise self._failure("head", path, response)
 
     def create(self) -> bool:
         """Create the index with settings and mappings.
 
         Returns:
-            True if created successfully
+            True if created, False if the index already exists
         """
         body = {}
         if self.settings:
@@ -672,12 +722,10 @@ class SimplifiedElasticsearchIndex:
         if self.mappings:
             body["mappings"] = self.mappings
 
-        response = self.request_helper.request(
-            "put",
-            self.index_name,
-            payload=json.dumps(body) if body else None,
-        )
-        return response.succeeded
+        response = self._index_request("put", json.dumps(body) if body else None)
+        if response.succeeded or says_index_exists(response.result):
+            return response.succeeded
+        raise self._failure("put", "", response)
 
     def delete(
         self,
@@ -700,7 +748,7 @@ class SimplifiedElasticsearchIndex:
                 term the document must currently carry. Pair with ``if_seq_no``.
 
         Returns:
-            True if deleted successfully
+            True if deleted, False if it does not exist
 
         Raises:
             ElasticsearchConflictError: When ``if_seq_no`` / ``if_primary_term``
@@ -718,15 +766,17 @@ class SimplifiedElasticsearchIndex:
                 "delete", f"_doc/{_encode_doc_id(doc_id)}", params=params or None
             )
             # A conditional delete (guards supplied) surfaces a stale-token 409
-            # as a distinct conflict; the unconditional path keeps its bool
-            # contract (and a missing doc is a 404 -> False).
+            # as a distinct conflict.
             if if_seq_no is not None and response.status == 409:
                 raise ElasticsearchConflictError(doc_id)
+            if response.succeeded or self._document_missing(response):
+                return response.succeeded
+            raise self._failure("delete", f"_doc/{doc_id}", response)
+
+        response = self._index_request("delete")
+        if response.succeeded or response.status == 404:
             return response.succeeded
-        else:
-            # Delete index
-            response = self.request_helper.request("delete", self.index_name)
-            return response.succeeded
+        raise self._failure("delete", "", response)
 
     def index(
         self,
@@ -743,7 +793,7 @@ class SimplifiedElasticsearchIndex:
             body: Document to index
             doc_id: Optional document ID (will be auto-generated if not provided)
             refresh: Whether to refresh immediately for search visibility
-            max_retries: Maximum retry attempts for 5xx errors
+            max_retries: Maximum retry attempts for 5xx errors; 0 sends once
             initial_delay: Initial backoff delay in seconds (doubles each retry)
             op_type: Optional index op type. Pass ``"create"`` for an atomic
                 insert that fails with a 409 conflict if the document id
@@ -756,7 +806,12 @@ class SimplifiedElasticsearchIndex:
         Raises:
             ElasticsearchConflictError: When ``op_type="create"`` targets an id
                 that already exists (HTTP 409).
+            ElasticsearchRequestError: When the document could not be indexed,
+                after any retries.
+            ValueError: When ``max_retries`` is negative.
         """
+        if max_retries < 0:
+            raise ValueError(f"max_retries must not be negative, got {max_retries}")
         path = f"_doc/{_encode_doc_id(doc_id)}" if doc_id else "_doc"
         params: Dict[str, Any] = {}
         if refresh:
@@ -806,9 +861,9 @@ class SimplifiedElasticsearchIndex:
                 delay *= 2
                 continue
 
-            return {"_id": None, "result": "error"}
+            break
 
-        return {"_id": None, "result": "error"}  # pragma: no cover
+        raise self._failure(method, path, response)
 
     def get(self, doc_id: str) -> Dict[str, Any] | None:
         """Get a document by ID.
@@ -824,7 +879,9 @@ class SimplifiedElasticsearchIndex:
         if response.succeeded and response.json:
             document: Dict[str, Any] = response.json
             return document
-        return None
+        if self._document_missing(response):
+            return None
+        raise self._failure("get", f"_doc/{doc_id}", response)
 
     def update(
         self,
@@ -850,7 +907,7 @@ class SimplifiedElasticsearchIndex:
                 term the document must currently carry. Pair with ``if_seq_no``.
 
         Returns:
-            True if updated successfully
+            True if updated, False if the document does not exist
 
         Raises:
             ElasticsearchConflictError: When ``if_seq_no`` / ``if_primary_term``
@@ -866,10 +923,12 @@ class SimplifiedElasticsearchIndex:
             params["if_primary_term"] = if_primary_term
         response = self._request("post", f"_update/{_encode_doc_id(doc_id)}", body, params or None)
         # A conditional update (guards supplied) surfaces a stale-token 409 as
-        # a distinct conflict; the unconditional path keeps its bool contract.
+        # a distinct conflict.
         if if_seq_no is not None and response.status == 409:
             raise ElasticsearchConflictError(doc_id)
-        return response.succeeded
+        if response.succeeded or self._document_missing(response):
+            return response.succeeded
+        raise self._failure("post", f"_update/{doc_id}", response)
 
     def search(self, body: Dict[str, Any] | None = None) -> Any:
         """Search documents.
@@ -878,16 +937,11 @@ class SimplifiedElasticsearchIndex:
             body: Search query body
 
         Returns:
-            ServerResponse object with search results
+            ServerResponse object. When the search failed, ``succeeded`` is
+            False and ``result`` is the error Elasticsearch returned. A search
+            some shard did not answer succeeds, and its ``_shards`` says so.
         """
-        response = self._request("post", "_search", body or {})
-
-        # Return the ServerResponse object directly
-        # If it failed, set a default response
-        if not response.succeeded:
-            response.result = {"hits": {"total": {"value": 0}, "hits": []}}
-
-        return response
+        return self._request("post", "_search", body or {})
 
     def count(self, body: Dict[str, Any] | None = None) -> int:
         """Count documents.
@@ -897,13 +951,16 @@ class SimplifiedElasticsearchIndex:
 
         Returns:
             Number of documents
+
+        Raises:
+            ElasticsearchRequestError: The count failed, or left a shard out.
         """
         response = self._request("post", "_count", body or {})
 
-        if response.succeeded and response.json:
+        if response.succeeded and response.json and not incomplete_reason(response.json):
             count: int = response.json.get("count", 0)
             return count
-        return 0
+        raise self._failure("post", "_count", response)
 
     def delete_by_query(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """Delete documents matching a query.
@@ -919,13 +976,15 @@ class SimplifiedElasticsearchIndex:
         if response.succeeded and response.json:
             deleted: Dict[str, Any] = response.json
             return deleted
-        return {"deleted": 0}
+        raise self._failure("post", "_delete_by_query", response)
 
     def refresh(self) -> bool:
         """Refresh the index to make recent changes searchable.
 
         Returns:
-            True if refreshed successfully
+            True once refreshed
         """
         response = self._request("post", "_refresh")
-        return response.succeeded
+        if not response.succeeded:
+            raise self._failure("post", "_refresh", response)
+        return True

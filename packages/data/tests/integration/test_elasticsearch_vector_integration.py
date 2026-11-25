@@ -1,6 +1,5 @@
 """Integration tests for Elasticsearch vector functionality."""
 
-import asyncio
 import pytest
 import numpy as np
 
@@ -58,9 +57,6 @@ class TestElasticsearchVectorIntegration:
             # Store the record
             record_id = await db.create(record)
             assert record_id is not None
-
-            # Wait for indexing (Elasticsearch near real-time)
-            await asyncio.sleep(1)
 
             # Retrieve the record
             retrieved = await db.read(record_id)
@@ -127,9 +123,6 @@ class TestElasticsearchVectorIntegration:
                 record_id = await db.create(record)
                 ids.append(record_id)
 
-            # Wait for indexing
-            await asyncio.sleep(2)
-
             # Search for similar vectors
             results = await db.vector_search(
                 query_vector=base_vector,
@@ -180,9 +173,6 @@ class TestElasticsearchVectorIntegration:
                 record_id = await db.create(record)
                 ids.append(record_id)
 
-            # Wait for indexing
-            await asyncio.sleep(2)
-
             # Search with filter for category A
             filter_query = Query().filter("category", Operator.EQ, "A")
             results = await db.vector_search(
@@ -222,9 +212,6 @@ class TestElasticsearchVectorIntegration:
                     }
                 )
                 await db.create(record)
-
-            # Wait for indexing
-            await asyncio.sleep(2)
 
             # Search with cosine similarity
             results = await db.vector_search(
@@ -279,9 +266,6 @@ class TestElasticsearchVectorIntegration:
             ids = await db.create_batch(records)
             assert len(ids) == batch_size
 
-            # Wait for indexing
-            await asyncio.sleep(2)
-
             # Verify all records searchable
             query_vec = records[0].fields["embedding"].value
             results = await db.vector_search(
@@ -313,7 +297,6 @@ class TestElasticsearchVectorIntegration:
 
             # Store and retrieve
             record_id = await db.create(record)
-            await asyncio.sleep(1)
 
             retrieved = await db.read(record_id)
             assert retrieved is not None
@@ -358,7 +341,6 @@ class TestElasticsearchVectorIntegration:
                         id=key,
                     )
                 )
-            await asyncio.sleep(2)
 
             results = await db.vector_search(
                 query_vector=vectors[0],
@@ -395,7 +377,6 @@ class TestElasticsearchVectorIntegration:
                     id="b",
                 )
             )
-            await asyncio.sleep(2)
 
             # Exact match on the full value returns only that record; an analyzed
             # match on the token "apple" would have returned both.
@@ -449,8 +430,6 @@ class TestElasticsearchBulkEmbedAndStore:
 
             assert len(ids) == 2, "the stub returned [] here while reporting success"
 
-            await asyncio.sleep(1)
-
             stored = await db.read(ids[0])
             assert stored is not None
             field = stored.fields["embedding"]
@@ -478,7 +457,6 @@ class TestElasticsearchBulkEmbedAndStore:
                 vector_field="embedding",
                 embedder=DeterministicEmbedder(dimensions=8, model_id="es-v1"),
             )
-            await asyncio.sleep(1)
 
             stored = await db.read(ids[0])
             assert stored is not None

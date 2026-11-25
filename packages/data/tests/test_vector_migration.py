@@ -1,13 +1,14 @@
 """Tests for vector migration functionality."""
 
 import asyncio
+import itertools
 from datetime import datetime
 
 import numpy as np
 import pytest
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
-from dataknobs_data.fields import FieldType
+from dataknobs_data.fields import FieldType, VectorField
 from dataknobs_data.records import Record
 from dataknobs_data.schema import DatabaseSchema, FieldSchema
 from dataknobs_data.testing import text_embedding as _text_embedding
@@ -121,6 +122,7 @@ class TestMigrationConfig:
         assert config.verify_migration is True
         assert config.retry_failed is True
         assert config.max_retries == 3
+        assert config.retry_delay == 1.0
 
     def test_config_validation(self):
         """Test configuration validation."""
@@ -128,6 +130,10 @@ class TestMigrationConfig:
         with pytest.raises(ValueError, match="Batch size must be positive"):
             config = MigrationConfig(batch_size=0)
             config.validate()
+
+        # Invalid retry delay
+        with pytest.raises(ValueError, match="Retry delay cannot be negative"):
+            MigrationConfig(retry_delay=-1.0).validate()
 
         # Invalid workers
         with pytest.raises(ValueError, match="Max workers must be positive"):
@@ -312,7 +318,7 @@ class TestVectorMigration:
         migration = VectorMigration(
             source_db=source_database,
             embedding_fn=failing_embedding,
-            config=MigrationConfig(enable_rollback=True, batch_size=2),
+            config=MigrationConfig(enable_rollback=True, batch_size=2, retry_delay=0.0),
         )
 
         with pytest.raises(Exception, match="Embedding service failed"):
@@ -323,6 +329,107 @@ class TestVectorMigration:
         # Check rollback occurred
         assert len(migration._rollback_data) > 0
         assert migration._rollback_data  # Should have stored original data
+
+    async def test_rollback_restores_the_whole_record(self):
+        """It restored field values alone, erasing metadata and field metadata."""
+        db = AsyncMemoryDatabase()
+        db.schema.add_vector_field("embedding", dimensions=2, source_field="content")
+        original = Record(
+            data={"content": "ok", "tags": {"k": ["v"]}}, metadata={"owner": {"name": "o"}}
+        )
+        original.fields["other"] = VectorField(
+            value=[0.1, 0.2], name="other", source_field="content", model_name="m"
+        )
+        migrated_id = await db.create(original)
+        before = await db.read(migrated_id)
+        for _ in range(2):
+            await db.create(Record(data={"content": "refused"}))
+        seen: list[bool] = []
+
+        async def embed(text: str) -> np.ndarray:
+            if text == "refused":
+                stored = await db.read(migrated_id)
+                seen.append("embedding" in stored.fields)
+                raise RuntimeError("Embedding service failed")
+            return np.array([1.0, 0.0])
+
+        migration = VectorMigration(
+            source_db=db,
+            embedding_fn=embed,
+            config=MigrationConfig(
+                enable_rollback=True, batch_size=1, max_retries=1, retry_delay=0.0
+            ),
+        )
+        with pytest.raises(RuntimeError, match="Embedding service failed"):
+            await migration.add_vectors_to_existing({"embedding": "content"})
+
+        assert all(seen), "the first record was never migrated, so nothing was rolled back"
+        after = await db.read(migrated_id)
+        assert after.metadata == before.metadata == {"owner": {"name": "o"}}
+        assert after.fields.keys() == before.fields.keys()
+        assert after.get_value("tags") == {"k": ["v"]}
+        assert isinstance(after.fields["other"], VectorField)
+        assert after.fields["other"].metadata == before.fields["other"].metadata
+        assert after.id == before.id
+
+    async def test_rollback_restores_what_the_target_held(self):
+        """With a target of its own, the source's record is not the original."""
+        source, target = AsyncMemoryDatabase(), AsyncMemoryDatabase()
+        source.schema.add_vector_field("embedding", dimensions=2, source_field="content")
+        target.schema.add_vector_field("embedding", dimensions=2, source_field="content")
+        for record_id, text in (("a", "ok"), ("b", "refused"), ("c", "refused")):
+            await source.upsert(record_id, Record({"content": text}))
+        await target.upsert("a", Record({"content": "ok", "kept": 1}, metadata={"owner": "o"}))
+
+        async def embed(text: str) -> np.ndarray:
+            if text == "refused":
+                raise RuntimeError("Embedding service failed")
+            return np.array([1.0, 0.0])
+
+        migration = VectorMigration(
+            source_db=source,
+            target_db=target,
+            embedding_fn=embed,
+            config=MigrationConfig(
+                enable_rollback=True, batch_size=1, max_retries=1, retry_delay=0.0
+            ),
+        )
+        with pytest.raises(RuntimeError, match="Embedding service failed"):
+            await migration.add_vectors_to_existing({"embedding": "content"})
+
+        after = await target.read("a")
+        assert {name: f.value for name, f in after.fields.items()} == {"content": "ok", "kept": 1}
+        assert after.metadata == {"owner": "o"}
+        assert await target.read("b") is None
+
+    @pytest.mark.parametrize("via_config", [False, True], ids=["argument", "config"])
+    async def test_the_retry_delay_given_is_the_one_waited(self, via_config):
+        """``retry_delay`` was stored and never read, so every retry waited 1s."""
+        delay = 0.2
+        db = AsyncMemoryDatabase()
+        db.schema.add_vector_field("embedding", dimensions=3, source_field="content")
+        await db.create(Record(data={"content": "a document"}))
+        loop = asyncio.get_running_loop()
+        called_at: list[float] = []
+
+        async def failing_embedding(text: str) -> np.ndarray:
+            called_at.append(loop.time())
+            raise RuntimeError("Embedding service failed")
+
+        migration = VectorMigration(
+            source_db=db,
+            embedding_fn=failing_embedding,
+            **(
+                {"config": MigrationConfig(retry_delay=delay)}
+                if via_config
+                else {"retry_delay": delay}
+            ),
+        )
+        await migration.add_vectors_to_existing(vector_fields={"embedding": "content"})
+
+        waits = [later - earlier for earlier, later in itertools.pairwise(called_at)]
+        assert len(waits) == 2
+        assert all(delay * 0.9 <= wait < 0.9 for wait in waits), waits
 
     @pytest.mark.asyncio
     async def test_migrate_between_backends(self, source_database, target_database):

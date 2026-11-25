@@ -9,6 +9,215 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: an Elasticsearch `update` replaces the stored record**, as on the
+  other backends, on both twins. `update`, `update_batch` and an `upsert` with an
+  `expected_version` merged into it, so a field, nested key or metadata key the
+  new record lacked was still stored, searched and returned. Code that passed
+  only the changed fields reads the record and updates that. The update is a
+  Painless script, so a cluster whose `script.allowed_types` or
+  `script.allowed_contexts` excludes inline update scripts refuses it. One that
+  changes nothing still advances the version token.
+- **BREAKING: `BatchOperations.update_from_dataframe` keeps the fields and
+  metadata the frame does not name.** It replaced each record with its row,
+  erasing them. Each record is read before it is written. Use `update_batch` to
+  replace whole records.
+- **BREAKING: `BatchOperations.transform_and_save` updates the records it
+  queried.** It inserted a copy of each, reporting success, when their ids were
+  generated, when any had a field named `id` or `record_id`, or when the
+  transformer lost the name of the frame's index. The index is now the records'
+  ids. A returned row that names none of them, or one twice, raises `ValueError`
+  before anything is written; insert new rows and aggregates with
+  `bulk_insert_dataframe`. A transformer that returns no frame raises `TypeError`.
+- **BREAKING: `transform_and_save` writes only the cells the transformer
+  changed.** It wrote the whole frame, leaving `NaN` in fields a record lacked and
+  turning an untouched int into a float when another record lacked the field. Its
+  statistics have `unchanged`, and the same keys when the query finds nothing. The
+  progress callback counts the rows that changed.
+- **BREAKING: a record made from a DataFrame holds Python numbers, bools and
+  datetimes.** A numpy one becomes its Python equivalent, a `Timestamp` becomes a
+  `datetime` (dropping its nanoseconds, with a `UserWarning`) and a missing value
+  (`NaN`, `NaT`, `NA`) becomes `None`, in fields and in metadata. An int beside a
+  float column stays an int. Values inside a list, dict or array are kept as they
+  are. SQLite, DuckDB and file databases refused a frame of integers, and
+  SQLite one with a missing number. `update_from_dataframe` finds a record whose
+  integer id column is beside a float one. `TypeMapper` no longer reads a list
+  holding one missing value as missing.
+- **BREAKING: an Elasticsearch filter compares a field holding a list whole**, as
+  the other backends do, on both twins and in vector pre-filters. A list matched
+  when any element did, `NEQ` and the other negations left it out, an empty one
+  had no value, and a name leading into a list of mappings reached them. A
+  document names its list fields in a top-level `list_fields`; one stored without
+  it is compared as before until it is written again, and an existing index with
+  a `strict` mapping refuses a record holding a list until `list_fields` is added.
+  To find a record by an element, use `CONTAINS`, which finds nothing in a
+  document stored without `list_fields`.
+- **BREAKING: an Elasticsearch filter or sort reaches a field by how the index
+  maps it**, on both twins, instead of by guessing.
+
+  | Query | Before | Now |
+  |---|---|---|
+  | sort on a number field | sync raised unless its name was on a list | sorts |
+  | sort on a text field | async raised | sorts |
+  | sort on a field no record has | raised | the value is missing from each |
+  | range with a string bound on a text field | compared lowercased words | compares the value |
+  | string equality or pattern on a field mapped `keyword` | matched nothing | matches |
+  | pattern on a field mapped `version` | matched nothing | matches |
+  | string equality on a field mapped `date` or `ip` | matched nothing | compares the value; raises for a string that is not one |
+  | number equality on a text field | matched any word | matches the whole value |
+
+  The first query naming a field asks the index about it, one request per query
+  until the field is known. The functions in `backends.elasticsearch_query` that
+  build a clause take a `FieldTypes`.
+- **BREAKING: an Elasticsearch comparison answers as the other backends do.**
+
+  | Filter | Before | Now |
+  |---|---|---|
+  | `NEQ`, `NOT_IN`, `NOT_LIKE`, `NOT_BETWEEN` | also matched a record without the field | matches a record that has a value |
+  | `NOT_LIKE` on a number, boolean, object, nested or vector field | matched every record | matches nothing |
+  | range with a numeric string on a number field | compared it as the number | matches nothing |
+  | a bound of another kind on a number or boolean field | raised, or matched nothing when a string | matches nothing; its negation matches every value |
+  | a boolean on a date field; a bound that is not a string on an `ip` field | raised | matches nothing; its negation matches every value |
+  | range with a number or boolean bound on `id` | compared as text | matches nothing |
+  | `None` or NaN bound | raised, or an unbounded range | matches nothing; its negation matches every value |
+  | `None` member, or a set or `dict.keys()` of members | raised | the member is dropped; the members are sent as a list |
+  | a list mixing kinds | read by its first member's kind | each member by its own |
+  | `BETWEEN` a number and a string | compared as text, or raised | matches nothing |
+
+  Use `NOT_EXISTS` in an `OR` to keep the records without the field.
+- **BREAKING: a `*` in a field name is part of the name in an Elasticsearch
+  filter**, as on the other backends. `EXISTS`, `NOT_EXISTS` and the negated
+  operators were answered for every field the name matched: `d*` `EXISTS` found
+  a record with a `day`. They raise `ValueError` when the index maps a field of
+  that exact name and another it matches; with no field of that name, no record
+  has a value. List the fields to test for any of several.
+- **BREAKING: an Elasticsearch filter the index cannot answer raises
+  `ValueError`**, negated or not: any comparison or pattern on a `text` field
+  with no keyword sub-field, and a pattern on a field that is not matched as
+  text, such as a date or an `ip`. The filter matched nothing, or a word, and its
+  negation every record. Indexes the backends create have neither unless
+  `mappings` says so. Map the field with a keyword sub-field, or as a `keyword`.
+  A `DatabaseSource` raises for a `text_search_fields` entry that has neither.
+- **BREAKING: the text half of a sync Elasticsearch `hybrid_search` is a
+  full-text search**, as on the async backend: any word in any of `text_fields`,
+  or in `content`, `title` and `text` when none are named, best match first. It
+  was a substring of the first field, or every record when none were named, and
+  found nothing in a `text` field with no keyword sub-field. A missing index is
+  `ValueError` there too, where it was `NotFoundError`.
+- **BREAKING: `REGEX` on Elasticsearch finds the pattern anywhere in the value**,
+  as on the other backends, in Python's syntax rather than Lucene's.
+
+  | Pattern | Before | Now |
+  |---|---|---|
+  | `eag` | matched `eag` alone | finds `eagle` |
+  | `^eag`, `gle$` | matched nothing | anchored |
+  | `@`, `~x` | matched every record | the characters themselves |
+  | `(?:ab)` | matched nothing | finds `ab` |
+  | `"`, `\t` | the client's error | the characters themselves |
+  | `.` | matched a newline | does not |
+  | look-around, `\b`, back-references, inline flags that change matching | matched nothing, or the client's error | `ValueError` |
+  | not a regular expression | the client's error | `ValueError` |
+  | a long repeat, as `x{1000}` | matched the whole value | the client's error |
+
+  Wrap a pattern in `^(?:...)\Z` to match the whole value as before. `\d` and
+  `\w` are ASCII.
+- **An Elasticsearch `hybrid_search` whose `text_fields` include one that cannot
+  hold the text** (a number, date, boolean, ip, range, geo or vector field)
+  matches nothing in that field, on both backends. The async backend raised
+  `ValueError`, even when another field matched, and also when no field was named
+  and the index mapped `content`, `title` or `text` that way.
+- **BREAKING: an index the Elasticsearch backends create maps strings the same
+  way whatever it first holds.** A data string is `text` with a `keyword`
+  sub-field of up to 8191 characters, where it was 256, and `date_detection` is
+  off, so an ISO date string is no longer mapped as a date and a later string
+  that is not one is no longer refused. A `datetime` bound compares as ISO 8601
+  text. Map a field as `date` in `mappings` to compare it as time. An existing
+  index keeps its mapping: reindex to change it.
+- **BREAKING: an Elasticsearch `mappings` config is laid over the declared
+  mapping** rather than replacing it, so naming one field keeps the rest. The
+  async backend takes `mappings` and `settings` too; it refused both.
+- **BREAKING: an Elasticsearch request that fails raises.** Only a missing
+  record is `None` or `False`; a rejected query, a closed, blocked or missing
+  index, and an unreachable server raise the client's own error, the same one
+  on both twins. What a failure answered before:
+
+  | Operation | sync | async |
+  |---|---|---|
+  | `search`, `count` | `[]`, `0` | raised |
+  | `read`, `read_batch` | `None` | `None` |
+  | `get_version`, `exists` | `None`, `False` | raised |
+  | `update`, `delete` | `False` | `False` |
+  | `create_batch`, `upsert_batch` | `[]` | `[]` |
+  | `update_batch`, `delete_batch` | `[False]` | `[False]` |
+  | `clear` | `0` | raised |
+
+  Vector search and `create_vector_index` already raised, and are unchanged: a
+  rejected request or a missing index is `ValueError`, no answer from the
+  server is `RuntimeError`, and anything else is the client's error.
+
+  A `search` that sorts on a field Elasticsearch cannot sort by is one of
+  these: the sync backend returned no records for it.
+- **BREAKING: an Elasticsearch search that some shard did not answer raises
+  `DatabaseError`**, on both twins. Elasticsearch answers one with a 200 holding
+  what the other shards found, which was returned as the whole answer. Covers
+  `search`, `count`, `stream_read`, vector and hybrid search, a shard lost
+  between two pages of a read, a search that timed out, and a field lookup over
+  an alias some index of which is down. `context["failures"]` lists the failures
+  Elasticsearch gave. A stream may have yielded records before it raises.
+- **BREAKING: a native Elasticsearch hybrid search falls back to client-side
+  fusion only when the node cannot run one**, because its version or licence
+  leaves RRF out. A rejected request, a refused permission or a lost connection
+  raises, where it was logged as "Native RRF not available" and the search was
+  sent again as two others.
+- **BREAKING: a failed item in an Elasticsearch batch raises `DatabaseError`**,
+  whose `context["failures"]` names every one, after the rest of the batch has
+  been written. `create_batch` and `upsert_batch` left the id out of their
+  result. A colliding `create_batch` id is still `DuplicateRecordError` unless
+  something else failed too. `delete_batch` answers `False` for a missing
+  record on both twins; the sync one answered `True`. The async batches are now
+  sent in requests of up to 500 records, as the sync ones are.
+- **BREAKING: `SyncElasticsearchDatabase` uses the official client alone**, and
+  no longer has `es_index` or `es_client`. It raises
+  `RuntimeError` for any operation after `close()`, which now closes the
+  client. `create` and `upsert` raise the client's error where they raised
+  `DatabaseError`, and retry as the client does (502, 503 and 504, without a
+  delay) where they retried any 5xx with a backoff.
+- **BREAKING: `SyncS3Database` and `AsyncS3Database` read `prefix` the same
+  way**, so one config is one key layout. Unset is `records/`, any other
+  value takes one trailing slash, and empty is the bucket root. A record `x`:
+
+  | `prefix` | sync before | async before | both now |
+  |---|---|---|---|
+  | unset | `records/x.json` | `x.json` | `records/x.json` |
+  | `"p"` | `p/x.json` | `p/x.json` | `p/x.json` |
+  | `"p/"` | `p/x.json` | `p//x.json` | `p/x.json` |
+  | `""` | `/x.json` | `x.json` | `x.json` |
+
+  Records at a key that changed read as absent, with no error. An async
+  database with no `prefix` keeps its location by setting `prefix: ""`. The
+  other two move their objects once: from `p//` to `p/` (`aws s3 mv
+  s3://bucket/p// s3://bucket/p/ --recursive`), or from `/` to the bucket root.
+- **BREAKING: an S3 read that fails raises.** `SyncS3Database.search` and
+  `stream_read` logged and left out any record they could not fetch, decode or
+  filter, and `AsyncS3Database.read`, `exists` and `delete` answered `None` or
+  `False` for any error. All of them now raise it. A missing object is still
+  `None` or `False`, and on both twins an object deleted between the listing
+  and the fetch is absent from the result; the async twin raised `NoSuchKey`
+  for one.
+- **S3 `search` and `stream_read` fetch concurrently on both twins**, up to
+  `max_pool_connections` objects at once, and return records in key order
+  unless the query sorts. `max_pool_connections` (alias `max_workers`) is now
+  accepted by `AsyncS3Database` too, where it also sizes the client's
+  connection pool. A value below 1 is refused.
+- **Every aware timestamp the data package writes reads
+  `dataknobs_common.clock`**, so `use_clock` fixes it in a test: the S3
+  backends' `created_at` / `updated_at`, the in-process vector stores'
+  (`memory`, `faiss`, `chroma`) `_created_at` / `_updated_at`, the vector
+  tracker, sync and migration status, and the per-user state store's
+  `_written_at` and retention clock when no `now` component is injected. An
+  injected `now` still wins. No value changes. Server-side timestamps
+  (pgvector, Postgres) are the server's own and are not reached, nor are
+  migration progress's epoch-float `timestamp`s from `time.time()`.
+
 - **BREAKING: the backend, vector-store and user-state configs are no longer
   hashable**, as no `StructuredConfig` now is (see `dataknobs-common`).
   `isinstance(cfg, Hashable)` answered True for them while `hash()` raised for
@@ -1025,6 +1234,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Operator.CONTAINS` and `NOT_CONTAINS`** find a record by one element of a
+  list, on every backend (`Filter("tags", Operator.CONTAINS, "urgent")`). An
+  element equals the value as `EQ` has it. Only a list contains anything; a
+  string is not searched, so the spelling `"contains"`, which raised
+  `ValueError` before, finds no substring: use `LIKE` for that.
+  On Elasticsearch a list inside a list is read as its elements.
+  They take one value: a collection raises `ValueError`. A `ColumnLayout` of your
+  own answers them for its columns, or raises for an operator it does not know.
 - **`RecordEntitySource` takes a `revision=` provider**, an async callable
   typed by the new `RevisionProvider` alias, exported from
   `dataknobs_data.ontology`. With one, the source declares
@@ -1699,6 +1916,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an unknown anchor, so one `except NotFoundError` covers both.
 
 ### Fixed
+
+- **`MigrationProgress.duration` and `StreamResult.duration` are measured on a
+  monotonic clock.** Each was the difference of two readings of the system
+  clock, so an adjustment between them made it short, long or negative.
+  `MigrationProgress.start()` also clears the `end_time` of an earlier run,
+  which made the duration of the new one negative. `start_time` and `end_time`
+  are still the system clock's.
+- **`AsyncPostgresDatabase` compares a float with a stored number as its sync
+  twin does.** `asyncpg` sent the decimal a double is exactly, which no stored
+  `0.1` equals, so `EQ`, `IN` and `CONTAINS` missed the record, `NEQ` and
+  `NOT_IN` matched it, and an ordering or a range answered wrongly at its own
+  bound. A float past 2**53 that its decimal does not equal, such as `1e30`,
+  was missed too. The bound is now the decimal `jsonb` holds, on both twins. So
+  a float such as `2.0**60`, whose decimal is another number, now equals that
+  stored float and no longer the stored integer it equals in Python.
+- **`SyncElasticsearchDatabase` no longer prints to stderr.** Every request
+  wrote its response there, document bodies included.
+- **`SyncElasticsearchDatabase.connect()` raises when it cannot create its
+  index**, and either twin accepts an index another process created first.
+- **`AsyncElasticsearchDatabase.exists` returns a `bool`**; it returned the
+  client's response object.
+- **`AsyncS3Database` lists its own prefix and no other.** A database at
+  prefix `p` also listed, counted and searched the records of one at `pq`, and
+  its `clear()` deleted them.
+- **`AsyncS3Database.search` and `list_all` report the id a record was stored
+  under.** An id containing `.json` lost it, and with no prefix an id
+  containing `/` lost its slashes.
+- **`SyncS3Database.search` and `stream_read` return a record with no fields**,
+  which they left out.
+- **A `VectorMigration` rollback restores the whole record** the target held.
+  It wrote the source's field values alone, erasing metadata and field types.
+  With rollback enabled, `add_vectors_to_existing` reads each record from the
+  target first.
+- **`VectorMigration(retry_delay=...)` is the delay `add_vectors_to_existing`
+  waits** between embedding attempts. It was stored and never read, so every
+  retry waited one second. `MigrationConfig` gains `retry_delay` (default
+  `1.0`), and a negative value is refused with `ValueError`; a `config` passed
+  to `VectorMigration` still overrides the argument.
+- **`IncrementalVectorizer.stop()` does not wait for idle workers to poll.** A
+  worker waiting on an empty queue noticed the shutdown up to a second late,
+  which `run_batch` paid on every call.
+
+- **A failed Postgres batch insert finds the colliding id in one query.** The
+  sync `create_batch`, and the batch insert behind `stream_write` on both
+  twins, asked once per record until it reached the one already stored: 33,000
+  round trips when that was the last of 33,000. The id named is unchanged.
+
+- **A backend whose module fails to import is reported by the module's name,
+  not the import error's text.** `register_backend` used `str(exc)` of a
+  loader's `ImportError` as the backend's unavailable reason, which a
+  registry shows to whoever asks for that backend -- through an HTTP API, as
+  a 404's message. That text can carry the absolute path of the package that
+  failed to load, or a native loader's output. The reason is now
+  `"<module> could not be imported. Install with: <hint>"`, and the full
+  text is logged at DEBUG.
+
+- **The refusals a config author depends on are marked as dataknobs' text.**
+  The helpers in front of a registry now show a factory's words only when
+  dataknobs wrote them, so the refusals raised inside a registry factory are
+  marked to keep reaching the author word for word:
+  - `select_backend`'s unknown- and uninstalled-backend refusals, and
+    `build_backend`'s refusal of a registered object with no `from_config`;
+  - the shared `schema:` reader's (`extract_schema_from_config`,
+    `DatabaseSchema.from_dict`, `read_field_declarations`);
+  - a backend's refusals of its own config while it is built: the native
+    layout's columns, `id_column` and `scope:`, an unknown `layout:`, a
+    setting refused under `layout: native`, a Postgres identifier, a
+    Postgres `schema:` holding fields, Elasticsearch's positive-integer
+    settings and S3's missing `bucket`. Through `create_source_from_config`
+    these name the source again, rather than arriving as a bounded failure;
+  - the semantic rung's refusals of its handles, raised when an ontology
+    document's resolver is built.
+
+  Messages and types are unchanged, except that a value in one of these
+  refusals that a configuration document could not have written (a live
+  object handed in where config was expected) is now named by its type
+  rather than its `repr`, in the message and in `context`. A subclass of a
+  plain type counts as a live object, and a long value is cut short. The
+  Postgres identifier refusal no longer repeats the identifier: it gives its
+  length and the first character the pattern refuses, so a connection URL
+  put under `schema:` or `table:` by mistake is not shown to callers.
+
+- **A Postgres identifier, a database name or a SQL field name ending in a
+  newline is refused.** The validators matched an anchored pattern with
+  `re.match`, whose `$` also matches before a final newline, so `"records\n"`
+  passed. They now require the whole value to match.
+
+- **A sync S3 `update` stamps `created_at` and `updated_at` from one read of
+  the clock.** For a stored object with no `created_at`, the two stamps came
+  from two reads and differed by microseconds; they are now the same instant,
+  as `AsyncS3Database` already wrote them.
 
 - **`OntologyRegistry` refuses a malformed document top level as the loader
   does, on every door.** A document with no `id:` raises a `ConfigFieldError`

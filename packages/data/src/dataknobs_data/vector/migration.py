@@ -8,11 +8,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from dataknobs_common.clock import now_iso, utc_now
 from dataknobs_common.callbacks import run_callback
 
 from ..fields import FieldType
@@ -50,6 +51,7 @@ class MigrationConfig:
     retry_failed: bool = True
     max_retries: int = 3
     max_consecutive_failures: int = 5  # Fail fast after this many consecutive failures
+    retry_delay: float = 1.0  # Seconds between embedding attempts
 
     def validate(self) -> None:
         """Validate configuration parameters."""
@@ -57,6 +59,8 @@ class MigrationConfig:
             raise ValueError(f"Batch size must be positive, got {self.batch_size}")
         if self.max_workers <= 0:
             raise ValueError(f"Max workers must be positive, got {self.max_workers}")
+        if self.retry_delay < 0:
+            raise ValueError(f"Retry delay cannot be negative, got {self.retry_delay}")
 
 
 @dataclass
@@ -111,7 +115,7 @@ class MigrationStatus:
             {
                 "name": name,
                 "record_id": record_id,
-                "timestamp": datetime.now(UTC).isoformat(),
+                "timestamp": now_iso(),
                 "migrated": self.migrated_records,
                 "failed": self.failed_records,
             }
@@ -204,6 +208,7 @@ class VectorMigration:
             self.config = MigrationConfig(
                 batch_size=batch_size,
                 max_retries=max_retries,
+                retry_delay=retry_delay,
             )
         self.config.validate()
 
@@ -211,7 +216,7 @@ class VectorMigration:
         self.status = MigrationStatus()
 
         # Track rollback data if enabled
-        self._rollback_data: dict[str, dict[str, Any]] = {}
+        self._rollback_data: dict[str, Record] = {}
 
     async def run(
         self, progress_callback: Callable[[MigrationStatus], Awaitable[None] | None] | None = None
@@ -224,7 +229,7 @@ class VectorMigration:
         Returns:
             Migration status
         """
-        self.status = MigrationStatus(start_time=datetime.now(UTC))
+        self.status = MigrationStatus(start_time=utc_now())
 
         try:
             # Get all records from source
@@ -270,13 +275,13 @@ class VectorMigration:
                 if progress_callback:
                     await run_callback(progress_callback, self.status)
 
-            self.status.end_time = datetime.now(UTC)
+            self.status.end_time = utc_now()
             return self.status
 
         except Exception as e:
             logger.error(f"Migration failed: {e}")
             self.status.failed_records = self.status.total_records - self.status.migrated_records
-            self.status.end_time = datetime.now(UTC)
+            self.status.end_time = utc_now()
             return self.status
 
     async def start(self) -> None:
@@ -335,7 +340,7 @@ class VectorMigration:
                 "`embedder=` or `embedding_fn=` when building the migration"
             )
 
-        status = MigrationStatus(start_time=datetime.now(UTC))
+        status = MigrationStatus(start_time=utc_now())
 
         try:
             # Get records to migrate
@@ -355,6 +360,7 @@ class VectorMigration:
             sync_config = SyncConfig(
                 batch_size=self.config.batch_size,
                 max_retries=self.config.max_retries,
+                retry_delay=self.config.retry_delay,
             )
 
             # Track the last embedding exception
@@ -388,14 +394,15 @@ class VectorMigration:
                 for record in batch:
                     # Store original data for rollback
                     if self.config.enable_rollback and record.id is not None:
-                        # Store original field values for rollback. A record
-                        # with no id cannot be written back, so recording one
-                        # would only produce a rollback that silently does
+                        # The whole record this migration will replace, as the
+                        # target stores it: the source may be another database,
+                        # and a search may add to the records it returns. A
+                        # record with no id cannot be written back, so recording
+                        # one would only produce a rollback that silently does
                         # nothing.
-                        self._rollback_data[record.id] = {
-                            field_name: record.get_value(field_name)
-                            for field_name in record.fields.keys()
-                        }
+                        original = await self.target_db.read(record.id)
+                        if original is not None:
+                            self._rollback_data[record.id] = original
 
                     # Add vector fields to record
                     for vector_field, source_field in vector_fields.items():
@@ -466,7 +473,7 @@ class VectorMigration:
             raise
 
         finally:
-            status.end_time = datetime.now(UTC)
+            status.end_time = utc_now()
 
         logger.info(
             f"Migration completed: {status.migrated_records}/{status.total_records} "
@@ -603,10 +610,9 @@ class VectorMigration:
 
         logger.info(f"Rolling back {len(self._rollback_data)} records...")
 
-        for record_id, original_data in self._rollback_data.items():
+        for record_id, original_record in self._rollback_data.items():
             try:
                 # Restore original record
-                original_record = Record(id=record_id, data=original_data)
                 await self.target_db.update(record_id, original_record)
                 status.rollback_records += 1
             except Exception as e:
@@ -628,7 +634,7 @@ class VectorMigration:
         Returns:
             Migration status
         """
-        status = MigrationStatus(start_time=datetime.now(UTC))
+        status = MigrationStatus(start_time=utc_now())
 
         try:
             # Get all records with vectors
@@ -682,7 +688,7 @@ class VectorMigration:
                     await run_callback(progress_callback, status)
 
         finally:
-            status.end_time = datetime.now(UTC)
+            status.end_time = utc_now()
 
         return status
 
@@ -892,11 +898,13 @@ class IncrementalVectorizer:
         logger.info(f"Worker {worker_id} started")
 
         while not self._shutdown_event.is_set():
-            # Get record from queue with timeout
-            try:
-                record = await asyncio.wait_for(self._queue.get(), timeout=1.0)
-            except TimeoutError:
-                continue
+            # Abandoning a `get` is safe: one cancelled before it finishes
+            # takes nothing off the queue, and one that has finished wins the
+            # race even when the shutdown is ready in the same step.
+            getting = asyncio.ensure_future(self._queue.get())
+            if not await self._until_shutdown(getting):
+                break
+            record = getting.result()
 
             try:
                 if await self._process_record(record):
@@ -986,7 +994,7 @@ class IncrementalVectorizer:
                 source_field=",".join(self.text_fields),
                 model_name=self.model_name,
                 model_version=self.model_version,
-                updated_at=datetime.now(UTC).isoformat(),
+                updated_at=now_iso(),
             )
             update_data[f"{self.vector_field}_metadata"] = {
                 **metadata.to_dict(),

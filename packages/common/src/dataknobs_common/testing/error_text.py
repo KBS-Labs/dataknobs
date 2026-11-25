@@ -227,6 +227,23 @@ def _tainted_names(handler: ast.ExceptHandler, bound: str) -> frozenset[str]:
     return frozenset(tainted)
 
 
+#: Calls that mark an error and return it unchanged. ``raise mark(X(...))`` is
+#: read as ``raise X(...)``, so marking a raise does not hide it from this guard.
+_PASS_THROUGH_MARKS = frozenset({"_written_by_dataknobs", "_ours"})
+
+
+def _unwrap_marks(call: ast.Call) -> ast.Call:
+    """The construction inside any marking calls around it."""
+    while (
+        _raised_name(call) in _PASS_THROUGH_MARKS
+        and len(call.args) == 1
+        and not call.keywords
+        and isinstance(call.args[0], ast.Call)
+    ):
+        call = call.args[0]
+    return call
+
+
 def _raised_name(call: ast.Call) -> str | None:
     """The bare class name a ``raise X(...)`` constructs, if it is one."""
     func = call.func
@@ -264,6 +281,7 @@ def _scan_file(
             call = stmt.exc
             if not isinstance(call, ast.Call):
                 continue
+            call = _unwrap_marks(call)
             if _raised_name(call) not in error_names:
                 continue
             # `raise X(...) from exc` is the prescribed fix, so the cause is

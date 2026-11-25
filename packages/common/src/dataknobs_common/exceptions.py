@@ -53,10 +53,13 @@ Package-Specific Extensions:
     ```
 """
 
-from collections.abc import Iterator, Mapping
+import copy
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from enum import StrEnum
-from typing import Any, Dict
+from typing import Any, Dict, TypeVar
+
+_E = TypeVar("_E", bound=BaseException)
 
 
 class DataknobsError(Exception):
@@ -153,11 +156,25 @@ class ConfigFieldError(ValidationError, ValueError):
 
     The message names only what the code supplies (the class, its field names
     and the keys the caller wrote) and never a value, so a caller may show it
-    to the config's author without vetting it first.
+    to the config's author without vetting it first. That holds through a
+    :class:`~dataknobs_common.registry.PluginRegistry` too: a refusal raised
+    while a registry builds a plugin reaches its caller as a
+    :class:`PluginConfigError` carrying this message and ``context``.
 
     ``context`` carries ``config_class``, and either ``missing`` (the absent
-    required fields) or ``unknown`` with ``accepted`` (the refused keys and
-    the keys the class reads), each a sorted list of names.
+    required fields), ``unknown`` with ``accepted`` (the refused keys and the
+    keys the class reads), or ``non_string_keys`` (the ``repr`` of each key
+    that is not a string), each a list of names.
+
+    The guarantee is about the refusals ``from_dict`` writes, not about the
+    type: anything may construct a ``ConfigFieldError`` with its own words.
+    A registry tells the two apart by a mark only ``structured_config`` sets,
+    so a factory's own ``ConfigFieldError`` is bounded like any other error
+    it raises. The mark records the refusal's words as ``from_dict`` wrote
+    them, so a handler that later amends the message or ``context`` (as
+    :func:`naming_refusals` does) adds nothing a registry will carry. Only
+    text dataknobs itself wrote above the refusal, and marked as its own, is
+    carried in its place.
 
     Example:
         ```python
@@ -167,6 +184,271 @@ class ConfigFieldError(ValidationError, ValueError):
             report_to_author(str(e), missing=e.context.get("missing"))
         ```
     """
+
+
+#: Holds what a refusal said when it was marked value-free: its message and a
+#: deep copy of its ``context``. See :func:`_value_free`.
+_VALUE_FREE_REFUSAL = "_dataknobs_value_free_refusal"
+
+
+def _value_free(exc: ConfigFieldError) -> ConfigFieldError:
+    """Mark ``exc`` as a refusal whose message and ``context`` name no value.
+
+    A :class:`~dataknobs_common.registry.PluginRegistry` bounds the text of
+    whatever a factory raises, because a factory's text can carry the
+    connection URL it was handed. A refusal ``StructuredConfig`` wrote is
+    text dataknobs authored to be shown to the config's author, and the type
+    cannot say so: :class:`ConfigFieldError` is public, and a factory may
+    raise one with its own words. The mark can, and only ``structured_config``
+    sets it.
+
+    It is a narrower claim than the registry's own mark: this text is safe to
+    carry, not this error passes through. The mark is on the instance, so a
+    factory re-raising the refusal passes it on marked, and one constructing
+    a new ``ConfigFieldError`` does not.
+
+    **The mark vouches for what the refusal said when it was set, not for
+    the instance.** An exception is mutable: :func:`naming_refusals` prefixes
+    its message and merges a caller's ``context`` into it, and any handler
+    may do the same by hand. So the mark stores the message and a deep copy
+    of ``context`` as they are here, and :func:`_value_free_words` returns
+    that copy -- never the instance's current text, which a factory may since
+    have amended with its own words.
+    """
+    setattr(exc, _VALUE_FREE_REFUSAL, (str(exc), copy.deepcopy(dict(exc.context))))
+    return exc
+
+
+def _value_free_words(exc: BaseException) -> tuple[str, dict[str, Any]] | None:
+    """What a :func:`_value_free` refusal said when it was marked, if ``exc`` is one.
+
+    A copy each time, so a caller may keep or change what it is given.
+    """
+    if not isinstance(exc, ConfigFieldError):
+        return None
+    words = getattr(exc, _VALUE_FREE_REFUSAL, None)
+    if not (isinstance(words, tuple) and len(words) == 2):
+        return None
+    message, context = words
+    if not (isinstance(message, str) and isinstance(context, dict)):
+        return None
+    return message, copy.deepcopy(context)
+
+
+def _carried_refusal_words(
+    exc: BaseException,
+    *,
+    raised_by_a_registry: Callable[[BaseException], bool],
+) -> tuple[str, dict[str, Any]] | None:
+    """What a registry may carry of the value-free refusal ``exc`` is, or was raised ``from``.
+
+    Follows ``__cause__`` only. A ``raise ... from refusal`` is the raiser
+    saying the refusal caused its error, so reporting the refusal is
+    accurate. ``__context__`` says only that an error was raised while one
+    was being handled, and following it would report a refusal the raiser
+    caught and recovered from. A ``__cause__`` cycle ends the walk.
+    ``None`` when no refusal is on the chain.
+
+    **The words are those of the outermost link that names the refusal,
+    else the refusal's own as marked.** A factory that names the refusal it
+    re-raises -- ``"Source 'cases': <the refusal's words>"`` -- has said
+    more than the refusal could, and it may be carried in the refusal's
+    place, its ``context`` merged over the refusal's. A link qualifies only
+    when all of these hold, each closing a way a mark alone would mislead:
+
+    - **it is marked as text dataknobs wrote and still says what it said
+      when marked** (:func:`_is_written_by_dataknobs`), so an amended link
+      fails and the walk goes on past it;
+    - **its message contains the refusal's recorded words.** The mark
+      vouches for a link's text, not for its relation to the refusal under
+      it: a marked error about something else, raised ``from`` a refusal,
+      would replace the refusal's words beside a ``context`` still
+      describing the refusal. An empty recorded message names nothing --
+      every string contains it -- so it lets no link qualify;
+    - **it is not a** :class:`NotFoundError`, which never carries a
+      refusal, wherever on the chain it is;
+    - **a registry did not raise it** (``raised_by_a_registry``, which the
+      registry module supplies, since the mark is its own). A registry's
+      error names a key its caller chose -- a lookup of a connection URL
+      that missed, say -- and a nested registry's carried refusal would
+      stack its own wording on the outer one's. Neither is reached by a
+      plain ``create`` or ``get`` without a refusal beneath it, and a
+      refusal beneath it must not change that.
+
+    With no such link the refusal's words are the ones its mark recorded,
+    never the instance's current text, so nobody else's text comes along.
+    """
+    seen: set[int] = set()
+    above: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        above.append(current)
+        words = _value_free_words(current)
+        if words is not None:
+            message, context = words
+            for link in above:
+                if (
+                    not isinstance(link, NotFoundError)
+                    and not raised_by_a_registry(link)
+                    and _is_written_by_dataknobs(link)
+                    and message
+                    and message in str(link)
+                ):
+                    # The mark's snapshot holds a deep copy of this context
+                    # and just compared equal to it, so it can be copied too.
+                    link_context = getattr(link, "context", None)
+                    if isinstance(link_context, Mapping):
+                        context = {**context, **copy.deepcopy(dict(link_context))}
+                    return str(link), context
+            return words
+        seen.add(id(current))
+        current = current.__cause__
+    return None
+
+
+#: Holds what an error said when dataknobs marked it as text it wrote: its
+#: message and a deep copy of its ``context``. See :func:`_written_by_dataknobs`.
+#:
+#: **Private on purpose.** The mark vouches that dataknobs wrote this error's
+#: text and that the text names only what a config's author wrote or what
+#: dataknobs itself knows (a registered name, a field name, a count) -- never a
+#: value a factory, a driver or a service supplied. A consumer setting it on
+#: their own error would be vouching for text no dataknobs review has read,
+#: which is why it is not exported and why a source-scan test pins every place
+#: it is set. A public way for a consumer to mark their own refusals is a
+#: separate decision, with its own design, and this is not it.
+_WRITTEN_BY_DATAKNOBS = "_dataknobs_written_by_dataknobs"
+
+
+def _written_by_snapshot(
+    exc: BaseException,
+) -> tuple[str, dict[str, Any] | None, tuple[object, ...]] | None:
+    """What ``exc`` says now: its message, a deep copy of its ``context``, and its notes.
+
+    The notes are part of it because ``add_note`` is the other way a handler
+    puts words on an error it re-raises: they print with it in every
+    traceback and log line, so a connection URL added that way travels as
+    surely as one appended to the message.
+
+    ``None`` when the ``context`` cannot be copied, so such an error is never
+    marked -- which bounds it, the safe direction.
+    """
+    context = getattr(exc, "context", None)
+    try:
+        copied = copy.deepcopy(dict(context)) if isinstance(context, Mapping) else None
+        notes = tuple(getattr(exc, "__notes__", ()))
+    except Exception:
+        return None
+    return str(exc), copied, notes
+
+
+def _written_by_dataknobs(exc: _E) -> _E:
+    """Mark ``exc`` as an error whose text dataknobs wrote, and return it.
+
+    A :class:`~dataknobs_common.registry.PluginRegistry` bounds the text of
+    whatever a factory raises, because a factory's text can carry the
+    connection URL it was handed. A helper in front of a registry then has
+    to decide whether the factory's error may be shown after all, and the
+    type cannot tell it: a ``ValueError`` dataknobs raised to say a summary
+    memory has no LLM and one a driver raised with a DSN in it are the same
+    type. This mark can, and :func:`~dataknobs_common.registry.surfaced_cause`
+    reads it.
+
+    **The mark vouches for what the error said when it was set, not for the
+    instance.** It stores the message and a deep copy of ``context``, and
+    :func:`_is_written_by_dataknobs` is true only while the error still says
+    exactly that. Unlike :func:`_value_free`, the snapshot cannot be carried
+    in place of the instance: a surfaced error is raised again *as itself*,
+    so the only safe answer to "its words changed since" is "then it is no
+    longer only ours". An error a handler amends after marking (appending to
+    ``args``, changing ``context``, adding a note) reads as unmarked and is
+    bounded.
+    :func:`_naming_refusals_as_dataknobs` is the one amender that marks
+    again, and only an error that was marked when it arrived; the public
+    :func:`naming_refusals` never does, since its origin is its caller's text.
+
+    Set where the error is raised, at the sites a source-scan test lists, and
+    nowhere else but :func:`_naming_refusals_as_dataknobs`.
+    """
+    snapshot = _written_by_snapshot(exc)
+    if snapshot is not None:
+        setattr(exc, _WRITTEN_BY_DATAKNOBS, snapshot)
+    return exc
+
+
+def _is_written_by_dataknobs(exc: BaseException) -> bool:
+    """Whether ``exc`` is marked and still says what it said when marked.
+
+    Asked while another error is being handled, so it never raises: a
+    ``context`` whose comparison raises, or answers something that is not a
+    plain truth value, reads as unmarked. So does a ``context`` holding a
+    value compared by identity, since the snapshot holds a copy of it. Both
+    are bounded, the safe direction; a marking site keeps its ``context`` to
+    names, counts and plain containers of them.
+    """
+    recorded: object = getattr(exc, _WRITTEN_BY_DATAKNOBS, None)
+    if recorded is None:
+        return False
+    try:
+        return (recorded == _written_by_snapshot(exc)) is True
+    except Exception:
+        return False
+
+
+#: What a configuration document can write: the values YAML and JSON parse to.
+_DOCUMENT_SCALARS = (str, int, float, bool, type(None))
+
+#: How deep a document value may nest before it is named by type instead.
+#: Generous for anything a config author writes; it stops a value that
+#: contains itself from recursing until the interpreter gives up.
+_DOCUMENT_DEPTH = 32
+
+#: The most of a document value's ``repr`` a refusal shows.
+_SHOWN_LENGTH = 200
+
+
+def _is_document_value(value: object, depth: int = 0) -> bool:
+    """Whether ``value`` is something a configuration document could have written.
+
+    The types are checked exactly, not with ``isinstance``: a subclass of
+    ``str`` or ``dict`` can carry a ``__repr__`` of its own, and a live
+    mapping such as ``os.environ`` is a mapping of strings without being
+    one an author wrote.
+    """
+    if depth > _DOCUMENT_DEPTH:
+        return False
+    kind = type(value)
+    if kind in _DOCUMENT_SCALARS:
+        return True
+    if kind in (list, tuple) and isinstance(value, list | tuple):
+        return all(_is_document_value(item, depth + 1) for item in value)
+    if kind is dict and isinstance(value, dict):
+        return all(
+            type(key) is str and _is_document_value(item, depth + 1) for key, item in value.items()
+        )
+    return False
+
+
+def _given(value: object) -> str:
+    """``value`` as a refusal dataknobs marks may show it.
+
+    Its ``repr`` when it is a document value -- what the config's author
+    wrote, cut short past a couple of hundred characters -- and otherwise
+    only its type, because a caller can hand a live
+    object where a config was expected, and a live handle's ``repr`` can
+    carry the connection URL it was opened with.
+    """
+    if not _is_document_value(value):
+        return f"a {type(value).__name__}"
+    shown = repr(value)
+    if len(shown) <= _SHOWN_LENGTH:
+        return shown
+    return f"{shown[:_SHOWN_LENGTH]}... ({len(shown)} characters)"
+
+
+def _given_value(value: object) -> object:
+    """``value`` for a marked refusal's ``context``: itself, or its type's name."""
+    return value if _is_document_value(value) else type(value).__name__
 
 
 class ConfigurationError(DataknobsError):
@@ -307,6 +589,120 @@ class OperationError(DataknobsError):
     """
 
     pass
+
+
+class PluginConfigError(ConfigFieldError, OperationError):
+    """A config refusal raised while a registry built a plugin.
+
+    :class:`~dataknobs_common.registry.PluginRegistry` raises it in place of
+    its bounded ``OperationError`` when what the factory raised is, or was
+    caused by, a :class:`ConfigFieldError` that ``StructuredConfig`` wrote --
+    a missing field, an unknown or misspelt key, a key that is not a string.
+    The message is ``"Failed to create plugin '<key>': <refusal>"`` and
+    ``context`` is the refusal's, plus ``key`` and ``registry``. Both are the
+    refusal's words as ``from_dict`` wrote them, not as a factory may have
+    amended them since. The factory's error is on ``__cause__``.
+
+    The refusal is reported wherever it is on the ``__cause__`` chain, so one
+    about settings a factory read for itself reads as the caller's config
+    error. Its text still names no value; a factory that does not want that
+    should catch the refusal and raise its own error, not raise ``from`` it.
+
+    **Both a** :class:`ConfigFieldError` **and an** :class:`OperationError`,
+    in that order:
+
+    - an ``OperationError``, because that is what a registry raised for this
+      failure before, so an ``except OperationError`` around ``create`` keeps
+      catching it;
+    - a ``ConfigFieldError`` (and so a :class:`ValidationError` and a
+      ``ValueError``), because it is the config's author's error, and a
+      handler choosing what to disclose by type -- the first match in the
+      MRO -- should treat it as one. Listing ``ConfigFieldError`` first is
+      what puts it ahead of ``OperationError`` in that walk.
+
+    Example:
+        ```python
+        try:
+            source = sources.create(config=spec)
+        except PluginConfigError as e:
+            report_to_author(str(e), unknown=e.context.get("unknown"))
+        ```
+    """
+
+
+class FactoryValueError(ValidationError, ValueError):
+    """A bounded stand-in for a factory's own ``ValueError`` or ``ValidationError``.
+
+    Raised by :func:`~dataknobs_common.registry.create_surfacing` (and its
+    async twin) when a factory behind a registry raised a ``ValueError`` or
+    a :class:`ValidationError` whose text dataknobs did not write. That text may carry what the factory
+    was handed -- a connection URL, a credential -- so it is not shown: the
+    message is ``"Failed to create <subject> '<key>' (<type>)"`` and the
+    factory's error is on ``__cause__``, for a server-side log.
+
+    **Both a** :class:`ValidationError` **and a** ``ValueError``:
+
+    - a ``ValueError``, because the helpers that raise it raised the
+      factory's ``ValueError`` itself before, so an ``except ValueError``
+      written against them keeps catching it;
+    - a ``ValidationError``, so a factory's own ``ValidationError`` -- the
+      dataknobs type for refused config -- is still caught as one;
+      and because a factory refusing its config is the config's problem, so
+      a handler choosing a status by type (the bots API's
+      ``DEFAULT_ERROR_POLICY`` renders it as a 422) should treat it as one.
+      The message and ``context`` are bounded, so showing them is safe.
+
+    ``context`` carries ``key``, ``registry`` and ``cause_type``.
+
+    Example:
+        ```python
+        try:
+            memory = await create_memory_from_config(config)
+        except FactoryValueError as e:
+            logger.error("Memory backend refused its config", exc_info=e.__cause__)
+            report_to_author(str(e))
+        ```
+    """
+
+
+class PluginUnavailableError(NotFoundError, ValueError):
+    """A plugin a registry knows of but cannot create here.
+
+    Raised by :meth:`~dataknobs_common.registry.PluginRegistry.create` and
+    :meth:`~dataknobs_common.registry.PluginRegistry.get` (and their async
+    twins) for a key declared with
+    :meth:`~dataknobs_common.registry.PluginRegistry.declare_unavailable`:
+    a backend behind an optional dependency that is not installed. The
+    message is ``"<kind> '<key>' is not available here: <reason>"``, with the
+    reason the declaration gave, because reporting the key as unknown sends
+    its reader looking for a typo in a name that is spelled correctly.
+
+    **Both a** :class:`NotFoundError` **and a** ``ValueError``:
+
+    - a ``NotFoundError``, because that is what a registry raises for a key
+      it cannot create, so an ``except NotFoundError`` around ``create`` keeps
+      catching it;
+    - a ``ValueError``, because a helper in front of a registry -- a
+      ``create_memory_from_config`` -- promises that a configuration problem
+      arrives as one, and naming a backend this install cannot build is a
+      configuration problem.
+
+    A helper passes it through as itself rather than calling its ``unknown``
+    hook. On ``create``, a registry whose ``not_found_exception`` is not
+    ``NotFoundError`` raises that type instead, with the same message; ``get``
+    has always raised ``NotFoundError`` and raises this subclass.
+
+    ``context`` carries ``key``, ``registry``, ``available`` and
+    ``unavailable`` (the reason).
+
+    Example:
+        ```python
+        try:
+            memory = await create_memory_from_config({"type": "vector"})
+        except PluginUnavailableError as e:
+            report_to_author(str(e))  # "... is not available here: needs faiss"
+        ```
+    """
 
 
 class ConcurrencyError(DataknobsError):
@@ -545,6 +941,16 @@ def naming_refusals(origin: str, *, context: Mapping[str, Any] | None = None) ->
     with a merged copy, never updated in place, since the raiser may still
     hold the mapping it passed. Any other exception passes through untouched.
 
+    **The origin is never vouched for.** It is the caller's text, and it can
+    hold what the caller tried -- a connection URL included. So an amended
+    refusal is no longer marked as text dataknobs wrote, even one that was
+    when it arrived. Behind a
+    :class:`~dataknobs_common.registry.PluginRegistry` the origin never
+    arrives: a refusal ``StructuredConfig`` wrote arrives as its own words,
+    as they were when it was raised, bounded under the outer key; any other
+    refusal is named by its type alone. Raised to a caller with no registry
+    in between, the amended error is shown as it is.
+
     Args:
         origin: Where the configuration came from, as its reader would name
             it (``"source 'cases'"``), in the form a schema reader's
@@ -558,14 +964,49 @@ def naming_refusals(origin: str, *, context: Mapping[str, Any] | None = None) ->
             db = database_factory.create(**options)
         ```
     """
+    with _naming_refusals(origin, context=context, vouch=False):
+        yield
+
+
+@contextmanager
+def _naming_refusals_as_dataknobs(
+    origin: str, *, context: Mapping[str, Any] | None = None
+) -> Iterator[None]:
+    """:func:`naming_refusals` for an origin dataknobs wrote, which it may vouch for.
+
+    A refusal that was marked as text dataknobs wrote when it arrived is marked
+    again once amended, so a helper in front of a registry still shows it, now
+    naming its origin. Only for an in-tree caller whose ``origin`` and
+    ``context`` name what a config's author wrote -- a source, an ontology
+    binding -- and nothing a factory or service supplied. Each caller is a
+    vouching decision, so a source-scan test lists them by file and function,
+    with what their origin names; a new one fails it until it is read. An
+    unmarked refusal stays unmarked.
+    """
+    with _naming_refusals(origin, context=context, vouch=True):
+        yield
+
+
+@contextmanager
+def _naming_refusals(
+    origin: str, *, context: Mapping[str, Any] | None, vouch: bool
+) -> Iterator[None]:
+    """The one body of :func:`naming_refusals` and :func:`_naming_refusals_as_dataknobs`.
+
+    They differ only in ``vouch``: whether a refusal marked on entry is marked
+    again after the amendment.
+    """
     try:
         yield
     except (ValidationError, ConfigurationError) as e:
+        ours = vouch and _is_written_by_dataknobs(e)
         message = e.args[0] if e.args else ""
         e.args = (f"{origin}: {message}", *e.args[1:])
         merged = {**dict(e.context or {}), **dict(context or {})}
         e.context = merged
         e.details = merged
+        if ours:
+            _written_by_dataknobs(e)
         raise
 
 
@@ -581,6 +1022,9 @@ __all__ = [
     "NotFoundError",
     "ConsentRequiredError",
     "OperationError",
+    "PluginConfigError",
+    "FactoryValueError",
+    "PluginUnavailableError",
     "ConcurrencyError",
     "SerializationError",
     "TimeoutError",

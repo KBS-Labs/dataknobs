@@ -199,8 +199,6 @@ def _document_blocks(path: Path) -> tuple[list[Block], int]:
                 declined += 1
                 continue
             for root in composed:
-                if root is None:
-                    continue
                 found.extend(_yaml_blocks(root, fence.line - 1))
         elif fence.lang in PYTHON_FENCE:
             if f'"{STORE_KEY}"' not in fence.body and f"'{STORE_KEY}'" not in fence.body:

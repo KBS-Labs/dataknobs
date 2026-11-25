@@ -13,6 +13,9 @@ Covers:
 from __future__ import annotations
 
 import os
+import uuid
+from collections.abc import Iterator
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 import pytest
@@ -442,15 +445,48 @@ def test_sweep_orphan_allowlist(monkeypatch, caplog, db, allowed):
         assert "unreachable" not in caplog.text
 
 
-@requires_postgres
-def test_sweep_orphan_drops_only_test_tables(postgres_connection_params, monkeypatch):
-    """Real sweep drops ``public.test_*`` and preserves non-test tables."""
-    import uuid as _uuid
+@pytest.fixture
+def own_database(ensure_postgres_ready, postgres_connection_params) -> Iterator[dict[str, Any]]:
+    """Connection parameters for a database no other test uses.
 
+    The sweep drops every ``public.test_*`` table in the database it is given,
+    and in the shared one those belong to whatever tests are running.
+    """
+    import psycopg2
+    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
+    params = {**postgres_connection_params, "database": f"test_sweep_{uuid.uuid4().hex[:8]}"}
+
+    def _admin(statement: str) -> None:
+        conn = psycopg2.connect(
+            host=params["host"],
+            port=params["port"],
+            user=params["user"],
+            password=params["password"],
+            database="postgres",
+        )
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(statement)
+        finally:
+            conn.close()
+
+    name = safe_sql_ident(params["database"])
+    _admin(f"CREATE DATABASE {name}")
+    try:
+        yield params
+    finally:
+        _admin(f"DROP DATABASE IF EXISTS {name}")
+
+
+@requires_postgres
+def test_sweep_orphan_drops_only_test_tables(own_database, monkeypatch):
+    """Real sweep drops ``public.test_*`` and preserves non-test tables."""
     import psycopg2
 
-    params = postgres_connection_params
-    suffix = _uuid.uuid4().hex[:8]
+    params = own_database
+    suffix = uuid.uuid4().hex[:8]
     orphan = f"test_sweep_orphan_{suffix}"
     keep = f"zz_sweep_keep_{suffix}"
 
@@ -471,25 +507,9 @@ def test_sweep_orphan_drops_only_test_tables(postgres_connection_params, monkeyp
         conn.close()
 
     monkeypatch.setenv("DK_SWEEP_ORPHAN_TEST_TABLES", "true")
-    try:
-        _run_sweep(params)
-        assert not _table_exists(params, "public", orphan)
-        assert _table_exists(params, "public", keep)
-    finally:
-        conn = psycopg2.connect(
-            host=params["host"],
-            port=params["port"],
-            user=params["user"],
-            password=params["password"],
-            database=params["database"],
-        )
-        try:
-            cursor = conn.cursor()
-            cursor.execute(f"DROP TABLE IF EXISTS public.{safe_sql_ident(keep)} CASCADE")
-            conn.commit()
-            cursor.close()
-        finally:
-            conn.close()
+    _run_sweep(params)
+    assert not _table_exists(params, "public", orphan)
+    assert _table_exists(params, "public", keep)
 
 
 @requires_postgres

@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from dataknobs_common.testing import requires_postgres
+from dataknobs_common.testing import requires_postgres, requires_real_elasticsearch
 
 from dataknobs_data import Filter, Operator, Record
 from dataknobs_data.backends.duckdb import AsyncDuckDBDatabase, SyncDuckDBDatabase
@@ -62,6 +62,7 @@ BACKENDS = [
     "sqlite",
     "duckdb",
     pytest.param("postgres", marks=requires_postgres),
+    pytest.param("elasticsearch", marks=requires_real_elasticsearch),
 ]
 
 #: Each record is keyed by what distinguishes it. The ``n`` records carry no
@@ -163,6 +164,17 @@ def _make_sync_db(kind: str, root: Path, request: pytest.FixtureRequest) -> Iter
             finally:
                 db.close()
         return
+    if kind == "elasticsearch":
+        from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
+
+        for config in request.getfixturevalue("make_elasticsearch_test_index")("test_member_"):
+            db = SyncElasticsearchDatabase(config)
+            db.connect()
+            try:
+                yield db
+            finally:
+                db.close()
+        return
     if kind == "sqlite":
         db = SyncSQLiteDatabase({"path": str(root / "records.db")})
     else:
@@ -189,6 +201,17 @@ async def _make_async_db(
 
         for config in request.getfixturevalue("make_postgres_test_db")("test_membership_async_"):
             db: Any = AsyncPostgresDatabase(config)
+            await db.connect()
+            try:
+                yield db
+            finally:
+                await db.close()
+        return
+    if kind == "elasticsearch":
+        from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
+
+        for config in request.getfixturevalue("make_elasticsearch_test_index")("test_member_"):
+            db = AsyncElasticsearchDatabase(config)
             await db.connect()
             try:
                 yield db

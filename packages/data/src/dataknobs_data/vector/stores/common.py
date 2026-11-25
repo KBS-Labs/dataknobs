@@ -12,10 +12,11 @@ import copy
 import logging
 import os
 import tempfile
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
 
+from dataknobs_common.clock import utc_now
 from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConcurrencyError
 from dataknobs_common.locks import FileLock
@@ -1573,7 +1574,7 @@ class VectorStoreBase(StructuredConfigConsumer[VectorStoreConfigT]):
 
         Returns the number of rows whose metadata was merged.
         """
-        now = datetime.now(UTC)
+        now = utc_now()
         updated = 0
         for key, meta in metadata_items:
             if filter is not None and not self._match_metadata_filter(meta, filter):

@@ -31,7 +31,13 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal
 
 from dataknobs_common import normalize_postgres_connection_config
-from dataknobs_common.exceptions import ConfigurationError, ValidationError
+from dataknobs_common.exceptions import (
+    ConfigurationError,
+    ValidationError,
+    _given,
+    _given_value,
+    _written_by_dataknobs,
+)
 from dataknobs_common.structured_config import StructuredConfig
 
 from ..database import extract_schema_from_config
@@ -245,9 +251,11 @@ class ColumnLayoutConfig(DatabaseConfig):
     def _refuse_under_native(self, setting: str, why: str, *, key: str) -> None:
         """Refuse ``setting`` when the layout is native; say ``why``."""
         if self.native:
-            raise ConfigurationError(
-                f"{self._BACKEND} {setting} under `layout: native`: {why}",
-                context={"table": getattr(self, "table", None), "key": key},
+            raise _written_by_dataknobs(
+                ConfigurationError(
+                    f"{self._BACKEND} {setting} under `layout: native`: {why}",
+                    context={"table": getattr(self, "table", None), "key": key},
+                )
             )
 
 
@@ -536,10 +544,12 @@ class PostgresDatabaseConfig(ColumnLayoutConfig, VectorBackendConfig):
         if self._names_namespace(self.schema):
             # ``from_dict`` routes such a ``schema`` to ``schema_name``; a
             # config built in code names the field, so say which one.
-            raise ValidationError(
-                f"PostgresDatabaseConfig `schema` declares fields; got "
-                f"{self.schema!r}. Give a SQL namespace as `schema_name`",
-                context={"schema": self.schema},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"PostgresDatabaseConfig `schema` declares fields; got "
+                    f"{_given(self.schema)}. Give a SQL namespace as `schema_name`",
+                    context={"schema": _given_value(self.schema)},
+                )
             )
         super().__post_init__()
         # Validate identifiers early (a non-string ``schema``/``table`` —
@@ -557,13 +567,12 @@ class ElasticsearchDatabaseConfigBase(VectorBackendConfig):
 
     The two Elasticsearch backends have diverged on connection management
     (and that drift is preserved here rather than papered over): the sync
-    backend talks to a single ``host``/``port`` through
-    ``SimplifiedElasticsearchIndex`` and supports custom ``mappings`` /
-    ``settings`` and a default vector field; the async backend connects
+    backend talks to a single ``host``/``port`` through its own
+    ``Elasticsearch`` client and supports a default vector field; the async
+    backend connects
     through a pooled ``AsyncElasticsearch`` client with full auth/TLS
     options (``hosts``, ``api_key``, ``basic_auth``, ``verify_certs``, …).
-    Only ``index`` and ``refresh`` are genuinely shared; everything else
-    lives on the sibling subclasses so each backend's documented surface
+    What is declared here is shared; everything else lives on the sibling subclasses so each backend's documented surface
     is exactly its config dataclass.
 
     Attributes:
@@ -576,12 +585,18 @@ class ElasticsearchDatabaseConfigBase(VectorBackendConfig):
             from Elasticsearch's default.
         search_page_size: Hits per request when a search pages with
             ``search_after``. At most ``max_result_window``.
+        mappings: Index mappings a new index is created with, laid over the
+            declared ones: a key here wins, and the rest are kept.
+        settings: Index settings a new index is created with, in place of the
+            default ones.
     """
 
     index: str = "records"
     refresh: bool = True
     max_result_window: int = 10_000
     search_page_size: int = 1_000
+    mappings: dict[str, Any] | None = None
+    settings: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -593,14 +608,18 @@ class ElasticsearchDatabaseConfigBase(VectorBackendConfig):
             except (TypeError, ValueError):
                 number = None
             if number is None or number < 1:
-                raise ValueError(
-                    f"Elasticsearch '{name}' must be a positive integer, got {value!r}"
+                raise _written_by_dataknobs(
+                    ValueError(
+                        f"Elasticsearch '{name}' must be a positive integer, got {_given(value)}"
+                    )
                 )
             object.__setattr__(self, name, number)
         if self.search_page_size > self.max_result_window:
-            raise ValueError(
-                f"Elasticsearch 'search_page_size' ({self.search_page_size}) must not exceed "
-                f"'max_result_window' ({self.max_result_window})"
+            raise _written_by_dataknobs(
+                ValueError(
+                    f"Elasticsearch 'search_page_size' ({self.search_page_size}) must not exceed "
+                    f"'max_result_window' ({self.max_result_window})"
+                )
             )
 
 
@@ -608,27 +627,22 @@ class ElasticsearchDatabaseConfigBase(VectorBackendConfig):
 class SyncElasticsearchDatabaseConfig(ElasticsearchDatabaseConfigBase):
     """Configuration for ``SyncElasticsearchDatabase``.
 
-    The sync backend connects to a single ``host``/``port`` and builds a
-    ``SimplifiedElasticsearchIndex``. ``vector_dimensions`` /
+    The sync backend connects to a single ``host``/``port``. ``vector_dimensions`` /
     ``default_vector_field`` seed a default dense-vector field at connect
     time when vector support is enabled but no fields have been observed
-    yet; ``mappings`` / ``settings`` override the derived index config.
+    yet.
 
     Attributes:
         host: Elasticsearch host.
         port: Elasticsearch port.
         vector_dimensions: Dimensions for the default vector field.
         default_vector_field: Name of the default vector field.
-        mappings: Custom index mappings (overrides the derived mappings).
-        settings: Custom index settings (overrides the derived settings).
     """
 
     host: str = "localhost"
     port: int = 9200
     vector_dimensions: int = 1536
     default_vector_field: str = "embedding"
-    mappings: dict[str, Any] | None = None
-    settings: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -689,6 +703,9 @@ class S3DatabaseConfigBase(VectorBackendConfig):
 
     Attributes:
         bucket: S3 bucket name (required).
+        prefix: What every record's object key starts with, normalized to one
+            trailing slash (default ``"records/"``). Empty is the bucket root,
+            where the database covers every ``.json`` object in the bucket.
         region_name: AWS region (alias: ``region``).
         aws_access_key_id: AWS access key (alias: ``access_key_id``).
             Redacted from ``repr``.
@@ -697,14 +714,19 @@ class S3DatabaseConfigBase(VectorBackendConfig):
         aws_session_token: AWS session token (alias: ``session_token``).
             Redacted from ``repr``.
         endpoint_url: Custom S3 endpoint (LocalStack / MinIO / etc.).
+        max_pool_connections: Connection-pool size of the S3 client (alias:
+            ``max_workers``), at least 1. Also the most objects ``search``
+            and ``stream_read`` fetch at once.
     """
 
     bucket: str | None = None
+    prefix: str = "records/"
     region_name: str | None = None
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_session_token: str | None = None
     endpoint_url: str | None = None
+    max_pool_connections: int = 10
 
     # Redacted from ``repr`` by the StructuredConfig base. Declared on the
     # shared base so both Sync/AsyncS3DatabaseConfig inherit the masking.
@@ -717,12 +739,12 @@ class S3DatabaseConfigBase(VectorBackendConfig):
     # describes the surface a caller may actually write, not only the
     # names that survive normalization.
     _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset(
-        {"region", "access_key_id", "secret_access_key", "session_token"}
+        {"region", "access_key_id", "secret_access_key", "session_token", "max_workers"}
     )
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
-        # Map the legacy region/credential aliases onto the canonical keys
+        # Map the legacy aliases onto the canonical keys
         # so the typed config is canonical (the canonical key wins when
         # both are present, matching ``AwsSessionConfig.from_dict``).
         for alias, canonical in (
@@ -730,6 +752,7 @@ class S3DatabaseConfigBase(VectorBackendConfig):
             ("access_key_id", "aws_access_key_id"),
             ("secret_access_key", "aws_secret_access_key"),
             ("session_token", "aws_session_token"),
+            ("max_workers", "max_pool_connections"),
         ):
             if alias in raw:
                 if canonical not in raw:
@@ -740,7 +763,18 @@ class S3DatabaseConfigBase(VectorBackendConfig):
     def __post_init__(self) -> None:
         super().__post_init__()
         if not self.bucket:
-            raise ValueError("S3 backend requires 'bucket' in configuration")
+            raise _written_by_dataknobs(ValueError("S3 backend requires 'bucket' in configuration"))
+        prefix = self.prefix.rstrip("/")
+        object.__setattr__(self, "prefix", f"{prefix}/" if prefix else "")
+        # Coerced so YAML/env string values behave as they did when
+        # ``AwsSessionConfig.from_dict`` applied ``int(...)``.
+        object.__setattr__(self, "max_pool_connections", int(self.max_pool_connections))
+        if self.max_pool_connections < 1:
+            raise _written_by_dataknobs(
+                ValueError(
+                    f"max_pool_connections must be at least 1, got {self.max_pool_connections}"
+                )
+            )
 
 
 @dataclass(frozen=True)
@@ -748,75 +782,48 @@ class SyncS3DatabaseConfig(S3DatabaseConfigBase):
     """Configuration for ``SyncS3Database``.
 
     Adds the sync-only client tuning knobs consumed by
-    :class:`~dataknobs_common.aws.AwsSessionConfig` (``max_workers`` /
-    ``max_retries`` are accepted as aliases for ``max_pool_connections`` /
-    ``max_attempts``) plus the multipart thresholds. ``prefix`` defaults
-    to ``"records/"`` and is normalized to a single trailing slash, matching
-    the legacy backend.
+    :class:`~dataknobs_common.aws.AwsSessionConfig` (``max_retries`` is
+    accepted as an alias for ``max_attempts``) plus the multipart thresholds.
 
     Attributes:
-        prefix: Object key prefix (normalized to end with ``/``).
         multipart_threshold: Size threshold for multipart uploads.
         multipart_chunksize: Chunk size for multipart uploads.
-        max_pool_connections: boto3 connection-pool size (alias:
-            ``max_workers``). Also bounds the search/write thread pool.
         max_attempts: boto3 retry attempts (alias: ``max_retries``).
         retry_mode: boto3 retry mode.
         extra_client_kwargs: Extra kwargs forwarded to the boto3 client.
     """
 
-    prefix: str = "records/"
     multipart_threshold: int = 8 * 1024 * 1024
     multipart_chunksize: int = 8 * 1024 * 1024
-    max_pool_connections: int = 10
     max_attempts: int = 3
     retry_mode: str = "standard"
     extra_client_kwargs: dict[str, Any] = field(default_factory=dict)
 
-    # Only the two this class adds -- ``_accepted_keys`` unions
-    # ``_INPUT_KEYS`` across the MRO, so the base's credential aliases
-    # stay accepted without being restated here.
-    _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset({"max_workers", "max_retries"})
+    # Only the one this class adds -- ``_accepted_keys`` unions
+    # ``_INPUT_KEYS`` across the MRO, so the base's aliases stay accepted
+    # without being restated here.
+    _INPUT_KEYS: ClassVar[frozenset[str]] = frozenset({"max_retries"})
 
     @classmethod
     def _normalize_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
-        # Sync-only pool/retry aliases, then the shared region/credential
-        # aliases handled by the base.
-        for alias, canonical in (
-            ("max_workers", "max_pool_connections"),
-            ("max_retries", "max_attempts"),
-        ):
-            if alias in raw:
-                if canonical not in raw:
-                    raw[canonical] = raw[alias]
-                del raw[alias]
+        # The sync-only retry alias, then the shared ones handled by the base.
+        if "max_retries" in raw:
+            raw.setdefault("max_attempts", raw["max_retries"])
+            del raw["max_retries"]
         return super()._normalize_dict(raw)
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        # Normalize the prefix to a single trailing slash (legacy behavior).
-        object.__setattr__(self, "prefix", self.prefix.rstrip("/") + "/")
-        # Coerce the int knobs so YAML/env string values behave as they did
-        # when ``AwsSessionConfig.from_dict`` applied ``int(...)``.
-        object.__setattr__(self, "max_pool_connections", int(self.max_pool_connections))
         object.__setattr__(self, "max_attempts", int(self.max_attempts))
 
 
 @dataclass(frozen=True)
 class AsyncS3DatabaseConfig(S3DatabaseConfigBase):
-    """Configuration for ``AsyncS3Database``.
+    """Configuration for ``AsyncS3Database`` (no extra fields).
 
-    Mirrors :class:`~dataknobs_data.pooling.s3.S3PoolConfig` (the pool
-    config is constructed directly from these fields in the backend's
-    ``_setup``). ``prefix`` defaults to ``""``; the backend joins keys as
-    ``"{prefix}/{id}.json"`` when a prefix is set and ``"{id}.json"`` when
-    it is empty (the default), matching the legacy async backend.
-
-    Attributes:
-        prefix: Object key prefix (empty by default).
+    The backend's ``_setup`` builds its
+    :class:`~dataknobs_data.pooling.s3.S3PoolConfig` from these.
     """
-
-    prefix: str = ""
 
 
 @dataclass(frozen=True)

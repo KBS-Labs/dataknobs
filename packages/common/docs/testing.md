@@ -12,6 +12,7 @@ Test utilities for dataknobs packages including service availability checks, pyt
 - [Sync/Async Twin Parity](#syncasync-twin-parity)
 - [Error Text Disclosure Guard](#error-text-disclosure-guard)
 - [Async Blocking Detection](#async-blocking-detection)
+- [A Fixed Clock](#a-fixed-clock)
 - [Declaring a Test Import Root](#declaring-a-test-import-root)
 - [Shared Integration Fixtures: Postgres and Elasticsearch](#shared-integration-fixtures-postgres-and-elasticsearch)
 - [Usage Examples](#usage-examples)
@@ -838,6 +839,54 @@ It is a source scan rather than a runtime check because the defect is a shape
 in the code, and the runtime path reaching any given site may need a real
 failing dependency to trigger.
 
+A raise wrapped in a marking call — `raise _written_by_dataknobs(X(...))` — is
+read as `raise X(...)`, so marking a raise does not hide it from this guard.
+
+### `assert_no_cause_read`
+
+```python
+from pathlib import Path
+
+from dataknobs_common.testing import assert_no_cause_read
+
+_SRC = Path(__file__).resolve().parents[1] / "src"
+
+
+def test_nothing_reads_a_cause_but_the_reviewed_readers():
+    assert_no_cause_read(
+        _SRC,
+        allowed={
+            # Appends the cause to a server-side log line; never returned.
+            "myapp/api/errors.py::log_error",
+        },
+    )
+```
+
+A `PluginRegistry` keeps a factory's error on `__cause__` because its text can
+carry the connection URL the factory was handed. A helper that reads it back —
+`raise exc.__cause__`, `f"... {exc.__cause__}"` — undoes that, whatever type it
+checks first. This guard fails on **every** load of `__cause__` under the
+roots, not only inside an `except` handler, since a helper taking the
+exception as a parameter reads it the same way. `type(exc.__cause__)` as the
+whole of a `type()` call is not flagged: naming the cause's type is how a
+bounded message is written.
+
+The other routes to the same error are flagged alike: `__context__`, which
+holds the factory's error too because a registry raises inside the handler
+that caught it; either attribute named as a string, as in
+`getattr(exc, "__cause__")`; and the `traceback` formatters
+(`traceback.format_exception` and its siblings, by module or imported by name),
+which render the whole chain as text. A logger's `exc_info` is not flagged.
+
+`allowed` entries are `"<path-suffix>::<qualname>"` for one function
+(`Class.method` for a method, `<module>` for module level) or
+`"<path-suffix>"` for a whole file, matched on a path-component boundary.
+**An entry that matches nothing fails the guard**, for the reason `ignore=`
+does above. To decide whether a cause may be shown, call
+`dataknobs_common.registry.surfaced_cause`, or build through
+`create_surfacing` — see
+[Wrapping a registry in a helper](https://kbs-labs.github.io/dataknobs/packages/common/plugin-registry/#wrapping-a-registry-in-a-helper).
+
 ---
 
 ## Async Blocking Detection
@@ -900,6 +949,34 @@ async def test_put_does_not_block(backend):
     with assert_no_blocking():
         await backend.put_file("kb", "doc.md", b"...")
 ```
+
+---
+
+## A Fixed Clock
+
+`FixedClock` returns the instant it holds, so a test can assert a timestamp's
+value rather than only that one exists. Set it for a block with `use_clock`
+from `dataknobs_common.clock`, which every aware `datetime` timestamp the
+library writes reads, or pass it where a constructor takes a clock:
+
+```python
+from datetime import UTC, datetime, timedelta
+
+from dataknobs_common.clock import now_iso, use_clock
+from dataknobs_common.testing import FixedClock
+
+clock = FixedClock(datetime(2026, 1, 1, tzinfo=UTC))
+with use_clock(clock):
+    assert now_iso() == "2026-01-01T00:00:00+00:00"
+    clock.advance(timedelta(days=40))
+    clock.set(datetime(2025, 12, 31, tzinfo=UTC))   # a step backwards, on purpose
+```
+
+A naive start or `set` is refused with `ValueError`. The
+[clock guide](https://kbs-labs.github.io/dataknobs/packages/common/clock/) covers
+where `use_clock` reaches and where it does not: epoch-float (`time.time()`)
+and naive (`datetime.now()`) stamps are outside it, and so is a thread that
+does not copy the context.
 
 ---
 

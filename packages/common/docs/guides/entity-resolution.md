@@ -878,8 +878,11 @@ window nothing bounds.
 
 ### Your own tokens
 
-A window starts and ends on a token, and the default token is a run of letters
-and digits. That is the right unit for most vocabularies and the wrong one for
+A window starts and ends on a token, and the default token is a run of letters,
+digits and the combining marks written on them (`in_token` in
+`dataknobs_common.text`, so *दुनिया* is one token, vowel signs included). A
+mark continues a token and never starts one, so the U+FE0F after an emoji is
+a boundary: `✈️Paris` holds the token `Paris`. That is the right unit for most vocabularies and the wrong one for
 three kinds of form: a symbol (`$`), a unit the default splits (`1,234.50` is
 three tokens), and a name inside a script written without spaces
 (`東京タワーに行きました` is one token, so `東京タワー` is never a window). Give
@@ -913,8 +916,18 @@ TOKENIZERS.register("symbols", lambda config: symbols)
 ```
 
 A document then writes `tokenizer: symbols` on a `kind: scan` or
-`kind: lexical` rung, or `{name: symbols, ...}` with parameters. `default` is
-registered and is `token_spans` itself.
+`kind: lexical` rung, or `{name: symbols, ...}` with parameters. Two names
+ship:
+
+- `default` is `token_spans` itself.
+- `words` is `word_spans`: the default tokens with an apostrophe between two
+  token characters kept, so *don't* and *what’s* are one token each. That is
+  the unit for a reader that takes a token as a word, and over it a scan does
+  not find a declared `T` inside *don't*, which the default tokens let it do.
+  `{name: words, apostrophes: clitic}` starts a token at each in-word
+  apostrophe instead: `don` `'t`. An apostrophe with no token character after
+  it (*dogs'*, a closing quote) is a boundary in both modes, and tokens stay
+  slices of the text, so U+2019 is not folded to `'`.
 
 **What a tokenizer gives up is the derived bounds.** The source measured its
 forms in default tokens, so `longest_form_tokens` and `form_edge` say nothing
@@ -937,8 +950,8 @@ What is worth writing yourself is a rung that asks the index a question the
 shipped one cannot, and there is a concrete one. A probe is a run of whole
 tokens, widened over the punctuation touching it as far as the vocabulary's
 own forms reach — so `(beagle)` and `C.D.C.` are found, at `(2, 10)` in
-`a (beagle), here` — but a declared form with **no** alphanumeric character in
-it — `:-)`, `<3` — has no token for a probe to start on, and is never probed at
+`a (beagle), here` — but a declared form with **no** letter, digit or combining
+mark in it — `:-)`, `<3` — has no token for a probe to start on, and is never probed at
 all. Such a form loads without complaint and is simply never found by a scan
 over the default tokens. [Your own tokens](#your-own-tokens) reaches it with
 the shipped rung; a vocabulary that wants a different boundary altogether

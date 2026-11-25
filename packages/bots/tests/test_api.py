@@ -348,6 +348,12 @@ _EXPECTED_POLICY: dict[str, tuple[int, bool, bool]] = {
     # A ValidationError subclass; its message and context carry names, never
     # a value.
     "ConfigFieldError": (422, True, True),
+    # A ConfigFieldError raised through a registry; the refusal's text and
+    # context plus the plugin key and registry name, never a factory's words.
+    "PluginConfigError": (422, True, True),
+    # A bounded stand-in for a factory's own ValueError: names the plugin and
+    # the error's type, never the factory's words.
+    "FactoryValueError": (422, True, True),
     "ConsentRequiredError": (403, True, True),
     "ConcurrencyError": (409, True, True),
     # Overrides an inherited 500 rather than declaring a base's status; lives
@@ -356,6 +362,9 @@ _EXPECTED_POLICY: dict[str, tuple[int, bool, bool]] = {
     "RateLimitError": (429, True, True),
     # Message only: the context enumerates a registry keyspace.
     "NotFoundError": (404, True, False),
+    # Message only, as its parent: the reason is the registry owner's text, and
+    # the context lists the registry's keyspace.
+    "PluginUnavailableError": (404, True, False),
     # Message only: the type's documented example puts a SQL query in context.
     "TimeoutError": (504, True, False),
     "ConfigurationError": (500, False, False),
@@ -790,6 +799,90 @@ class TestExceptionHandlerDispatch:
         assert "timestamp" in body
 
 
+async def _routing_response(method: str, path: str):
+    """Send a request the router itself refuses, with the handlers registered."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("httpx")
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.get("/only-get")
+    async def only_get():
+        return {}
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.request(method, path)
+
+
+class TestHttpExceptionsTheRouterRaises:
+    """Every ``HTTPException`` answers in the module's body, with its headers.
+
+    The router raises Starlette's ``HTTPException``, of which FastAPI's is a
+    subclass. A handler registered for FastAPI's class is never consulted for
+    the router's, so an unknown path or a wrong method used to answer
+    ``{"detail": "Not Found"}`` beside every other error's
+    ``{"error", "message", "detail", "timestamp"}``.
+    """
+
+    async def test_an_unknown_path_answers_in_the_standard_body(self) -> None:
+        response = await _routing_response("GET", "/nowhere")
+
+        assert response.status_code == 404
+        body = response.json()
+        assert body["error"] == "HTTPException"
+        assert body["message"] == "Not Found"
+        assert body["detail"] == {}
+        assert "timestamp" in body
+
+    async def test_a_wrong_method_answers_in_the_standard_body_and_keeps_allow(self) -> None:
+        response = await _routing_response("POST", "/only-get")
+
+        assert response.status_code == 405
+        assert response.json()["message"] == "Method Not Allowed"
+        # RFC 9110 15.5.6: a 405 MUST carry Allow.
+        assert response.headers["allow"] == "GET"
+
+    async def test_an_app_raised_http_exception_keeps_its_headers(self) -> None:
+        from fastapi import HTTPException
+
+        response = await _response_for(
+            HTTPException(
+                status_code=401,
+                detail="Sign in",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        )
+
+        assert response.status_code == 401
+        assert response.json()["message"] == "Sign in"
+        assert response.headers["www-authenticate"] == "Bearer"
+
+
+async def test_a_registered_handler_refuses_a_type_it_was_not_registered_for() -> None:
+    """The pairing Starlette guarantees at run time is checked, not assumed.
+
+    Starlette never calls a handler with a type outside its registration, so
+    this reaches past it to the registered callable, as a mis-registration
+    would.
+    """
+    pytest.importorskip("fastapi")
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    register_exception_handlers(app)
+    handler = app.exception_handlers[APIError]
+    stray = ValueError("not an APIError")
+
+    with pytest.raises(TypeError, match="APIError was called with ValueError") as raised:
+        await handler(None, stray)
+    assert raised.value.__cause__ is stray
+
+
 class TestApiErrorDisclosure:
     """The API family carries its own disclosure gate.
 
@@ -1041,13 +1134,28 @@ class TestErrorPolicyTable:
         # wraps is not contiguous in the file. Flatten before matching.
         source = " ".join(raw.replace("#:", " ").split())
         count = len(DEFAULT_ERROR_POLICY)
-        spelled = {11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen", 15: "fifteen"}[count]
+        spelled = {
+            11: "eleven",
+            12: "twelve",
+            13: "thirteen",
+            14: "fourteen",
+            15: "fifteen",
+            16: "sixteen",
+            17: "seventeen",
+            18: "eighteen",
+        }[count]
 
         assert f"{spelled.capitalize()} entries govern" in source, (
             f"the table has {count} rows; update the comment over "
             f"DEFAULT_ERROR_POLICY, which spells a different number"
         )
         assert f"cover the {spelled}" in source
+
+        # The same failure, one table over: a docstring counting the rows that
+        # disclose ``context`` said five while six did.
+        disclosing = sum(p.disclose_context for p in DEFAULT_ERROR_POLICY.values())
+        spelled_disclosing = {5: "five", 6: "six", 7: "seven", 8: "eight"}[disclosing]
+        assert f"{spelled_disclosing.capitalize()} rows in the default policy disclose" in source
 
         # The split the comment claims: all but one come from the exceptions
         # module, and the odd one out is named.
@@ -1142,6 +1250,85 @@ class TestDataknobsErrorHandling:
             assert body["detail"]["probe"] == "value"
         else:
             assert body["detail"] == {}
+
+    async def test_a_config_refusal_built_through_a_registry_reaches_the_author(self):
+        """A tenant memory section with a misspelt key, through the public factory.
+
+        The registry bounds what a factory raises, and the bounded type is an
+        ``OperationError`` -- a masked 500. A refusal ``StructuredConfig``
+        wrote arrives as a ``PluginConfigError`` instead, and
+        ``create_memory_from_config`` must raise it as built rather than
+        unwrap it, so the author gets the 422, the text naming the key, and
+        the backend the section selected.
+        """
+        from dataclasses import dataclass
+        from typing import ClassVar
+
+        from dataknobs_bots.memory import create_memory_from_config, memory_backends
+        from dataknobs_common.structured_config import StructuredConfig
+
+        @dataclass(frozen=True)
+        class ClosedMemoryConfig(StructuredConfig):
+            _UNKNOWN_KEYS: ClassVar[str] = "raise"
+            max_messages: int
+
+        memory_backends.register(
+            "closed", lambda config, **kwargs: ClosedMemoryConfig.from_dict(config)
+        )
+        try:
+            with pytest.raises(common_exceptions.OperationError) as caught:
+                await create_memory_from_config({"type": "closed", "max_mesages": 10})
+        finally:
+            memory_backends.unregister("closed")
+
+        response = await _response_for(caught.value)
+
+        assert response.status_code == 422
+        body = response.json()
+        assert body["error"] == "PluginConfigError"
+        assert body["message"].startswith(
+            "Failed to create plugin 'closed': ClosedMemoryConfig does not accept 'max_mesages'"
+        )
+        assert "did you mean 'max_messages'?" in body["message"]
+        assert body["detail"]["unknown"] == ["max_mesages"]
+        assert body["detail"]["key"] == "closed"
+
+    @pytest.mark.parametrize("raised", ["ValueError", "ValidationError"])
+    async def test_a_memory_backends_own_words_never_reach_the_response(self, raised):
+        """A backend refusing in its own words, with its DSN in them, through the factory.
+
+        ``create_memory_from_config`` used to hand the backend's exception back
+        as itself, so a ``ValidationError`` rendered as a 422 *with* the DSN in
+        the body. Either now arrives as a bounded ``FactoryValueError``, still
+        a 422, naming the key and the type; the DSN goes to the log only.
+        """
+        from dataknobs_bots.memory import create_memory_from_config, memory_backends
+
+        dsn = "postgres://admin:hunter2@db.internal:5432/prod"
+        error_type = getattr(common_exceptions, raised, None) or ValueError
+
+        def leaky(config, **kwargs):
+            raise error_type(f"cannot reach the conversation store at {dsn}")
+
+        memory_backends.register("leaky", leaky)
+        try:
+            with pytest.raises(common_exceptions.DataknobsError) as caught:
+                await create_memory_from_config({"type": "leaky"})
+        finally:
+            memory_backends.unregister("leaky")
+
+        response = await _response_for(caught.value)
+
+        assert dsn not in response.text
+        body = response.json()
+        assert response.status_code == 422
+        assert body["error"] == "FactoryValueError"
+        assert body["message"] == f"Failed to create memory backend 'leaky' ({raised})"
+        assert body["detail"] == {
+            "key": "leaky",
+            "registry": "memory_backends",
+            "cause_type": raised,
+        }
 
     async def test_the_configuration_diagnostic_reaches_the_log_by_default(self, caplog):
         """The case the gap was reported for, and why it is masked by default.
@@ -1423,7 +1610,7 @@ class TestResponseEncoding:
         ...'>``. Both put the credential in the repr *by design*, because it
         is a debugging aid — for a log, not a response body.
 
-        Five rows in the default policy disclose ``context``, so this is the
+        Seven rows in the default policy disclose ``context``, so this is the
         live path, not a hypothetical one.
         """
 

@@ -30,9 +30,14 @@ Example:
 
 from __future__ import annotations
 
+import inspect
 import logging
-from typing import Any, Callable, Protocol, runtime_checkable
+from collections.abc import Awaitable
+from typing import Any, Callable, Protocol, TypeAlias, runtime_checkable
 
+from dataknobs_common.exceptions import _is_written_by_dataknobs, _written_by_dataknobs
+
+from .builders import _is_consumer_class
 from .environment_aware import resolve_resource_references
 from .environment_config import EnvironmentConfig
 
@@ -40,7 +45,13 @@ logger = logging.getLogger(__name__)
 
 
 class BindingResolverError(Exception):
-    """Error during resource binding resolution."""
+    """Error during resource binding resolution.
+
+    When a factory fails, the message names the resource and the factory
+    error's type, never its text -- a factory builds a backend from deployment
+    config, and its text can carry the connection URL it was handed. The
+    factory's error is on ``__cause__``, for a server-side log.
+    """
 
     pass
 
@@ -51,11 +62,70 @@ class FactoryNotFoundError(BindingResolverError):
     pass
 
 
+def _creation_failed(
+    resource_type: str, logical_name: str, error: Exception
+) -> BindingResolverError:
+    """The error for a factory that raised: the resource, and what of the error may be shown.
+
+    A refusal dataknobs wrote -- an unknown provider name, say -- names only
+    what the config's author wrote, so its words follow. Anything else is
+    named by its type, because a factory builds from deployment config and
+    its text can carry the connection URL it was handed; the original is on
+    ``__cause__`` either way.
+    """
+    if _is_written_by_dataknobs(error):
+        return BindingResolverError(f"Failed to create {resource_type}[{logical_name}]: {error}")
+    return BindingResolverError(
+        f"Failed to create {resource_type}[{logical_name}] ({type(error).__name__})"
+    )
+
+
+def _refuse_awaitable(result: Any, factory: object, resource_type: str, logical_name: str) -> None:
+    """Refuse an awaitable a factory returned to :meth:`ConfigBindingResolver.resolve`.
+
+    A synchronous caller cannot await, so the only honest answers are the
+    instance or an error. Returning the coroutine was the third: it reached
+    the caller as the resolved resource, was cached as one, and failed far
+    from here, if at all -- an un-awaited coroutine raises nothing and warns at
+    garbage collection, naming the factory rather than the resolver.
+
+    Raised before anything is cached, and the awaitable is closed so refusing
+    it does not itself emit that warning. The same rule as
+    :meth:`~dataknobs_common.registry.PluginRegistry._refuse_awaitable`, in the
+    resolver's error type.
+    """
+    if not inspect.isawaitable(result):
+        return
+    # A coroutine is closed; a Task or Future has no ``close`` and would go on
+    # running -- holding a half-opened connection, or logging an exception
+    # nobody retrieves -- so it is cancelled instead.
+    close = getattr(result, "close", None)
+    cancel = getattr(result, "cancel", None)
+    if callable(close):
+        close()
+    elif callable(cancel):
+        cancel()
+    # Named by its own name when it has one -- a function's or a class's,
+    # which is its author's code -- else by its type. Never its ``repr``,
+    # which is its author's text and can carry the connection URL it holds.
+    name = getattr(factory, "__qualname__", None)
+    if not isinstance(name, str):
+        name = type(factory).__name__
+    raise _written_by_dataknobs(
+        BindingResolverError(
+            f"Factory {name} for {resource_type}[{logical_name}] "
+            f"is asynchronous; use resolve_async() instead of resolve()."
+        )
+    )
+
+
 @runtime_checkable
 class ResourceFactory(Protocol):
     """Protocol for resource factories that can create from config.
 
-    Factories must implement either create() or __call__() method.
+    The usual shape. The resolver also accepts the other shapes
+    :data:`RegisteredFactory` names -- see
+    :meth:`ConfigBindingResolver.register_factory`.
     """
 
     def create(self, **config: Any) -> Any:
@@ -88,6 +158,55 @@ class AsyncResourceFactory(Protocol):
             Created resource instance
         """
         ...
+
+
+@runtime_checkable
+class BuildingResourceFactory(Protocol):
+    """A factory whose entry point is ``build(**config)`` rather than ``create``."""
+
+    def build(self, **config: Any) -> Any:
+        """Build a resource instance from configuration."""
+        ...
+
+
+@runtime_checkable
+class ConfigConsumerFactory(Protocol):
+    """Something built from the whole config through ``from_config(config)``.
+
+    A consumer class (a ``StructuredConfigConsumer`` or ``ConfigurableBase``
+    subclass, which answers through its classmethod), or an object that is
+    not a class -- a registered singleton, a module.
+    """
+
+    def from_config(self, config: dict[str, Any], /) -> Any:
+        """Build a resource instance from the whole config."""
+        ...
+
+
+@runtime_checkable
+class AsyncConfigConsumerFactory(Protocol):
+    """Something built from the whole config through ``from_config_async(config)``."""
+
+    def from_config_async(self, config: dict[str, Any], /) -> Awaitable[Any]:
+        """Build a resource instance from the whole config, asynchronously."""
+        ...
+
+
+RegisteredFactory: TypeAlias = (
+    ResourceFactory
+    | AsyncResourceFactory
+    | BuildingResourceFactory
+    | ConfigConsumerFactory
+    | AsyncConfigConsumerFactory
+    | Callable[..., Any]
+)
+"""Every shape :meth:`ConfigBindingResolver.register_factory` accepts.
+
+Which surface a factory is called through, when it has several, is
+:meth:`ConfigBindingResolver._constructor`'s precedence. ``resolve`` cannot
+await, so it refuses a factory reachable only through ``create_async`` or
+``from_config_async``, or one whose result is awaitable.
+"""
 
 
 class ConfigBindingResolver:
@@ -145,7 +264,7 @@ class ConfigBindingResolver:
         """
         self._environment = environment
         self._resolve_env_vars = resolve_env_vars
-        self._factories: dict[str, ResourceFactory | Callable[..., Any]] = {}
+        self._factories: dict[str, RegisteredFactory] = {}
         self._cache: dict[tuple[str, str], Any] = {}
 
     @property
@@ -156,14 +275,19 @@ class ConfigBindingResolver:
     def register_factory(
         self,
         resource_type: str,
-        factory: ResourceFactory | Callable[..., Any],
+        factory: RegisteredFactory,
     ) -> None:
         """Register a factory for a resource type.
 
         Args:
             resource_type: Type of resource (e.g., "databases", "vector_stores")
-            factory: Factory instance or callable that creates resources.
-                    Must have create(**config) method or be callable.
+            factory: What builds the resource -- any shape
+                :data:`RegisteredFactory` names: a factory object with
+                ``create(**config)``, ``create_async(**config)`` or
+                ``build(**config)``, a callable taking the config as keyword
+                arguments, or a class or other object with
+                ``from_config(config)`` or ``from_config_async(config)``.
+                :meth:`_constructor` states the precedence.
         """
         self._factories[resource_type] = factory
         logger.debug(f"Registered factory for resource type: {resource_type}")
@@ -223,7 +347,10 @@ class ConfigBindingResolver:
             ResourceNotFoundError: If this environment does not define the
                 resource. Strict by design -- see the class docstring
             FactoryNotFoundError: If no factory registered for resource type
-            BindingResolverError: If resource creation fails
+            BindingResolverError: If resource creation fails, or the factory
+                is asynchronous -- it returned an awaitable, which this
+                method cannot await; call :meth:`resolve_async` instead.
+                Nothing is cached in either case.
         """
         cache_key = (resource_type, logical_name)
 
@@ -238,13 +365,14 @@ class ConfigBindingResolver:
         # Get factory for this type
         factory = self._get_factory(resource_type)
 
-        # Create instance
+        # Find how to call the factory first, so a factory with no callable
+        # surface is refused in words of the resolver's own, then call it.
+        construct = self._constructor(factory, can_await=False)
         try:
-            instance = self._create_instance(factory, config)
+            instance = construct(config)
         except Exception as e:
-            raise BindingResolverError(
-                f"Failed to create {resource_type}[{logical_name}]: {e}"
-            ) from e
+            raise _creation_failed(resource_type, logical_name, e) from e
+        _refuse_awaitable(instance, factory, resource_type, logical_name)
 
         # Cache the instance
         if use_cache:
@@ -260,12 +388,14 @@ class ConfigBindingResolver:
         use_cache: bool = True,
         **overrides: Any,
     ) -> Any:
-        """Async version of resolve for async factories.
+        """Async version of resolve, which also builds from async factories.
 
-        Construction precedence (see :meth:`_create_instance_async`):
-        a registered consumer class's ``from_config_async`` is preferred,
-        then a factory's ``create_async``, then the synchronous create
-        path.
+        Construction precedence (see :meth:`_constructor`): a registered
+        class's ``from_config_async``, then a factory's ``create_async``, then
+        what :meth:`resolve` uses -- ``from_config``, ``create``, ``build``,
+        or the factory itself. Whatever the chosen surface returns is awaited
+        when it is awaitable, so a plain ``async def`` factory, or one whose
+        ``create`` or ``build`` is ``async def``, resolves to its instance.
 
         Args:
             resource_type: Type of resource
@@ -295,13 +425,15 @@ class ConfigBindingResolver:
         # Get factory for this type
         factory = self._get_factory(resource_type)
 
-        # Create instance (async if supported)
+        # Create instance (async if supported). As in ``resolve``, the
+        # factory's surface is chosen before the call.
+        construct = self._constructor(factory, can_await=True)
         try:
-            instance = await self._create_instance_async(factory, config)
+            instance = construct(config)
+            if inspect.isawaitable(instance):
+                instance = await instance
         except Exception as e:
-            raise BindingResolverError(
-                f"Failed to create {resource_type}[{logical_name}]: {e}"
-            ) from e
+            raise _creation_failed(resource_type, logical_name, e) from e
 
         # Cache the instance
         if use_cache:
@@ -387,7 +519,7 @@ class ConfigBindingResolver:
 
         return resolved
 
-    def _get_factory(self, resource_type: str) -> ResourceFactory | Callable[..., Any]:
+    def _get_factory(self, resource_type: str) -> RegisteredFactory:
         """Get the factory for a resource type.
 
         Args:
@@ -406,62 +538,83 @@ class ConfigBindingResolver:
             )
         return self._factories[resource_type]
 
-    def _create_instance(
+    def _constructor(
         self,
-        factory: ResourceFactory | Callable[..., Any],
-        config: dict[str, Any],
-    ) -> Any:
-        """Create an instance using a factory.
+        factory: RegisteredFactory,
+        *,
+        can_await: bool,
+    ) -> Callable[[dict[str, Any]], Any]:
+        """How to build from ``factory``, for a caller that can or cannot await.
 
-        Args:
-            factory: Factory to use
-            config: Configuration for the resource
+        The one statement of the precedence both :meth:`resolve` and
+        :meth:`resolve_async` use, so the two cannot drift again:
 
-        Returns:
-            Created instance
+        * a **consumer class** -- a class with ``from_config`` and none of
+          ``create``, ``create_async`` or ``build`` -- is built through
+          ``from_config_async(config)`` when the caller can await and it has
+          one, else ``from_config(config)``;
+        * any other factory through ``create_async(**config)`` when the caller
+          can await, then ``create(**config)``, ``build(**config)``, or
+          ``factory(**config)``;
+        * last, an object that is not a class and has none of those -- a
+          registered singleton, a module -- through ``from_config_async(config)``
+          when the caller can await and it has one, else ``from_config(config)``.
+
+        That is ``ObjectBuilder``'s order for a ``factory:`` reference.
+
+        The consumer-class test is ``ObjectBuilder``'s
+        (:func:`~dataknobs_config.builders._is_consumer_class`), and only a
+        class passes it: ``ConfigurableBase`` gives every subclass a
+        ``from_config`` classmethod, so a factory *instance* deriving from it
+        answers ``hasattr`` too, and its ``create`` is what builds the
+        resource. ``from_config`` / ``from_config_async`` take the whole
+        config; the rest take it as keyword arguments.
+
+        The result may be an awaitable. :meth:`resolve_async` awaits it;
+        :meth:`resolve` refuses it (:func:`_refuse_awaitable`).
+
+        Raises:
+            BindingResolverError: When ``factory`` has none of these.
         """
-        # Try create method first
+        # `hasattr` first is what lets the type checker see the attribute;
+        # `_is_consumer_class` is what decides.
+        if (
+            can_await
+            and hasattr(factory, "from_config_async")
+            and _is_consumer_class(factory, "from_config_async")
+        ):
+            from_config_async: Callable[[dict[str, Any]], Any] = factory.from_config_async
+            return from_config_async
+        if hasattr(factory, "from_config") and _is_consumer_class(factory):
+            from_config: Callable[[dict[str, Any]], Any] = factory.from_config
+            return from_config
+        if can_await and hasattr(factory, "create_async"):
+            create_async = factory.create_async
+            return lambda config: create_async(**config)
         if hasattr(factory, "create"):
-            return factory.create(**config)
-
-        # Try build method
+            create = factory.create
+            return lambda config: create(**config)
         if hasattr(factory, "build"):
-            return factory.build(**config)
-
-        # Try calling directly (for callable factories)
+            build = factory.build
+            return lambda config: build(**config)
         if callable(factory):
-            return factory(**config)
-
+            call = factory
+            return lambda config: call(**config)
+        # An object that is not a class -- a registered singleton, a module --
+        # with only the consumer protocol, after the factory protocol and the
+        # `callable` fallback, as `ObjectBuilder` orders it.
+        if can_await and hasattr(factory, "from_config_async"):
+            object_from_config_async: Callable[[dict[str, Any]], Any] = factory.from_config_async
+            return object_from_config_async
+        if hasattr(factory, "from_config"):
+            object_from_config: Callable[[dict[str, Any]], Any] = factory.from_config
+            return object_from_config
+        # Named by its type: a factory object's ``repr`` is its author's, and
+        # can carry the connection URL it holds.
         raise BindingResolverError(
-            f"Factory {factory} has no create(), build(), or __call__ method"
+            f"Factory {type(factory).__name__} has none of from_config(), "
+            f"from_config_async(), create(), create_async(), build(), or __call__"
         )
-
-    async def _create_instance_async(
-        self,
-        factory: ResourceFactory | Callable[..., Any],
-        config: dict[str, Any],
-    ) -> Any:
-        """Create an instance using a factory (async).
-
-        Args:
-            factory: Factory to use
-            config: Configuration for the resource
-
-        Returns:
-            Created instance
-        """
-        # Prefer the StructuredConfigConsumer async entry point when the
-        # target is a consumer class (it takes the whole config, not a
-        # kwarg splat), then fall back to a factory ``create_async``.
-        if hasattr(factory, "from_config_async"):
-            return await factory.from_config_async(config)
-
-        # Try async create method first
-        if hasattr(factory, "create_async"):
-            return await factory.create_async(**config)
-
-        # Fall back to sync methods
-        return self._create_instance(factory, config)
 
     def get_cached(
         self,
@@ -649,6 +802,11 @@ class AsyncCallableFactory:
         Raises:
             RuntimeError: Always, use create_async instead
         """
-        raise RuntimeError(
-            "AsyncCallableFactory requires async context. Use resolve_async() instead of resolve()."
+        # Marked as dataknobs' words, so the resolver's bounded error shows them
+        # rather than only "(RuntimeError)".
+        raise _written_by_dataknobs(
+            RuntimeError(
+                "AsyncCallableFactory requires async context. "
+                "Use resolve_async() instead of resolve()."
+            )
         )

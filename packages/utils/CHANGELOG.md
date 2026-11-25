@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`elasticsearch_responses`**: `error_type`, `error_reason`,
+  `says_document_missing`, `says_index_exists`, `says_rrf_unsupported`,
+  `incomplete_reason` and `incomplete_failures`, which read the body of an
+  Elasticsearch response. A missing document and a missing index are both a 404,
+  and the body is what tells them apart.
 - **`PostgresDB.query_rows()` and `PostgresDB.stream_rows()`.** `query_rows`
   returns rows as dicts of the driver's values rather than a DataFrame.
   `stream_rows` yields them through a server-side cursor in a read-only
@@ -20,6 +25,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: a request `SimplifiedElasticsearchIndex` sends and Elasticsearch
+  refuses raises `ElasticsearchRequestError`** (new; carries `status` and
+  `body`). `count` and `delete_by_query` answered 0, `get` `None`, `index`
+  `{"_id": None, "result": "error"}`, and `exists`, `create`, `update`,
+  `delete` and `refresh` `False`. A missing document is still `None` or
+  `False`, and `create` of an existing index and `delete` of a missing one are
+  still `False`. `search` still returns the response: its `result` is now the
+  error, where it was replaced with an empty hit list.
+  `count` raises it too when some shard did not answer, where it answered what
+  the other shards counted. Such a `search` still succeeds, and its `_shards`
+  says so.
+  `index` refuses a negative `max_retries` with `ValueError`; it sent nothing and
+  answered `{"_id": None, "result": "error"}`.
+- **`SimplifiedElasticsearchIndex` no longer prints every response to stderr.**
 - **The package door imports its submodules lazily (PEP 562).**
   `dataknobs_utils/__init__.py` imported all fifteen *"for easy access"*, and
   the package declares no optional extras, so a consumer reaching **one**
@@ -113,6 +132,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`expand_value_in_message` does not match a value inside a word written
+  with a combining mark.** Its word-boundary check used `str.isalnum`, which is
+  False for every combining mark, so `cafe` matched inside a decomposed
+  `café` and expanded from the middle of the word. It asks
+  `dataknobs_common.text.is_token_boundary` at both ends now, the rule the
+  scanning rungs use: a value is whole when no word straddles either end. So
+  a value may also start or end on punctuation after a letter (`&co` in
+  `Smith&co`), which the old check refused.
+- **`expand_value_in_message` returns the value it found, after a character
+  that lowercases to more than one.** It found the value in `message.lower()`
+  and sliced `message` at those positions, but lowering is not
+  length-preserving: `İ` becomes two characters, so every position after one
+  pointed too far right, and `"İİ ok and fine"` expanded `ok` to `"a"`. It
+  matches case-insensitively against `message` itself now, and reports an
+  expansion only when it absorbed something, so a bare case difference that
+  lowering does not map one-to-one (`Istanbul` found as `İstanbul`) returns
+  `None` as any other case difference does.
 - **`stream_record_paths`, `get_records_df` and `RecordPathBuilder` write each
   record once.** A record holds its own values plus the shared values (those
   with no array index) delivered before it ends, and no other record's values.

@@ -91,18 +91,27 @@ The gate will:
 ═══════════════════════════════════════════════════════════════
                        Quality Check Summary
 ═══════════════════════════════════════════════════════════════
-  Documentation:      ✓ PASSED
-  Doc Versions:       ✓ PASSED
-  Doc Mirrors:        ✓ PASSED
-  Code Validation:    ✓ PASSED
-  Workflow Lint:      ✓ PASSED
-  Unit Tests:         ✓ PASSED
-  Integration Tests:  ✓ PASSED
+  Documentation:      ✓ PASSED  (30s)
+  Doc Versions:       ✓ PASSED  (0s)
+  Doc Mirrors:        ✓ PASSED  (0s)
+  Code Validation:    ✓ PASSED  (20s)
+  Workflow Lint:      ✓ PASSED  (0s)
+  Shell Lint:         ✓ PASSED  (4s)
+  Quality Contract:   ✓ PASSED  (8s)
+  Unit Tests:        ✓ PASSED  (3m20s)
+  Integration Tests: ✓ PASSED  (58s)
+
+  Total:              5m30s (finished 08:00:30)
+═══════════════════════════════════════════════════════════════
 
 ✓ All critical checks passed!
   Artifacts saved to: .quality-artifacts/
   You can now create your pull request.
 ```
+
+While it runs, each status line opens with the time of day and the time since the
+run started (`[07:57:16 +4m12s]`), and each finished suite says how long it took.
+The times above are illustrative; a check that was skipped shows none.
 
 The documentation lines appear in PR mode only, and a skipped check reads
 `⊘ SKIPPED` rather than passing. Every line above corresponds to an entry in
@@ -269,7 +278,17 @@ workspace guards under `tests/`; those are folded into the unit-test status
 rather than reported as their own check, so without that field their cost is
 invisible.
 
-That suite is also run with `--durations=10`, because one number for a whole
+In PR and `--all` runs, the workspace guards, the documentation checks and the package
+unit suites share one pool that runs three jobs at a time; `--full` runs them one
+at a time. Each duration is the time that check itself took, except that
+`unit_tests` spans the whole pool. Rows therefore overlap, and their sum
+can exceed `total_seconds`.
+
+Ctrl-C ends a run in any stage. Suites running in the pool are interrupted and
+given five seconds to tear down before they are killed. A run stopped before it
+writes `quality-summary.json` leaves `.run-in-progress` in its output directory.
+
+The guard suite is also run with `--durations=10`, because one number for a whole
 suite says it is expensive without saying which part of it is. The ten slowest
 guards are listed at the end of
 `.quality-artifacts/unit-test-output-workspace.txt`:
@@ -283,7 +302,8 @@ grep -A12 'slowest' .quality-artifacts/unit-test-output-workspace.txt
 Each check appends one record to `check-records.jsonl` in the run's output
 directory, at the point that ran it — or at the arm that deliberately skipped
 it. `bin/quality-summary.py build` merges those records with the run's metadata
-and writes the document; `bin/quality-summary.py render` prints the terminal
+and writes the document; `bin/quality-summary.py coverage` supplies its
+`coverage_percent`; `bin/quality-summary.py render` prints the terminal
 banner's check rows from the finished document, so the two cannot disagree.
 
 The split is the fix for a defect that shipped twice. The summary used to be a

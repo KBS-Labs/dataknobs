@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A classifier config that does not fit its class names the classifier.**
+  `create_intent_classifier` and `create_intent_classifier_async` raise the
+  `PluginConfigError` a `PluginRegistry` builds for a refusal
+  `StructuredConfig` wrote -- `"Failed to create plugin '<name>': <refusal>"`,
+  with `key` in its `context` -- rather than unwrapping it to the bare
+  refusal. It is still a `ValueError`, so an existing handler keeps catching
+  it.
+
 - **`LLMConfig.response_schema`: a JSON Schema the reply must satisfy.**
   `response_format="json"` asks for some JSON, and a model in JSON mode can
   answer in another shape: asked for a table as `{"columns", "rows"}`,
@@ -85,6 +93,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   confirms.
 
 ### Fixed
+
+- **`create_intent_classifier` keeps a classifier factory's own words out of
+  its errors.** It, and its async twin, unwrapped any `ValueError` off the
+  registry's bounded error, so a consumer classifier factory refusing with
+  the URL of the service it warms up against put that URL in the caller's
+  message. A configuration problem still arrives as `ValueError`, as the
+  shim has always promised: dataknobs' own refusals (an unknown name, a
+  composite child spec that is not a mapping or names no `classifier:`, an
+  empty composite) arrive word for word, and a consumer factory's
+  `ValueError` arrives as a bounded `FactoryValueError` naming the
+  classifier; so does a `ValidationError`, which is a `ValueError` only in
+  that bounded form. Any other failure is bounded too. The factory's error is
+  on `__cause__`.
+- **A classifier factory's `ResourceError`, `TimeoutError`,
+  `ConcurrencyError`, `SerializationError` or `ConfigurationError` now
+  arrives as that family, bounded.** It used to arrive as an
+  `OperationError`, and none of these is one, so an `except OperationError`
+  around `create_intent_classifier` no longer catches them; catch the family,
+  or `DataknobsError` for all of them. They keep their own HTTP status in an
+  error policy (503, 504, 409, ...) rather than a masked 500.
+  `LLMProviderFactory.create`'s unknown-provider refusal is marked as
+  dataknobs' text, so it reaches a knowledge-base author through the bots
+  helpers unchanged.
+
+- **Grounding finds a whole word by the scanning rungs' boundary rule, not
+  `\b`.** The enum, exact, boolean-keyword, array and number checks matched
+  with `\b...\b`, which disagreed with word boundaries twice. Python's `\w`
+  excludes combining marks, so `cafe` was grounded inside a decomposed
+  `café`. And `\b` needs a word character on one side, so a value starting
+  with punctuation was grounded only after a letter: `-5` was found in `x-5`
+  and not in `set it to -5`. They ask
+  `dataknobs_common.text.is_token_boundary` at both ends now, the rule value
+  expansion uses too, so the two halves of the wizard's grounding agree.
 
 - **An Ollama completion error no longer logs the conversation.** A non-200
   from `/api/chat` logged the whole request body at `ERROR`: every message,
@@ -258,6 +299,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   synchronous helpers still answer over it.
 
 ### Changed
+
+- **Every aware timestamp the llm package writes reads
+  `dataknobs_common.clock`**, so `use_clock` fixes it in a test: prompt
+  versions, A/B experiments and usage metrics, the model-limits resource's
+  verified date, and the wait until a provider's retry-after instant. No
+  value changes. The naive local stamps (a conversation's `created_at` /
+  `updated_at` and its nodes' `timestamp`, the prompt builders' rendered
+  `timestamp`) are not reached.
 
 - **BREAKING: `LLMConfig`, `ModelProfile`, `ModelPricing` and
   `HistoryRedaction` are no longer hashable**, as no `StructuredConfig` now is

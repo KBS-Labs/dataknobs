@@ -17,6 +17,10 @@ cd "$ROOT_DIR"
 # Source the package discovery utility
 source "$ROOT_DIR/bin/package-discovery.sh"
 
+# The clock on the step headings
+source "$ROOT_DIR/bin/gate-progress.sh"
+VALIDATE_START=$(date +%s)
+
 # Default values
 TARGETS=()
 QUICK=false
@@ -387,33 +391,15 @@ echo -e "${YELLOW}Validating targets...${NC}"
 FAILED=false
 
 # 1. Check Python syntax
-echo -e "\n${BLUE}1. Checking Python syntax...${NC}"
-for target in "${VALIDATE_TARGETS[@]}"; do
-    echo -e "${YELLOW}  Checking $target...${NC}"
-    
-    if [[ -f "$target" ]]; then
-        # Single file
-        if ! uv run python -m py_compile "$target" 2>/dev/null; then
-            echo -e "${RED}    ✗ Syntax error in $target${NC}"
-            FAILED=true
-        fi
-    elif [[ -d "$target" ]]; then
-        # Directory - find all Python files
-        while IFS= read -r -d '' file; do
-            if ! uv run python -m py_compile "$file" 2>/dev/null; then
-                echo -e "${RED}    ✗ Syntax error in $file${NC}"
-                FAILED=true
-            fi
-        done < <(find "$target" -name "*.py" -print0)
-    fi
-done
-
-if [[ "$FAILED" == false ]]; then
-    echo -e "${GREEN}  ✓ All Python files have valid syntax${NC}"
+echo -e "\n${BLUE}1. Checking Python syntax...${NC} $(progress_stamp "$VALIDATE_START")"
+# One process for every file. An interpreter per file was most of the time a full
+# validation took.
+if ! uv run python "$ROOT_DIR/bin/check-python-syntax.py" "${VALIDATE_TARGETS[@]}"; then
+    FAILED=true
 fi
 
 # 2. Run ruff linting
-echo -e "\n${BLUE}2. Running ruff linting...${NC}"
+echo -e "\n${BLUE}2. Running ruff linting...${NC} $(progress_stamp "$VALIDATE_START")"
 
 for target in "${VALIDATE_TARGETS[@]}"; do
     echo -e "${YELLOW}  Checking $target...${NC}"
@@ -447,7 +433,7 @@ done
 # equivalent of "show me the suppressed findings too" -- there is one formatted
 # form -- so the two-branch shape the linter carries above would offer a choice
 # between the real answer and a differently-configured one.
-echo -e "\n${BLUE}3. Checking code formatting...${NC}"
+echo -e "\n${BLUE}3. Checking code formatting...${NC} $(progress_stamp "$VALIDATE_START")"
 
 for target in "${FORMAT_TARGETS[@]}"; do
     echo -e "${YELLOW}  Checking $target...${NC}"
@@ -471,7 +457,7 @@ done
 
 # 4. Check imports (only for packages)
 if [[ ${#VALIDATE_PACKAGES[@]} -gt 0 ]]; then
-    echo -e "\n${BLUE}4. Checking imports...${NC}"
+    echo -e "\n${BLUE}4. Checking imports...${NC} $(progress_stamp "$VALIDATE_START")"
     for package in "${VALIDATE_PACKAGES[@]}"; do
         echo -e "${YELLOW}  Checking $package...${NC}"
 
@@ -549,7 +535,7 @@ _contains() {
 # the contract's matcher is a second answer waiting to disagree with the one the
 # ceilings were measured under.
 if [[ "$QUICK" != true ]]; then
-    echo -e "\n${BLUE}5. Running mypy type checking...${NC}"
+    echo -e "\n${BLUE}5. Running mypy type checking...${NC} $(progress_stamp "$VALIDATE_START")"
 
     MYPY_CELLS=()
     MYPY_OUTSIDE=()
@@ -622,7 +608,7 @@ if [[ "$QUICK" != true ]]; then
 fi
 
 # 6. Check for common issues
-echo -e "\n${BLUE}6. Checking for common issues...${NC}"
+echo -e "\n${BLUE}6. Checking for common issues...${NC} $(progress_stamp "$VALIDATE_START")"
 
 # Check for print statements (with exceptions for legitimate uses)
 echo -e "${YELLOW}  Checking for print statements...${NC}"
@@ -890,7 +876,7 @@ else
 fi
 
 # Summary
-echo -e "\n${YELLOW}Validation Summary:${NC}"
+echo -e "\n${YELLOW}Validation Summary:${NC} $(progress_stamp "$VALIDATE_START")"
 echo -e "${YELLOW}==================${NC}"
 
 if [[ "$FAILED" == true ]]; then

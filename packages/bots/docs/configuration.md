@@ -2805,8 +2805,36 @@ Transforms continue writing to the flat `data` dict as before — the partition 
 transparent. At save time, ephemeral keys are separated into `WizardState.transient`
 (available to templates and UI metadata) while only persistent keys reach storage.
 
-As a safety net, any value that fails a JSON-serializability check is automatically
-moved to transient (with a warning log), even if not declared in `ephemeral_keys`.
+As a safety net, any value the save would not keep whole is automatically moved to
+transient, even if not declared in `ephemeral_keys`. Each value is walked once by
+`sanitize_and_report` from `dataknobs_common.serialization`, under the rules of
+`sanitize_for_json`, and the converted form that walk returns is what is stored, so
+the check and the save cannot disagree. A value holding a live object, a key
+`json.dumps` cannot write, or itself stays transient, with a warning naming what
+was found (`Non-serializable key 'handle' in data (type=dict) kept out of storage:
+conn (type=Connection)`). The check is per top-level key, so one live object anywhere
+in a value keeps that whole key out of storage for the turn.
+
+The same rule, `partition_wizard_data` in `dataknobs_bots.reasoning.wizard_types`,
+stores each subflow frame's saved parent data and each transition's data snapshot,
+which are copies of `data` taken earlier in the conversation. Ephemeral keys are
+left out of them too, so a subflow that returns after a restore does not bring back
+a `_message` or `_intent` from the turn it was pushed. One save warns once per key
+kept out of storage, wherever it is first found, and repeats it at DEBUG for the
+other copies.
+
+Ephemeral keys never reach storage. The conversation metadata's `data`, which
+`DynaBot.get_wizard_state()` returns, holds what `fsm_state.data` holds; the
+transient values are in the turn's response metadata and its templates.
+
+A value the save converts is persisted in its converted form: a dataclass as a
+dict, an `Enum` as its value, an object whose `to_dict()` returns a dict as that
+dict, a set as a sorted list, a `datetime`, `date` or `time` as its ISO text, a
+`Decimal`, `UUID` or path as its string, and a NaN or infinite float as `None`, so a sparse record keeps its other
+values and a list keeps every position. After a restore, the key holds that
+converted form. Storage that writes JSON (SQLite, Postgres) also writes every dict
+key as text, so `{1: "produce"}` comes back as `{"1": "produce"}`; the in-memory
+backend keeps the key as it was.
 
 **Per-Turn Keys:**
 

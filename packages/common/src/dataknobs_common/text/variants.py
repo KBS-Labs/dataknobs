@@ -51,9 +51,14 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Generic, TypeVar
 
-from dataknobs_common.exceptions import ValidationError
-from dataknobs_common.registry import PluginRegistry
-from dataknobs_common.text._named import NamedSeam, built_from_config
+from dataknobs_common.exceptions import (
+    OperationError,
+    ValidationError,
+    _given,
+    _given_value,
+    _written_by_dataknobs,
+)
+from dataknobs_common.registry import PluginRegistry, _shown_failure
 from dataknobs_common.text.scan import default_normalizer, token_spans
 
 __all__ = [
@@ -195,7 +200,7 @@ def split(sep: str = "/", min_token_len: int = 1) -> Rule:
     gives *1* and *2 Gallon*, and only the second has a letter to survive.
     """
     if not sep:
-        raise ValueError("split needs a non-empty 'sep'")
+        raise _written_by_dataknobs(ValueError("split needs a non-empty 'sep'"))
 
     def rule(form: str, context: Mapping[str, Any] = _NO_CONTEXT) -> tuple[str, ...]:
         parts = [_squeeze(part) for part in form.split(sep)]
@@ -223,7 +228,7 @@ def strip_prefix(field: str) -> Rule:
     set: which field holds a prefix is the vocabulary's to say.
     """
     if not field:
-        raise ValueError("strip_prefix needs a non-empty 'field'")
+        raise _written_by_dataknobs(ValueError("strip_prefix needs a non-empty 'field'"))
 
     def prefixes(context: Mapping[str, Any]) -> list[str]:
         raw = context.get(field)
@@ -543,7 +548,7 @@ def _parameterless(rule: Rule) -> Callable[[Mapping[str, Any]], Rule]:
 
     def factory(config: Mapping[str, Any]) -> Rule:
         if config:
-            raise ValueError(f"takes no parameters; given {sorted(config)}")
+            raise _written_by_dataknobs(ValueError(f"takes no parameters; given {sorted(config)}"))
         return rule
 
     return factory
@@ -555,11 +560,15 @@ def _parameters(
     """``config`` checked against the parameters a rule accepts, by name and by type."""
     unknown = sorted(set(config) - set(accepted))
     if unknown:
-        raise ValueError(f"does not take {unknown}; it takes {sorted(accepted)}")
+        raise _written_by_dataknobs(
+            ValueError(f"does not take {unknown}; it takes {sorted(accepted)}")
+        )
     for name, value in config.items():
         expected = accepted[name]
         if not isinstance(value, expected) or (isinstance(value, bool) and expected is int):
-            raise ValueError(f"'{name}' must be {_describe(expected)}; given {value!r}")
+            raise _written_by_dataknobs(
+                ValueError(f"'{name}' must be {_describe(expected)}; given {value!r}")
+            )
     return dict(config)
 
 
@@ -572,7 +581,7 @@ def _hyphen_factory(config: Mapping[str, Any]) -> Rule:
     params = _parameters(config, {"subs": (list, tuple)})
     subs = params.get("subs", (" ", ""))
     if not all(isinstance(sub, str) for sub in subs):
-        raise ValueError(f"'subs' must be a list of strings; given {subs!r}")
+        raise _written_by_dataknobs(ValueError(f"'subs' must be a list of strings; given {subs!r}"))
     return hyphen(tuple(subs))
 
 
@@ -587,14 +596,16 @@ def _inflect_factory(config: Mapping[str, Any]) -> Rule:
         return inflect
     keep = params["keep"]
     if not all(isinstance(word, str) for word in keep):
-        raise ValueError(f"'keep' must be a list of strings; given {keep!r}")
+        raise _written_by_dataknobs(ValueError(f"'keep' must be a list of strings; given {keep!r}"))
     return inflect_keeping(keep)
 
 
 def _strip_prefix_factory(config: Mapping[str, Any]) -> Rule:
     params = _parameters(config, {"field": str})
     if "field" not in params:
-        raise ValueError("needs 'field', the context key holding the prefixes")
+        raise _written_by_dataknobs(
+            ValueError("needs 'field', the context key holding the prefixes")
+        )
     return strip_prefix(params["field"])
 
 
@@ -622,15 +633,6 @@ VARIANT_RULES.register("split", _split_factory)
 VARIANT_RULES.register("strip_prefix", _strip_prefix_factory)
 del _name, _rule
 
-_SEAM = NamedSeam(
-    registry=VARIANT_RULES,
-    key="rule",
-    noun="variant rule",
-    plural="rules",
-    shape="a rule name or a mapping with a 'rule' naming one",
-    context_key="rule",
-)
-
 
 def rules_from_config(specs: Sequence[str | Mapping[str, Any]]) -> tuple[Rule, ...]:
     """The rules a configuration names, built, in the order given.
@@ -648,22 +650,65 @@ def rules_from_config(specs: Sequence[str | Mapping[str, Any]]) -> tuple[Rule, .
 
     Raises:
         ValidationError: For a spec that is neither a name nor a mapping with a
-            ``rule``, a name :data:`VARIANT_RULES` does not hold, a factory
-            that fails, or one that returns something not callable. The
-            message names the rule. A factory refusing its parameters
-            (``ValueError`` or ``ValidationError``) is quoted; any other
-            failure is named by its type alone and chained as the cause.
+            ``rule``, a name :data:`VARIANT_RULES` does not hold, or parameters
+            the named rule refuses. The message names the rule.
     """
     if isinstance(specs, str | bytes) or not isinstance(specs, Sequence):
-        raise ValidationError(
-            f"variant rules must be a list of rule specs; given {specs!r}",
-            context={"specs": specs},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"variant rules must be a list of rule specs; given {_given(specs)}",
+                context={"specs": _given_value(specs)},
+            )
         )
     built: list[Rule] = []
     for position, spec in enumerate(specs):
-        name, rule = built_from_config(
-            _SEAM, spec, subject=f"variant rule {position}", context={"position": position}
-        )
+        config = {"rule": spec} if isinstance(spec, str) else spec
+        name = config.get("rule") if isinstance(config, Mapping) else None
+        if not isinstance(name, str) or not name:
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"variant rule {position} must be a rule name or a mapping with a "
+                    f"'rule' naming one; given {_given(spec)}",
+                    context={"position": position, "spec": _given_value(spec)},
+                )
+            )
+        if not VARIANT_RULES.is_registered(name):
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"unknown variant rule {name!r}. Registered rules: "
+                    f"{sorted(VARIANT_RULES.list_keys())}",
+                    context={"rule": name, "position": position},
+                )
+            )
+        try:
+            rule = VARIANT_RULES.create(config=dict(config))
+        except OperationError as error:
+            # A consumer factory's text may carry what it was handed, so unless
+            # dataknobs wrote it, it is named by type and kept on ``__cause__``.
+            reason = _shown_failure(error)
+            if reason is None:
+                # Names only the rule and the error's type, so it is ours.
+                raise _written_by_dataknobs(
+                    ValidationError(
+                        f"variant rule {name!r} could not be built "
+                        f"({type(error.__cause__).__name__})",
+                        context={"rule": name, "position": position},
+                    )
+                ) from error
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"variant rule {name!r} {reason}",
+                    context={"rule": name, "position": position},
+                )
+            ) from error
+        if not callable(rule):
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"variant rule {name!r}'s factory returned a {type(rule).__name__}, "
+                    f"which is not callable; a factory returns a rule",
+                    context={"rule": name, "position": position},
+                )
+            )
         built.append(rule if _rule_name(rule) == name else _Named(rule, name))
     return tuple(built)
 

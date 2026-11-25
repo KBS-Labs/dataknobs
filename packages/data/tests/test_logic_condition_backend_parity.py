@@ -38,7 +38,7 @@ from dataknobs_common.testing import (
 )
 
 from dataknobs_data import AsyncDatabase, Record, SyncDatabase
-from dataknobs_data.backends.elasticsearch_query import build_complex_es_query
+from dataknobs_data.backends.elasticsearch_query import FieldTypes, build_complex_es_query
 from dataknobs_data.backends.sql_base import SQLQueryBuilder
 from dataknobs_data.query import Filter, Operator
 from dataknobs_data.query_logic import (
@@ -169,22 +169,11 @@ def _ids(found: list[Record]) -> list[str]:
     return sorted(str(r.storage_id) for r in found)
 
 
-#: Elasticsearch renders a negated operator as a bare ``must_not``, which keeps
-#: a document without the field, so ``NOT`` around one leaves that document
-#: out. That is a defect of the negated operator rather than of ``NOT``, so its
-#: answer is modelled here rather than skipped, and this entry goes when it is
-#: fixed.
-KNOWN: dict[str, dict[str, list[str]]] = {
-    "elasticsearch": {"not neq": ["z"]},
-}
-
-
-def _disagreements(kind: str, answers: dict[str, list[str] | str]) -> dict[str, object]:
-    known = KNOWN.get(kind, {})
+def _disagreements(answers: dict[str, list[str] | str]) -> dict[str, object]:
     return {
         name: {"got": got, "want": want}
         for name, got in answers.items()
-        if got != (want := known.get(name, _expected(CASES[name])))
+        if got != (want := _expected(CASES[name]))
     }
 
 
@@ -206,7 +195,7 @@ def test_every_backend_answers_boolean_logic_as_matches_does_sync(
         if kind == "s3":
             db.clear()
         db.close()
-    assert _disagreements(kind, answers) == {}
+    assert _disagreements(answers) == {}
 
 
 async def test_every_backend_answers_boolean_logic_as_matches_does_async(
@@ -227,7 +216,7 @@ async def test_every_backend_answers_boolean_logic_as_matches_does_async(
         if kind == "s3":
             await db.clear()
         await db.close()
-    assert _disagreements(kind, answers) == {}
+    assert _disagreements(answers) == {}
 
 
 class TestTheOracle:
@@ -286,4 +275,4 @@ class TestAConditionNoTranslatorKnowsIsRefused:
 
     def test_elasticsearch(self, condition: Condition) -> None:
         with pytest.raises(TypeError, match="_Unrenderable"):
-            build_complex_es_query(condition)
+            build_complex_es_query(condition, FieldTypes())

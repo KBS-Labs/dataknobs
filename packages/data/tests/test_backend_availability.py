@@ -685,3 +685,66 @@ class TestAUserStateStoreThatNamedNoBackend:
             UserStateStore.from_config(config)
 
         assert len(self._warnings(caplog)) == 1
+
+
+class TestAnImportFailureIsReportedByModule:
+    """A loader's ``ImportError`` becomes the backend's unavailable reason.
+
+    The reason is shown to whoever asks the registry for that backend --
+    through the bots API, as a 404's message. An ``ImportError``'s own text
+    can carry the absolute path of the package that failed to load, or a
+    native library's loader output, so the reason names the module and the
+    install hint, and the full text goes to the log.
+    """
+
+    PATH = "/opt/venv/lib/python3.12/site-packages/acme_sdk/__init__.py"
+
+    def _declared(
+        self, error: ImportError, *, hint: str | None = "pip install acme"
+    ) -> PluginRegistry[Any]:
+        from dataknobs_data.backend_selection import register_backend
+
+        def load() -> Any:
+            raise error
+
+        metadata: dict[str, Any] = {"requires_module": "acme_sdk"}
+        if hint is not None:
+            metadata["requires_install"] = hint
+        registry: PluginRegistry[Any] = PluginRegistry("t")
+        register_backend(registry, "acme", load, metadata=metadata, installed=lambda module: True)
+        return registry
+
+    def test_the_path_stays_out_of_the_reason(self) -> None:
+        error = ImportError(
+            f"cannot import name 'Client' from 'acme_sdk' ({self.PATH})",
+            name="acme_sdk",
+            path=self.PATH,
+        )
+        reason = self._declared(error).unavailable_reason("acme")
+
+        assert reason is not None
+        assert self.PATH not in reason
+        assert reason == "acme_sdk could not be imported. Install with: pip install acme"
+
+    def test_an_import_error_naming_no_module_says_so_without_its_text(self) -> None:
+        reason = self._declared(
+            ImportError(f"libacme.so: cannot open ({self.PATH})")
+        ).unavailable_reason("acme")
+
+        assert reason is not None
+        assert self.PATH not in reason
+        assert reason.startswith("a module it needs could not be imported")
+
+    def test_with_no_install_hint_the_reason_names_only_the_module(self) -> None:
+        error = ImportError(f"cannot import name 'Client' ({self.PATH})", name="acme_sdk")
+
+        reason = self._declared(error, hint=None).unavailable_reason("acme")
+
+        assert reason == "acme_sdk could not be imported"
+
+    def test_the_full_text_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        error = ImportError(f"cannot import name 'Client' ({self.PATH})", name="acme_sdk")
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_data.backend_selection"):
+            self._declared(error)
+
+        assert self.PATH in caplog.text

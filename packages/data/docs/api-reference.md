@@ -464,7 +464,16 @@ query = (Query()
 # Operator.REGEX - regular expression match
 # Operator.STARTS_WITH - literal, case-sensitive prefix match
 #   (escape-safe: a '_' or '%' in the prefix matches literally, unlike LIKE)
+# Operator.CONTAINS - a list, one of whose elements equals the value
+# Operator.NOT_CONTAINS - has a value that is not such a list
 ```
+
+`CONTAINS` and `NOT_CONTAINS` take one value and compare it with each element of
+the list a field holds, as `EQ` compares it; a collection raises `ValueError`
+when the `Filter` is built. Only a list contains anything: a string is not
+searched for a substring, nor a mapping for a key. `NOT_CONTAINS` matches every
+other record whose field has a value. A column of a native table holds one value,
+so it contains nothing, and a `json` column is refused as for other operators.
 
 `IN` and `NOT_IN` take a collection (a list, tuple, set, `dict.keys()`, or
 any other collection that is neither a string nor a mapping). Anything else
@@ -476,14 +485,11 @@ or use `EQ`, and pass a mapping's keys rather than the mapping.
 has no order to say which bound is which) --- raises `ValueError` when the
 `Filter` is built.
 
-The SQL backends (SQLite, DuckDB, PostgreSQL) and the backends that filter in
-memory (memory, file, S3) answer a membership filter the same way: nothing is
-in an empty list, and a `None` member matches nothing. `NOT_IN` matches only
-records whose field has a value, as `NEQ` does, so `NOT_IN []` selects every
-record that has one. Elasticsearch differs in two ways: its `NOT_IN` also
-matches a document that lacks the field, as each of its negations does, and it
-chooses a string field's exact-match (`.keyword`) path from the list's first
-member only.
+Every backend answers a membership filter the same way: nothing is in an empty
+list, and a `None` member matches nothing. `NOT_IN` matches only records whose
+field has a value, as `NEQ` does, so `NOT_IN []` selects every record that has
+one. [Elasticsearch](#elasticsearch-backend) compares two kinds of field
+differently: a list, and a string field with a bound that is not a string.
 
 A comparison (`EQ`, `NEQ`, `GT`, `GTE`, `LT`, `LTE`, `BETWEEN`, `NOT_BETWEEN`,
 `IN`, `NOT_IN`) relates a field's value only to a bound of the same kind, as
@@ -578,9 +584,13 @@ Numbers compare and sort by value, exactly, as Python compares them: `2**53 + 1`
 is not `2**53`, and the float `1e30` is not the integer `10**30`. A bound no
 engine can bind (an integer past 64 bits on SQLite, past 128 on DuckDB)
 neither raises nor rounds: it is compared through the stored value nearest it
-on the side the operator needs. Two limits are the engines' own. SQLite reads
+on the side the operator needs. Three limits are the engines' own. SQLite reads
 a stored integer past 64 bits as a double, and DuckDB one past 128 bits, so
 past those magnitudes a stored integer compares as the double nearest it.
+PostgreSQL's `jsonb` holds a float as the decimal JSON writes it as, so a float
+bound is sent as that decimal: `0.1` equals a stored `0.1`. There, unlike in
+Python, the float `1e30` is the integer `10**30`, and `2.0**60` equals a stored
+`2.0**60` but not a stored `2**60`.
 DuckDB reads a JSON number for a sort or a filter in a type that holds it, an
 integer as `HUGEINT` and any other number as `DOUBLE`, so an expression index
 on a cast of the field does not serve those either.
@@ -596,12 +606,9 @@ sorts after every record that has one, ascending and descending, on every
 backend. SQL renders `NULLS LAST` on each sort key, and Elasticsearch is sent
 `missing: _last`.
 
-Elasticsearch sorts by code point and compares `id` that way, but two
-defects remain there. A range with a string bound on a data field compares
-the field's analyzed, lowercased tokens. And a sort picks a field's
-`.keyword` path by guessing rather than from the mapping: the sync backend
-raises on a numeric field whose name it does not recognise, and the async
-backend raises on a text field.
+Elasticsearch compares and sorts text by code point too, through a field's
+keyword sub-field; [its own section](#elasticsearch-backend) says where that
+depends on the index's mapping.
 
 ### Querying by identifier and key prefix
 
@@ -1391,14 +1398,82 @@ db = factory.create(
 await db.connect()
 ```
 
+**Updates.** `update`, `update_batch` and an `upsert` with an `expected_version`
+replace the stored record, as on every backend. They do so with an inline Painless
+script, so a cluster whose `script.allowed_types` or `script.allowed_contexts`
+excludes inline update scripts refuses them.
+
 **Query semantics.** The Elasticsearch backend translates every `Filter` through
 one shared translator, so the sync backend, async backend, and vector/hybrid
 pre-filters agree:
 
-- **`REGEX`** matches the **full field value** (case-sensitive), like the
-  in-memory and SQL backends — not a single analyzed token. Elasticsearch
-  `regexp` is anchored and uses Lucene RegExp syntax (no `^`/`$` anchors, no
-  look-around), which differs from Python `re`.
+- **A field is reached by how the index maps it.** The backend asks Elasticsearch
+  (the field capabilities API, which needs only the `read` privilege) about each
+  field a query filters or sorts by, and remembers the answer until `close()`. A
+  field mapped as `text` is compared and sorted through its keyword sub-field,
+  whatever that is called; a keyword, number, date or boolean field is used
+  directly. A field the index does not map yet matches nothing, sorts as a
+  missing value, and is asked about again by the next query. A pattern on
+  a number, boolean, object, nested or vector field matches nothing, negated or not.
+- **A bound of another kind matches nothing on a number or boolean field**, in
+  equality, membership and range alike; nor does a number or boolean on `id`, a
+  boolean on a date field, or anything but a string on an `ip` field. On
+  a string field, unlike other backends, a bound that is not a string is compared
+  as text, because the index holds `5` and `"5"` alike. A number on a date field
+  is read as epoch milliseconds, whether the document holds a number or a string.
+- **A negated operator** (`NEQ`, `NOT_IN`, `NOT_LIKE`, `NOT_BETWEEN`, `NOT_CONTAINS`) matches only
+  a document that has a value, as on every backend.
+- **A field holding a list is compared whole**, as on every backend: `["a", "b"]`
+  does not equal `"a"`, is matched by `NEQ "a"`, and has a value even when it is
+  empty. A name leading into a list (`items.name`) has no value. Elasticsearch
+  cannot tell a list from its elements, so each document written names the fields
+  that hold one in a top-level `list_fields`. A document written without it, by an
+  earlier version or another client, is compared element by element until it is
+  written again. So is every document of an index whose mapping has `dynamic`
+  `false` and no `list_fields`; one that is `strict` refuses a record holding a
+  list until `list_fields` is added to it, as a keyword with a `keyword`
+  sub-field. An index created without `list_fields` by an earlier version or
+  elsewhere maps it on the first write of a list, and by default leaves out a
+  path longer than 256 characters (`data.` included); a list there is compared
+  element by element. Elasticsearch refuses `EQ` or `NEQ` with a list as the
+  value, and `IN` or `NOT_IN` with a list among the values.
+- **`CONTAINS` finds nothing in a document written without `list_fields`**, and
+  `NOT_CONTAINS` matches it if the field has a value, until it is written again.
+  The same holds for a path left out as above, written again or not. A
+  list inside a list is read as its elements, unlike other backends: `[["a"]]`
+  contains `"a"`.
+- **A string compared with a date field is read as a date** by equality and range
+  alike, and Elasticsearch refuses one that is not a date. An `ip` field reads
+  its operand the same way.
+- **What the index cannot answer raises `ValueError`**, negated or not, where
+  it would otherwise match nothing or every value. A `text` field with no keyword
+  sub-field (a mapping made elsewhere) has no full value to reach, so every
+  comparison and pattern on it raises, and Elasticsearch refuses to sort by it.
+  A pattern raises on a date, an `ip` and any other field Elasticsearch does not
+  match as text. `EXISTS` and `NOT_EXISTS` are answered on all of these. Under an alias,
+  one index that maps the field this way is enough to raise, except where another
+  maps a keyword sub-field. That is then used for all of them, and an index
+  without it has nothing there: none of its records match, and every one that has
+  a value matches the negation.
+- **A `*` in a field name** is part of the name, as on every backend. Elasticsearch's
+  `exists` reads it as any characters, so `EXISTS`, `NOT_EXISTS` and the negated
+  operators raise `ValueError` when the index maps both a field of that exact name
+  (`p*`) and another that matches (`price`). If it maps no field of that name, no
+  record has a value. Such a name is asked about by every query.
+- **`REGEX`** finds a Python pattern anywhere in the **full field value**
+  (case-sensitive), as `re.search` does, except that `\d` and `\w` are ASCII.
+  The pattern is translated to Lucene's syntax
+  (`python_regex_to_lucene`, in `backends.elasticsearch_regex`). One that
+  cannot be raises `ValueError`: look-around, `\b`, back-references, atomic
+  groups, possessive repeats, inline flags that change matching, an anchor that
+  is not at an end of the pattern (as in `a^b`), one nested too deeply to read,
+  and one that is not a regular expression.
+  Elasticsearch itself refuses, with the client's error, a translated pattern
+  longer than `index.max_regex_length` (1000) or costlier than its 10,000
+  `max_determinized_states`. Translating lengthens a pattern (`\s` becomes 21
+  characters), and finding one anywhere costs more than matching a whole value:
+  `x{314}` is the longest such repeat it accepts, against `^x{10000}\Z`. A pattern
+  that does not start with `^` is tried against every distinct value of the field.
 - **`LIKE`/`NOT_LIKE`** treat only `%` and `_` as wildcards and match
   case-insensitively, folding ASCII case only; a literal `*`, `?`, or `\` in
   the pattern is escaped to match verbatim. The case-insensitive form requires
@@ -1412,6 +1487,35 @@ pre-filters agree:
   `id`-queryable; `read(id)` is unaffected.
 - An operator the translator cannot express raises `ValueError` rather than
   silently matching every document.
+- **A read that some shard did not answer raises `DatabaseError`**, as does one
+  that timed out, rather than returning what the other shards found. Its
+  `context["failures"]` lists the failures Elasticsearch gave. `stream_read` on
+  the async backend may have yielded records before it raises.
+
+**The index it creates.** Both backends create a missing index with the same
+mapping. A string in a record's data is `text` with a `keyword` sub-field of up
+to 8191 characters; a longer string is stored and text-searched, but no
+comparison matches it, so a negated one does, and it sorts as a missing value.
+`date_detection` is off, so a string is compared as text whatever the first
+document held. A `datetime`
+bound is therefore compared as its ISO 8601 text, which orders with other values
+of that form; map a field as `date` to have it compared as time:
+
+```python
+db = AsyncElasticsearchDatabase({
+    "hosts": ["http://localhost:9200"],
+    "index": "records",
+    "mappings": {"properties": {"data": {"properties": {"due": {"type": "date"}}}}},
+    "settings": {"number_of_shards": 3},
+})
+```
+
+`mappings` is laid over the declared mapping: a key it names wins and the rest
+are kept, and its `dynamic_templates` are tried first. `settings` replaces the
+default settings. Neither changes an index that already exists. One created by an
+earlier version keeps its 256-character `keyword` sub-fields, past which a string
+is not compared, and any field it detected as a date. Reindex into a new index to
+change either.
 
 ## Testing Utilities
 

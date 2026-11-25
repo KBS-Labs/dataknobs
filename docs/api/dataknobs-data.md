@@ -526,12 +526,13 @@ from dataknobs_data import (
 ### `dataknobs_data.Operator`
 
 `EQ`, `NEQ`, `GT`, `GTE`, `LT`, `LTE`, `IN`, `NOT_IN`, `LIKE`, `NOT_LIKE`,
-`REGEX`, `STARTS_WITH`, `EXISTS`, `NOT_EXISTS`, `BETWEEN`, `NOT_BETWEEN`.
+`REGEX`, `STARTS_WITH`, `CONTAINS`, `NOT_CONTAINS`, `EXISTS`, `NOT_EXISTS`,
+`BETWEEN`, `NOT_BETWEEN`.
 
 The values are the strings a query accepts in place of the member: `"="`,
 `"!="`, `">"`, `">="`, `"<"`, `"<="`, `"in"`, `"not_in"`, `"like"`,
-`"not_like"`, `"regex"`, `"starts_with"`, `"exists"`, `"not_exists"`,
-`"between"`, `"not_between"`.
+`"not_like"`, `"regex"`, `"starts_with"`, `"contains"`, `"not_contains"`,
+`"exists"`, `"not_exists"`, `"between"`, `"not_between"`.
 
 ### `dataknobs_data.SortOrder`
 

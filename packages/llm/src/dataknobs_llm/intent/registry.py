@@ -26,8 +26,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from dataknobs_common.exceptions import OperationError
-from dataknobs_common.registry import PluginRegistry
+from dataknobs_common.exceptions import _written_by_dataknobs
+from dataknobs_common.registry import (
+    PluginRegistry,
+    create_surfacing,
+    create_surfacing_async,
+)
 from dataknobs_llm.intent.composite import CompositeIntentClassifier
 from dataknobs_llm.intent.keyword import KeywordIntentClassifier
 from dataknobs_llm.intent.llm import LLMIntentClassifier
@@ -77,28 +81,30 @@ def create_intent_classifier(
     Raises:
         ValueError: If ``name`` is not registered (the message lists
             every currently registered backend so the typo is
-            self-diagnosing), or if the composite factory's child-spec
-            validation rejects a malformed entry (``classifier:``
-            discriminator missing, child spec not a mapping, child
-            ``classifier:`` name not registered). The classifier
-            factories raise ``ValueError`` as their construction-time
-            contract; ``PluginRegistry.create`` wraps any non-
-            ``OperationError`` factory exception in ``OperationError``,
-            but this shim re-raises the original ``ValueError`` to
-            preserve the historical consumer contract.
-        OperationError: If a non-``ValueError`` exception escapes the
-            backend factory. The originating exception is preserved
-            on ``__cause__``.
+            self-diagnosing), or if a backend factory refuses its config.
+            The historical consumer contract is that a configuration
+            problem arrives as ``ValueError``, and it still does: dataknobs'
+            own refusals (a composite child spec that is not a mapping or
+            names no ``classifier:``, a child name not registered, a
+            composite with no children) arrive as themselves, with their
+            words. A ``ValueError`` or ``ValidationError`` a consumer's
+            factory raised with its own words arrives as a bounded
+            :class:`~dataknobs_common.exceptions.FactoryValueError` --
+            still a ``ValueError`` -- naming the classifier and the error's
+            type, because a factory's text can carry what it was handed.
+            The factory's error is on ``__cause__``.
+        OperationError: If a factory fails some other way, bounded the same
+            way. A factory's ``ResourceError``, ``TimeoutError``,
+            ``ConcurrencyError``, ``SerializationError`` or
+            ``ConfigurationError`` arrives instead as a bounded error of that
+            family. The originating exception is on ``__cause__``.
     """
-    try:
-        return intent_classifier_backends.create(
-            key=name,
-            config=dict(config) if config else {},
-        )
-    except OperationError as exc:
-        if isinstance(exc.__cause__, ValueError):
-            raise exc.__cause__ from None
-        raise
+    return create_surfacing(
+        intent_classifier_backends,
+        subject="intent classifier",
+        key=name,
+        config=dict(config) if config else {},
+    )
 
 
 async def create_intent_classifier_async(
@@ -124,24 +130,15 @@ async def create_intent_classifier_async(
         The constructed :class:`IntentClassifier` instance.
 
     Raises:
-        ValueError: Same shape as the sync
-            :func:`create_intent_classifier` — unknown name OR
-            composite child-spec validation error. The
-            ``OperationError`` wrap from :meth:`PluginRegistry.create_async`
-            is unwrapped when ``__cause__`` is a ``ValueError`` so the
-            historical consumer contract is preserved.
-        OperationError: If a non-``ValueError`` exception escapes the
-            backend factory.
+        ValueError: Same as :func:`create_intent_classifier`.
+        OperationError: Same as :func:`create_intent_classifier`.
     """
-    try:
-        return await intent_classifier_backends.create_async(
-            key=name,
-            config=dict(config) if config else {},
-        )
-    except OperationError as exc:
-        if isinstance(exc.__cause__, ValueError):
-            raise exc.__cause__ from None
-        raise
+    return await create_surfacing_async(
+        intent_classifier_backends,
+        subject="intent classifier",
+        key=name,
+        config=dict(config) if config else {},
+    )
 
 
 # ── Built-in factories ───────────────────────────────────────────────
@@ -189,15 +186,19 @@ def _composite_factory(config: dict[str, Any]) -> IntentClassifier:
     children: list[IntentClassifier] = []
     for spec in child_specs:
         if not isinstance(spec, Mapping):
-            raise ValueError(
-                f"composite classifier child spec must be a mapping, "
-                f"got {type(spec).__name__}: {spec!r}",
+            raise _written_by_dataknobs(
+                ValueError(
+                    f"composite classifier child spec must be a mapping, "
+                    f"got {type(spec).__name__}: {spec!r}",
+                )
             )
         name = spec.get("classifier") or spec.get("name")
         if name is None:
-            raise ValueError(
-                f"composite classifier child spec missing required "
-                f"'classifier' field (or legacy 'name'): {dict(spec)!r}",
+            raise _written_by_dataknobs(
+                ValueError(
+                    f"composite classifier child spec missing required "
+                    f"'classifier' field (or legacy 'name'): {dict(spec)!r}",
+                )
             )
         # Recursion preserved unchanged — uses the (now consolidated)
         # :func:`create_intent_classifier` shim.

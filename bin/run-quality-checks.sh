@@ -50,6 +50,11 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # decision anyone makes from these numbers.
 RUN_START=$(date +%s)
 
+# The pool the unit suites run through and the clock on the status lines.
+source "$PROJECT_ROOT/bin/gate-progress.sh"
+# How a Ctrl-C ends the run.
+source "$PROJECT_ROOT/bin/stop-on-signal.sh"
+
 # Default values
 PACKAGES=""
 SKIP_STYLE="no"
@@ -176,21 +181,22 @@ EOF
     exit 0
 }
 
-# Function to print status
+# The status lines. Each is stamped with the time of day and the time since the
+# run started, so a stage that is slow -- or stuck -- can be seen while it runs.
 print_status() {
-    echo -e "${BLUE}▶${NC} $1"
+    echo -e "${CYAN}$(progress_stamp "$RUN_START")${NC} ${BLUE}▶${NC} $1"
 }
 
 print_success() {
-    echo -e "${GREEN}✓${NC} $1"
+    echo -e "${CYAN}$(progress_stamp "$RUN_START")${NC} ${GREEN}✓${NC} $1"
 }
 
 print_error() {
-    echo -e "${RED}✗${NC} $1"
+    echo -e "${CYAN}$(progress_stamp "$RUN_START")${NC} ${RED}✗${NC} $1"
 }
 
 print_warning() {
-    echo -e "${YELLOW}⚠${NC} $1"
+    echo -e "${CYAN}$(progress_stamp "$RUN_START")${NC} ${YELLOW}⚠${NC} $1"
 }
 
 # Parse command line arguments
@@ -350,6 +356,10 @@ RECORDS_FILE="$OUTPUT_DIR/check-records.jsonl"
 # print_failure_details at the end. Truncated for the reason above.
 FAILED_SUITES_FILE="$OUTPUT_DIR/failed-suites.txt"
 : > "$FAILED_SUITES_FILE"
+
+# Coverage from an earlier run, cleared for the same reason. None of it is
+# committed, so nothing here is evidence an aborted run would lose.
+clear_coverage "$OUTPUT_DIR"
 
 # record_check <name> <exit_code> [--tool T] [--skipped true|false]
 #              --duration <seconds|null> [--field key=<json>]
@@ -618,7 +628,7 @@ set_environment_vars() {
 
 # Function to cleanup resources
 #
-# Reached only through `trap cleanup EXIT INT TERM` below, which shellcheck does
+# Reached only through `trap cleanup EXIT` below, which shellcheck does
 # not read as a call site. Deleting it on the strength of the finding would
 # leave the service teardown unreferenced *and* the trap naming nothing.
 # shellcheck disable=SC2329
@@ -643,7 +653,8 @@ cleanup() {
 }
 
 # Set trap for cleanup on exit
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+stop_on_signals
 
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 case "$RUN_MODE" in
@@ -1131,16 +1142,23 @@ fi
 
 # Documentation checks (PR mode only, skip if no docs changes in pr mode)
 #
-# One condition rather than nested ones, so there is one arm that runs the three
-# checks and one that records them as not run. Three arms reached the second
-# state before — a PR with no doc changes, and every dev run, which does not
-# perform them at all — and each would have needed its own copy of the records.
-if [ "$PR_MODE" = "yes" ] && { [ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ]; }; then
+# Run as a job beside the test suites, below, and recorded once they have ended:
+# the site build reads the tree and needs nothing the suites produce.
+run_docs_checks() {
+    # The verdict is the status file, so an earlier run's must not be there to
+    # read if this one dies before writing its own.
+    rm -f "$OUTPUT_DIR/docs-checks-status.json"
     print_status "Running documentation checks (build, versions, mirrors)..."
     # bin/docs-checks.sh is the single source of truth for the doc-check set.
     # It writes per-check logs (docs-build.log / docs-versions.log /
     # docs-mirror.log) plus docs-checks-status.json into ARTIFACTS_DIR.
+    #
+    # Always 0: the pool this runs in reports the unit suites' verdict, and a
+    # documentation failure is not one of those.
     "$SCRIPT_DIR/docs-checks.sh" --artifacts "$OUTPUT_DIR" || true
+}
+
+record_docs_checks() {
     # Six fields, in a fixed order: three exit codes then three durations.
     # The durations are measured inside docs-checks.sh because this script
     # invokes it once for all three checks, so timing it here could only
@@ -1175,6 +1193,15 @@ except Exception:
         --skipped false --tool docs-update-versions.sh --duration "$DOCS_VERSIONS_SECONDS"
     record_check documentation_mirrors "$DOCS_MIRROR_STATUS" \
         --skipped false --tool docs-mirror-check.py --duration "$DOCS_MIRROR_SECONDS"
+}
+
+# One condition rather than nested ones, so there is one arm that runs the three
+# checks and one that records them as not run. Three arms reached the second
+# state before — a PR with no doc changes, and every dev run, which does not
+# perform them at all — and each would have needed its own copy of the records.
+DOCS_CHECKS_DUE="no"
+if [ "$PR_MODE" = "yes" ] && { [ "$DOCS_CHANGED" = "true" ] || [ "$RUN_MODE" != "pr" ]; }; then
+    DOCS_CHECKS_DUE="yes"
 else
     # Only PR mode announces the skip, because only PR mode was ever going to
     # run them. A dev run reaches here having never offered.
@@ -1223,10 +1250,13 @@ if [ "$SKIP_TESTS" != "yes" ]; then
 
         # Helper: run unit tests for a single package, saving artifacts.
         # Uses per-package coverage filenames to avoid race conditions in concurrent mode.
-        # Args: $1=package name, $2=cov_report_type (optional override)
+        # Args: $1=package name. UNIT_COV_REPORT is the coverage report type.
+        # shellcheck disable=SC2329  # called by run_gate_job
         run_unit_for_pkg() {
             local pkg=$1
-            local cov_report="${2:-$TEST_COV_REPORT}"
+            local cov_report="$UNIT_COV_REPORT"
+            local suite_start
+            suite_start=$(date +%s)
             print_status "Running unit tests for $pkg..."
             local test_exit=0
 
@@ -1256,12 +1286,15 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             # Unset to avoid leaking
             unset COVERAGE_FILE
 
-            if [ $test_exit -ne 0 ] && [ $test_exit -ne 5 ]; then
-                print_error "Unit tests failed for $pkg"
+            if [ "$test_exit" -ne 0 ] && [ "$test_exit" -ne 5 ]; then
+                print_error "Unit tests failed for $pkg ($(format_elapsed "$(elapsed_since "$suite_start")"))"
                 report_failed_suite "$OUTPUT_DIR/unit-test-output-$pkg.txt" "$FAILED_SUITES_FILE"
-                return $test_exit
+                return "$test_exit"
             else
-                print_success "Unit tests passed for $pkg"
+                # Read by longest_suite_first in the next run. Not for one that
+                # failed, which may have stopped early.
+                elapsed_since "$suite_start" > "$OUTPUT_DIR/unit-test-seconds-$pkg.txt"
+                print_success "Unit tests passed for $pkg ($(format_elapsed "$(elapsed_since "$suite_start")"))"
                 return 0
             fi
         }
@@ -1299,58 +1332,17 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         # shellcheck disable=SC2086
         TESTED_PACKAGES_JSON=$(json_array_of $PACKAGES_TO_TEST)
 
-        # Run unit tests
-        print_status "Running unit tests..."
-        _unit_start=$(date +%s)
-        if [ "$RUN_MODE" = "full" ]; then
-            # Full mode: sequential execution
-            for pkg in $PACKAGES_TO_TEST; do
-                if [ -d "packages/$pkg" ]; then
-                    run_unit_for_pkg "$pkg" || UNIT_TEST_STATUS=$?
-                fi
-            done
-        else
-            # PR/All mode: concurrent execution of independent packages
-            # Each package gets its own COVERAGE_FILE and output file to avoid races.
-            # Skip per-package XML reports to avoid write collisions — XML is generated
-            # from combined .coverage data in the coverage combining phase.
-            # Limit concurrency to avoid CPU contention breaking timing-sensitive tests.
-            MAX_CONCURRENT=3
-            unit_pids=()
-            unit_pkgs=()
-            for pkg in $PACKAGES_TO_TEST; do
-                if [ -d "packages/$pkg" ]; then
-                    run_unit_for_pkg "$pkg" "none" &
-                    unit_pids+=($!)
-                    unit_pkgs+=("$pkg")
-
-                    # Throttle: when we hit MAX_CONCURRENT, wait for one to finish
-                    if [ ${#unit_pids[@]} -ge $MAX_CONCURRENT ]; then
-                        # Wait for the oldest job
-                        wait "${unit_pids[0]}" 2>/dev/null || {
-                            UNIT_TEST_STATUS=1
-                        }
-                        unit_pids=("${unit_pids[@]:1}")
-                        unit_pkgs=("${unit_pkgs[@]:1}")
-                    fi
-                fi
-            done
-
-            # Wait for remaining jobs
-            for idx in "${!unit_pids[@]}"; do
-                wait "${unit_pids[$idx]}" 2>/dev/null || {
-                    UNIT_TEST_STATUS=1
-                }
-            done
-        fi
-
         # Workspace guards (see the note by TEST_CMD above). Folded into the
         # unit status rather than given their own so a failure surfaces through
         # the existing summary. Exit 5 is "no tests collected", not a failure.
-        {
+        #
+        # A pool job, so a subshell: the verdict leaves as the return status and
+        # the duration through a file.
+        # shellcheck disable=SC2329  # called by run_gate_job
+        run_workspace_guards() {
+            local guards_start guards_exit=0
+            guards_start=$(date +%s)
             print_status "Running workspace tests..."
-            _guards_start=$(date +%s)
-            workspace_exit=0
             # Through test.sh, like every other suite the gate runs. This called
             # pytest directly — test.sh took a package name and scanned
             # packages/*, so it could not reach a directory belonging to no
@@ -1359,24 +1351,82 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             # test.sh owns the invocation now (see run_workspace_tests there),
             # including the --durations=10 that names the slowest guards.
             #
-            # No $TEST_FLAGS: --parallel would hand a guard suite that shells
-            # out to the linters to xdist for no gain, and --quiet would drop
-            # the durations line this captures the output for.
+            # The parallel flag without the rest of $TEST_FLAGS: --quiet would
+            # drop the durations line this captures the output for. Run
+            # serially the guards outlast every package suite, so they alone
+            # decided how long the unit stage took.
             # Deliberate word splitting — see the waiver above the ruff call.
             # shellcheck disable=SC2086
-            $TEST_CMD workspace -- $PYTEST_ARGS \
-                > "$OUTPUT_DIR/unit-test-output-workspace.txt" 2>&1 || workspace_exit=$?
+            $TEST_CMD workspace $TEST_PARALLEL_FLAG -- $PYTEST_ARGS \
+                > "$OUTPUT_DIR/unit-test-output-workspace.txt" 2>&1 || guards_exit=$?
+            elapsed_since "$guards_start" > "$OUTPUT_DIR/workspace-guards-seconds.txt"
 
-            if [ $workspace_exit -ne 0 ] && [ $workspace_exit -ne 5 ]; then
-                UNIT_TEST_STATUS=$workspace_exit
-                print_error "Workspace tests failed"
+            if [ "$guards_exit" -ne 0 ] && [ "$guards_exit" -ne 5 ]; then
+                print_error "Workspace tests failed ($(format_elapsed "$(elapsed_since "$guards_start")"))"
                 report_failed_suite "$OUTPUT_DIR/unit-test-output-workspace.txt" "$FAILED_SUITES_FILE"
-            else
-                print_success "Workspace tests passed"
+                return "$guards_exit"
             fi
-            WORKSPACE_GUARD_SECONDS=$(elapsed_since "$_guards_start")
+            print_success "Workspace tests passed ($(format_elapsed "$(elapsed_since "$guards_start")"))"
         }
+
+        # One pool job. The @ keeps the two that are not packages from ever
+        # sharing a name with one.
+        # shellcheck disable=SC2329  # called by run_pool, by name
+        run_gate_job() {
+            case "$1" in
+                @workspace) run_workspace_guards || return $? ;;
+                @docs) run_docs_checks ;;
+                *) run_unit_for_pkg "$1" || return $? ;;
+            esac
+        }
+
+        # Run unit tests, the workspace guards and the documentation checks
+        #
+        # Each package gets its own COVERAGE_FILE and output file to avoid races;
+        # the guards and the documentation checks collect no coverage.
+        print_status "Running unit tests..."
+        _unit_start=$(date +%s)
+        if [ "$RUN_MODE" = "full" ]; then
+            # Full mode: sequential execution, with each suite's own XML report.
+            MAX_CONCURRENT=1
+            UNIT_COV_REPORT="$TEST_COV_REPORT"
+        else
+            # PR/All mode: concurrent execution.
+            # Skip per-package XML reports to avoid write collisions — XML is generated
+            # from combined .coverage data in the coverage combining phase.
+            # Limit concurrency to avoid CPU contention breaking timing-sensitive tests.
+            MAX_CONCURRENT=3
+            UNIT_COV_REPORT="none"
+        fi
+
+        # The guards start first, being the widest job; then the documentation
+        # checks, then the packages longest first, so the longest suite is not
+        # left to run alone at the end. An order only:
+        # PACKAGES_TO_TEST stays as it was for the integration loop and the
+        # recorded tested_packages.
+        #
+        # Counted, because an order that came back short would skip suites
+        # and still report success.
+        # Deliberate word splitting — a space-separated set of package names.
+        # shellcheck disable=SC2086
+        UNIT_ORDER=$(longest_suite_first "$PROJECT_ROOT" "$OUTPUT_DIR" $PACKAGES_TO_TEST)
+        if [ "$(echo "$UNIT_ORDER" | wc -w)" -ne "$(echo "$PACKAGES_TO_TEST" | wc -w)" ]; then
+            print_error "Could not order the unit suites: '$PACKAGES_TO_TEST' became '$UNIT_ORDER'"
+            exit 1
+        fi
+        GATE_JOBS="@workspace"
+        if [ "$DOCS_CHECKS_DUE" = "yes" ]; then
+            GATE_JOBS="$GATE_JOBS @docs"
+        fi
+        rm -f "$OUTPUT_DIR/workspace-guards-seconds.txt"
+        # shellcheck disable=SC2086  # two lists of job names, split on purpose
+        run_pool "$MAX_CONCURRENT" run_gate_job $GATE_JOBS $UNIT_ORDER || UNIT_TEST_STATUS=1
         UNIT_TEST_SECONDS=$(elapsed_since "$_unit_start")
+        # Absent only if the guards died before recording it, which the pool
+        # has already reported as a failure; null says it was not measured.
+        if [ -f "$OUTPUT_DIR/workspace-guards-seconds.txt" ]; then
+            WORKSPACE_GUARD_SECONDS=$(cat "$OUTPUT_DIR/workspace-guards-seconds.txt")
+        fi
 
         # Run integration tests (always sequential — shared external services).
         # An empty PACKAGES_TO_TEST makes the loop below iterate zero times, so
@@ -1393,6 +1443,7 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             if [ -d "packages/$pkg" ] && [ -d "packages/$pkg/tests/integration" ]; then
                 print_status "Running integration tests for $pkg..."
                 local_exit=0
+                _suite_start=$(date +%s)
 
                 # Use per-package coverage file
                 export COVERAGE_FILE="$PROJECT_ROOT/.coverage.integration.$pkg"
@@ -1411,10 +1462,10 @@ if [ "$SKIP_TESTS" != "yes" ]; then
 
                 if [ $local_exit -ne 0 ] && [ $local_exit -ne 5 ]; then
                     INTEGRATION_TEST_STATUS=$local_exit
-                    print_error "Integration tests failed for $pkg"
+                    print_error "Integration tests failed for $pkg ($(format_elapsed "$(elapsed_since "$_suite_start")"))"
                     report_failed_suite "$OUTPUT_DIR/integration-test-output-$pkg.txt" "$FAILED_SUITES_FILE"
                 else
-                    print_success "Integration tests passed for $pkg"
+                    print_success "Integration tests passed for $pkg ($(format_elapsed "$(elapsed_since "$_suite_start")"))"
                 fi
 
                 if [ -f "coverage.xml" ]; then
@@ -1624,6 +1675,13 @@ else
         --field "workspace_guards_seconds=null"
     record_check integration_tests 0 \
         --skipped "$INTEGRATION_SKIPPED" --duration null
+    if [ "$DOCS_CHECKS_DUE" = "yes" ]; then
+        run_docs_checks
+    fi
+fi
+
+if [ "$DOCS_CHECKS_DUE" = "yes" ]; then
+    record_docs_checks
 fi
 
 # Coverage, the summary and — for the gate — the signature.
@@ -1694,17 +1752,15 @@ fi
 # generated file that changed on nearly every run, and the single thing the
 # gate ever took from it was this number — which it reports as a warning and
 # never fails on. A float belongs in the summary; the report belongs on disk.
-COVERAGE_PERCENT=$(uv run python -c "
-import xml.etree.ElementTree as ET
-try:
-root = ET.parse('$OUTPUT_DIR/coverage.xml').getroot()
-print(f\"{float(root.attrib.get('line-rate', 0)) * 100:.1f}\")
-except Exception:
-print('null')
-" 2>/dev/null || echo "null")
-# A blank would emit invalid JSON, which would fail the gate for a reason
-# that has nothing to do with the code under test.
-COVERAGE_PERCENT=${COVERAGE_PERCENT:-null}
+#
+# Not an inline program, and nothing hides its stderr: that was one, it stopped
+# parsing, and a swallowed IndentationError read as "no coverage recorded".
+# It prints null itself when the report holds no measurement.
+if ! COVERAGE_PERCENT=$(uv run python "$SCRIPT_DIR/quality-summary.py" coverage \
+    --xml "$OUTPUT_DIR/coverage.xml"); then
+    print_error "Could not read the coverage report — see the error above"
+    exit 1
+fi
 
 # Generate quality summary and signature immediately after coverage.xml is ready.
 # These are the files CI validates and that must be committed — they must not be
@@ -1939,6 +1995,7 @@ uv run python "$SCRIPT_DIR/quality-summary.py" render \
     --summary "$OUTPUT_DIR/quality-summary.json" \
     --mode "$([ "$PR_MODE" = "yes" ] && echo pr || echo dev)" $_render_args
 echo ""
+echo -e "  Total:              $(format_elapsed "$(elapsed_since "$RUN_START")") (finished $(date '+%H:%M:%S'))"
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 
 # Determine overall status (same helper as the quality-summary.json computation,

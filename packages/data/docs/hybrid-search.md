@@ -160,7 +160,7 @@ Uses backend's native hybrid search implementation:
 config = HybridSearchConfig(
     fusion_strategy=FusionStrategy.NATIVE,
 )
-# Falls back to RRF if backend doesn't support native
+# Falls back to client-side RRF if the backend doesn't support native
 ```
 
 ## API Reference
@@ -237,7 +237,10 @@ async def hybrid_search(
 
 ### Elasticsearch
 
-Uses native RRF retriever (Elasticsearch 8.8+):
+Uses the native RRF retriever, on the async backend, where the node's version
+and licence allow it. A node that cannot run one is sent the two searches and
+they are fused client-side; any other failure raises. The sync backend always
+sends the two searches.
 
 ```python
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
@@ -256,9 +259,12 @@ results = await backend.hybrid_search(
 ```
 
 **Implementation:**
-- Text: BM25 multi_match query
+- Text: BM25 multi_match query, on both backends: any word in any of
+  `text_fields` (`content`, `title` and `text` when none are named). A `keyword`
+  field matches only as a whole value, and a field that cannot hold the text (a
+  number field, for a word) matches nothing
 - Vector: kNN search on dense_vector field
-- Fusion: Native RRF retriever
+- Fusion: Native RRF retriever on the async backend, else client-side
 
 ### PostgreSQL
 

@@ -65,32 +65,67 @@ Two keys, shared by both backends, tune this:
 
 ## Index Mapping
 
+Both backends create a missing index with this mapping, plus a `dense_vector`
+field for each configured vector field:
+
 ```json
 {
-  "mappings": {
-    "properties": {
-      "id": {"type": "keyword"},
-      "fields": {"type": "object", "dynamic": true},
-      "metadata": {"type": "object", "dynamic": true},
-      "created_at": {"type": "date"},
-      "updated_at": {"type": "date"}
+  "date_detection": false,
+  "dynamic_templates": [
+    {
+      "data_strings": {
+        "path_match": "data.*",
+        "match_mapping_type": "string",
+        "mapping": {
+          "type": "text",
+          "fields": {"keyword": {"type": "keyword", "ignore_above": 8191}}
+        }
+      }
     }
+  ],
+  "properties": {
+    "id": {"type": "keyword"},
+    "data": {"type": "object", "properties": {}},
+    "metadata": {"type": "object", "enabled": true},
+    "created_at": {"type": "date"},
+    "updated_at": {"type": "date"}
   }
 }
 ```
 
-## Usage Examples
-
-### Full-Text Search
+Both configs take `mappings`, laid over this one, and `settings`, in place of the
+default settings. To have a field compared as time, map it as a date:
 
 ```python
-# Text search across all fields
+db = AsyncElasticsearchDatabase({
+    "hosts": ["http://localhost:9200"],
+    "index": "records",
+    "mappings": {"properties": {"data": {"properties": {"due": {"type": "date"}}}}},
+})
+```
+
+An index that already exists is used as it is, however it is mapped. How a filter
+or sort reaches a field under each mapping, and what an index created by an
+earlier version keeps, are in the
+[API reference](https://kbs-labs.github.io/dataknobs/packages/data/api-reference/#elasticsearch-backend).
+
+## Usage Examples
+
+### Finding a Record by an Element of a List
+
+```python
+# Records whose "tags" list holds "outdoor"
 query = Query(filters=[
-    Filter("_all", Operator.CONTAINS, "sensor malfunction")
+    Filter("tags", Operator.CONTAINS, "outdoor")
 ])
 
 results = db.search(query)
 ```
+
+This relies on `list_fields`, which each document is written with, so it finds
+nothing in a document stored by an earlier version or another client until that
+document is written again. See the
+[API reference](https://kbs-labs.github.io/dataknobs/packages/data/api-reference/#elasticsearch-backend).
 
 ### Aggregations
 
@@ -111,9 +146,32 @@ stats = db.aggregate(aggregation)
 # Efficient bulk indexing
 records = [Record(data) for data in dataset]
 
-# Bulk index with refresh
-db.create_batch(records, refresh="wait_for")
+# Indexed in requests of up to 500 records
+db.create_batch(records)
 ```
+
+## Failures
+
+A missing record is an answer: `read` and `get_version` return `None`, and
+`exists`, `update` and `delete` return `False`. Every other failure raises, on
+both the sync and async backends:
+
+| Failure | Raises |
+|---|---|
+| A request Elasticsearch refuses (a rejected query, a closed, blocked or missing index) | the client's own `elasticsearch.ApiError` subclass, such as `BadRequestError` |
+| No answer from the server | the client's `elasticsearch.TransportError` subclass, such as `ConnectionError` |
+| `create` of an id that exists | `DuplicateRecordError` |
+| A stale `expected_version` | `ConcurrencyError` |
+| An item of a batch that fails | `DatabaseError`; `context["failures"]` lists each item's `id`, `status`, `type` and `reason` |
+| A `create_batch` whose only failures are ids that exist | `DuplicateRecordError` |
+
+A batch is not atomic: when one raises for its items, the items that did not
+fail have been written. `update_batch` and `delete_batch` return `False` for a
+record that does not exist.
+
+Vector search and `create_vector_index` raise `ValueError` for a rejected request
+or a missing index, `RuntimeError` when the server does not answer, and the
+client's own error for anything else.
 
 ## Search Features
 

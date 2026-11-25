@@ -32,7 +32,13 @@ from datetime import UTC, datetime, time
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from dataknobs_common.exceptions import ValidationError
+from dataknobs_common.exceptions import (
+    ValidationError,
+    _given,
+    _given_value,
+    _is_written_by_dataknobs,
+    _written_by_dataknobs,
+)
 from dataknobs_utils.sql_utils import quote_ident
 
 from ..fields import FieldType
@@ -74,10 +80,11 @@ _EQUALITY = frozenset({Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN})
 _RANGES = frozenset({Operator.BETWEEN, Operator.NOT_BETWEEN})
 _MEMBERSHIP = frozenset({Operator.IN, Operator.NOT_IN})
 _STRING_ONLY = frozenset({Operator.LIKE, Operator.NOT_LIKE, Operator.REGEX, Operator.STARTS_WITH})
+_ELEMENTS = frozenset({Operator.CONTAINS, Operator.NOT_CONTAINS})
 _PRESENCE = frozenset({Operator.EXISTS, Operator.NOT_EXISTS})
 #: The negations whose positive compares a bound: ``NOT_LIKE`` is not one, as
 #: ``Filter.matches`` answers it False for a value that is not a string.
-_NEGATIONS = frozenset({Operator.NEQ, Operator.NOT_IN, Operator.NOT_BETWEEN})
+_NEGATIONS = frozenset({Operator.NEQ, Operator.NOT_IN, Operator.NOT_BETWEEN, Operator.NOT_CONTAINS})
 
 _TEXT_TYPE = MappingProxyType({"postgres": "TEXT", "sqlite": "TEXT", "duckdb": "VARCHAR"})
 
@@ -291,17 +298,21 @@ class NativeColumnLayout(ColumnLayout):
         scope: Sequence[Filter] = (),
     ) -> None:
         if not schema.fields:
-            raise ValidationError(
-                "a native layout reads the columns its schema declares, and this schema "
-                "declares none",
-                context={"id_column": id_column},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    "a native layout reads the columns its schema declares, and this schema "
+                    "declares none",
+                    context={"id_column": id_column},
+                )
             )
         reserved = sorted(name for name in schema.fields if name.startswith(PAGE_KEY_PREFIX))
         if reserved:
-            raise ValidationError(
-                f"columns {reserved} begin with {PAGE_KEY_PREFIX!r}, which a stream's page "
-                f"query selects its sort keys as",
-                context={"columns": reserved},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"columns {reserved} begin with {PAGE_KEY_PREFIX!r}, which a stream's page "
+                    f"query selects its sort keys as",
+                    context={"columns": reserved},
+                )
             )
         self._columns: Mapping[str, _Column] = MappingProxyType(
             {
@@ -310,20 +321,24 @@ class NativeColumnLayout(ColumnLayout):
             }
         )
         if id_column not in self._columns:
-            raise ValidationError(
-                f"id_column {id_column!r} is not a declared column; declared: "
-                f"{sorted(self._columns)}",
-                context={"id_column": id_column, "declared": sorted(self._columns)},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"id_column {id_column!r} is not a declared column; declared: "
+                    f"{sorted(self._columns)}",
+                    context={"id_column": id_column, "declared": sorted(self._columns)},
+                )
             )
         key = self._columns[id_column]
         key_type = key_answer(key.field_type, key.sql_type)
         if key_type is None:
-            raise ValidationError(
-                f"id_column {id_column!r} is declared {key.declared}, which cannot key a row: "
-                f"a record's key is the column's text, and engines write that type's text "
-                f"differently, so a key read back would not find its row. Key a native "
-                f"table by a string, text, uuid or integer column",
-                context={"id_column": id_column, "declared": key.declared},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"id_column {id_column!r} is declared {key.declared}, which cannot key a row: "
+                    f"a record's key is the column's text, and engines write that type's text "
+                    f"differently, so a key read back would not find its row. Key a native "
+                    f"table by a string, text, uuid or integer column",
+                    context={"id_column": id_column, "declared": key.declared},
+                )
             )
         #: The key column as the reserved key field compares it: as its text.
         self._key = _Column(key.name, key.quoted, key.field_type, key_type, key.declared)
@@ -349,9 +364,11 @@ class NativeColumnLayout(ColumnLayout):
         column = self._columns.get(field)
         if column is None:
             where = f"table {table!r}" if table else "this native table"
-            raise ValidationError(
-                f"{where} has no declared column {field!r}; declared: {sorted(self._columns)}",
-                context={"table": table, "column": field, "declared": sorted(self._columns)},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"{where} has no declared column {field!r}; declared: {sorted(self._columns)}",
+                    context={"table": table, "column": field, "declared": sorted(self._columns)},
+                )
             )
         return column
 
@@ -393,6 +410,8 @@ class NativeColumnLayout(ColumnLayout):
         if sql_type is None:
             self._refuse_structured(column, spec.operator, None)
             raise AssertionError  # unreachable
+        if spec.operator in _ELEMENTS:
+            return False  # a column holds one value, not a list of them
         if spec.operator in _STRING_ONLY:
             return sql_type.stores_text or sql_type.reads_as_text
         bounds = [sql_type.bind(b) for b in self._bounds(spec.operator, spec.value)]
@@ -407,9 +426,11 @@ class NativeColumnLayout(ColumnLayout):
 
     def _check_scope_filter(self, spec: Filter) -> None:
         if not isinstance(spec, Filter):
-            raise ValidationError(
-                f"a scope is a list of filters, got {type(spec).__name__}",
-                context={"got": type(spec).__name__},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"a scope is a list of filters, got {type(spec).__name__}",
+                    context={"got": type(spec).__name__},
+                )
             )
         column = self._column(spec.field)
         if not self._admits(column, spec):
@@ -422,10 +443,12 @@ class NativeColumnLayout(ColumnLayout):
                 )
             else:
                 outcome = "can match no row, so the store would always be empty"
-            raise ValidationError(
-                f"scope filter {spec.field} {spec.operator.value} {spec.value!r} {outcome}: "
-                f"column {column.name!r} cannot hold that value",
-                context={"column": column.name, "operator": spec.operator.value},
+            raise _written_by_dataknobs(
+                ValidationError(
+                    f"scope filter {spec.field} {spec.operator.value} {_given(spec.value)} {outcome}: "
+                    f"column {column.name!r} cannot hold that value",
+                    context={"column": column.name, "operator": spec.operator.value},
+                )
             )
 
     # -- rendering ------------------------------------------------------------
@@ -467,6 +490,9 @@ class NativeColumnLayout(ColumnLayout):
             self._refuse_structured(column, op, builder.table_name)
             raise AssertionError  # unreachable
 
+        if op in _ELEMENTS:
+            # A column holds one value, and only a list contains anything.
+            return ("FALSE" if op == Operator.CONTAINS else f"{column.quoted} IS NOT NULL"), []
         if op in _STRING_ONLY:
             if not (sql_type.stores_text or sql_type.reads_as_text):
                 # ``Filter.matches`` answers False for a value that is not a
@@ -617,31 +643,37 @@ def _resolve_column(name: str, field_type: Any, metadata: Mapping[str, Any]) -> 
     """A declared column, with the answer for what it holds."""
     member = FieldType.lookup(field_type)
     if member is None:
-        raise ValidationError(
-            f"column {name!r} is declared as {field_type!r}, which is not a field type; "
-            f"one of {[t.value for t in FieldType]}",
-            context={"column": name, "type": field_type},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"column {name!r} is declared as {_given(field_type)}, which is not a field type; "
+                f"one of {[t.value for t in FieldType]}",
+                context={"column": name, "type": _given_value(field_type)},
+            )
         )
     declared = metadata.get(SQL_TYPE_KEY)
     if declared is None:
         return _Column(name, quote_ident(name), member, field_type_answer(member), member.value)
     if not isinstance(declared, str) or not declared:
-        raise ValidationError(
-            f"column {name!r} declares `{SQL_TYPE_KEY}: {declared!r}`; it is the name of a "
-            f"registered SQL type",
-            context={"column": name, SQL_TYPE_KEY: declared},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"column {name!r} declares `{SQL_TYPE_KEY}: {_given(declared)}`; it is the name of a "
+                f"registered SQL type",
+                context={"column": name, SQL_TYPE_KEY: _given_value(declared)},
+            )
         )
     sql_type = sql_types.get_optional(declared)
     if sql_type is None:
-        raise ValidationError(
-            f"column {name!r} declares `{SQL_TYPE_KEY}: {declared}`, which is not registered; "
-            f"registered: {sorted(sql_types.list_keys())}. Register it with "
-            f"`sql_types.register({declared!r}, SqlType(...))`",
-            context={
-                "column": name,
-                SQL_TYPE_KEY: declared,
-                "registered": sorted(sql_types.list_keys()),
-            },
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"column {name!r} declares `{SQL_TYPE_KEY}: {declared}`, which is not registered; "
+                f"registered: {sorted(sql_types.list_keys())}. Register it with "
+                f"`sql_types.register({declared!r}, SqlType(...))`",
+                context={
+                    "column": name,
+                    SQL_TYPE_KEY: declared,
+                    "registered": sorted(sql_types.list_keys()),
+                },
+            )
         )
     return _Column(name, quote_ident(name), member, sql_type, declared)
 
@@ -664,9 +696,11 @@ def resolve_layout(
     """
     layout = value or "jsonb"
     if layout not in LAYOUTS:
-        raise ValidationError(
-            f"{prefix}`layout:` is one of {list(LAYOUTS)}, got {layout!r}",
-            context={**(context or {}), "layout": layout},
+        raise _written_by_dataknobs(
+            ValidationError(
+                f"{prefix}`layout:` is one of {list(LAYOUTS)}, got {_given(layout)}",
+                context={**(context or {}), "layout": _given_value(layout)},
+            )
         )
     return str(layout)
 
@@ -710,7 +744,11 @@ def read_layout_config(
     base: dict[str, Any] = dict(context or {})
 
     def refuse(message: str, **extra: Any) -> ValidationError:
-        return ValidationError(f"{prefix}{message}", context={**base, **extra})
+        # Every refusal here names what the configuration wrote, or repeats a
+        # refusal dataknobs wrote; so they are shown to its author whole.
+        return _written_by_dataknobs(
+            ValidationError(f"{prefix}{message}", context={**base, **extra})
+        )
 
     layout = resolve_layout(config.get("layout"), prefix=prefix, context=base)
 
@@ -755,18 +793,20 @@ def read_layout_config(
                 scope.append(Filter.from_dict(dict(entry)))
             except (KeyError, TypeError, ValueError) as e:
                 raise refuse(
-                    f"`scope:` entry {dict(entry)!r} is not a filter "
+                    f"`scope:` entry {_given(dict(entry))} is not a filter "
                     f"(`{{field, operator, value}}`): {e}",
-                    entry=dict(entry),
+                    entry=_given_value(dict(entry)),
                 ) from e
         else:
             raise refuse(
-                f"`scope:` entry {entry!r} is not a filter (`{{field, operator, value}}`)",
-                entry=entry,
+                f"`scope:` entry {_given(entry)} is not a filter (`{{field, operator, value}}`)",
+                entry=_given_value(entry),
             )
     if schema is None:
         raise refuse("`layout: native` needs a `schema:` declaring the table's columns")
     try:
         return NativeColumnLayout(schema, id_column=id_column, scope=scope)
     except ValidationError as e:
-        raise refuse(str(e), **dict(e.context or {})) from e
+        if _is_written_by_dataknobs(e):
+            raise refuse(str(e), **dict(e.context or {})) from e
+        raise refuse(f"the native layout refused its schema ({type(e).__name__})") from e

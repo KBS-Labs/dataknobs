@@ -46,7 +46,8 @@ This guide covers the environment variables used throughout the DataKnobs projec
 
 - **`UV_SYSTEM_PYTHON`** - Use system Python for UV
 - **`UV_PYTHON_VERSION`** - Python version for UV
-- **`PYTEST_WORKERS`** - Number of pytest workers for parallel testing
+- **`PYTEST_WORKERS`** - Number of pytest workers for parallel testing (default: 8 for the workspace guards, 4 for a package)
+- **`COVERAGE_CORE`** - Coverage.py's measurement core, as set by `bin/test.sh` (default: `sysmon`; `ctrace` for the C trace function)
 - **`MKDOCS_PORT`** - Port for MkDocs server (default: 8000)
 
 ### Test Environment Variables

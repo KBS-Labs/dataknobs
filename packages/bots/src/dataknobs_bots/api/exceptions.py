@@ -81,16 +81,17 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Mapping
-from datetime import UTC, date, datetime, time, timedelta
+from collections.abc import Awaitable, Callable, Mapping
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
 from functools import partial
 from pathlib import Path, PurePath
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, TypeVar
 from uuid import UUID
 
+from dataknobs_common.clock import now_iso
 from dataknobs_common.exceptions import (
     ConcurrencyError as CommonConcurrencyError,
 )
@@ -113,10 +114,19 @@ from dataknobs_common.exceptions import (
     DottedPathTypeError,
 )
 from dataknobs_common.exceptions import (
+    FactoryValueError as CommonFactoryValueError,
+)
+from dataknobs_common.exceptions import (
     NotFoundError as CommonNotFoundError,
 )
 from dataknobs_common.exceptions import (
     OperationError as CommonOperationError,
+)
+from dataknobs_common.exceptions import (
+    PluginConfigError as CommonPluginConfigError,
+)
+from dataknobs_common.exceptions import (
+    PluginUnavailableError as CommonPluginUnavailableError,
 )
 from dataknobs_common.exceptions import (
     RateLimitError as CommonRateLimitError,
@@ -136,8 +146,11 @@ from dataknobs_common.exceptions import (
 from dataknobs_common.transitions import InvalidTransitionError
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI, HTTPException, Request
+    from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException
+
+_HandledError = TypeVar("_HandledError", bound=Exception)
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +209,7 @@ def _jsonable(value: Any, _depth: int = 0) -> Any:
     actually holds when it fails do the opposite: a SQLAlchemy ``Engine``
     renders as ``Engine(postgresql://user:pw@host/db)`` and a psycopg2
     connection quotes its DSN, both deliberately, because a repr is a
-    debugging aid — written for a log, not for a response body. Five rows in
+    debugging aid — written for a log, not for a response body. Eight rows in
     the default policy disclose ``context``.
 
     The allow-list keeps the cases where withholding would cost a real
@@ -324,7 +337,7 @@ def _error_body(
         "error": error_code,
         "message": message,
         "detail": detail,
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": now_iso(),
     }
 
 
@@ -581,14 +594,14 @@ class ErrorPolicy(NamedTuple):
 
 
 #: The default type -> policy mapping, resolved by MRO walk (see
-#: :func:`resolve_error_policy`). Fifteen entries govern more than fifty
+#: :func:`resolve_error_policy`). Eighteen entries govern more than fifty
 #: reachable classes: every ``DataknobsError`` subclass the other packages
 #: define resolves to its nearest listed ancestor, so ``RecordNotFoundError``
 #: returns 404 without appearing here. An exact-type table would cover the
-#: fifteen and silently 500 the rest -- which is the behaviour this handler
+#: eighteen and silently 500 the rest -- which is the behaviour this handler
 #: replaces.
 #:
-#: Fourteen come from ``dataknobs_common.exceptions``; the fifteenth,
+#: Seventeen come from ``dataknobs_common.exceptions``; the eighteenth,
 #: ``InvalidTransitionError``, is from ``dataknobs_common.transitions``. Any
 #: count here is checked against the shipped mapping by the parity test, so
 #: the two cannot drift.
@@ -615,6 +628,31 @@ DEFAULT_ERROR_POLICY: Mapping[type[DataknobsError], ErrorPolicy] = MappingProxyT
         # its documented schema), or `non_string_keys`. Reached on a route when
         # a caller's own config (a tenant's bot config) does not fit its class.
         CommonConfigFieldError: ErrorPolicy(422, True, True),
+        # The same refusal, raised while a registry built a plugin from the
+        # caller's config -- a tenant's knowledge-base, memory or grounded
+        # source section. message: "Failed to create plugin '<key>': " and the
+        # refusal's text. context: the refusal's, plus `key` (the plugin the
+        # config named) and `registry`. A factory's own error never takes this
+        # type: the registry recognises a refusal by a mark only
+        # `StructuredConfig` sets, and bounds everything else.
+        #
+        # Without this row it would still resolve to the `ConfigFieldError`
+        # row above, which comes first in its MRO; the row is here because
+        # every common type is given one. It also means an override of
+        # `ConfigFieldError` does not reach this type: a deployment tightening
+        # one should tighten both.
+        CommonPluginConfigError: ErrorPolicy(422, True, True),
+        # A bounded stand-in for a `ValueError` a plugin factory raised with its
+        # own words -- a tenant's memory, knowledge-base or source section that
+        # the backend refused. message: "Failed to create <subject> '<key>'
+        # (<type>)", which names the plugin and the error's type and never the
+        # factory's text, since a factory's text can carry the connection URL
+        # it was handed. context: `key`, `registry`, `cause_type`. The factory's
+        # error is on `__cause__`, which the log line carries.
+        #
+        # Without this row it would resolve to `ValidationError`'s, which is
+        # the same; the row is here because every common type is given one.
+        CommonFactoryValueError: ErrorPolicy(422, True, True),
         # context: `scope`, which the caller must act on, and `user_id`. That id is
         # the caller's own, so returning it to them discloses nothing new -- unless
         # a route attempts access on behalf of a third party, where it would.
@@ -640,6 +678,20 @@ DEFAULT_ERROR_POLICY: Mapping[type[DataknobsError], ErrorPolicy] = MappingProxyT
         # `available_keys`, the registry's entire keyspace -- a "did you mean" for
         # a library caller and an inventory listing for an HTTP one.
         CommonNotFoundError: ErrorPolicy(404, True, False),
+        # A plugin a registry knows of but cannot build in this install -- a
+        # tenant's memory or knowledge-base section naming a backend whose
+        # optional dependency is missing. message: "<kind> '<key>' is not
+        # available here: <reason>". The reason is whatever the code that
+        # declared the key unavailable wrote, never the caller's config:
+        # dataknobs' own backends name the missing module and how to install
+        # it, and keep an import error's text -- which can carry an install
+        # path -- for the log. A deployment declaring its own backends
+        # unavailable owns the reasons it writes. context: `available`, the
+        # registry's keyspace, for the same reason as its parent's row.
+        #
+        # Without this row it would resolve to `NotFoundError`'s, which is the
+        # same; the row is here because every common type is given one.
+        CommonPluginUnavailableError: ErrorPolicy(404, True, False),
         # message: that something timed out, and usually after how long. context:
         # the timeout value -- but this type's own documented example puts the SQL
         # query there too, so a raiser following it disclosed the query.
@@ -773,7 +825,7 @@ def _error_response(
     status_code: int,
     content: dict[str, Any],
     headers: dict[str, str] | None = None,
-) -> JSONResponse:  # type: ignore[name-defined]
+) -> JSONResponse:
     """Build the JSON response every handler in this module returns.
 
     Split from :func:`_error_body` so ``api_error_handler`` can keep routing
@@ -822,9 +874,9 @@ def _error_response(
 
 
 async def api_error_handler(
-    request: Request,  # type: ignore[name-defined]
+    request: Request,
     exc: APIError,
-) -> JSONResponse:  # type: ignore[name-defined]
+) -> JSONResponse:
     """Handle API errors with standardized response format.
 
     Args:
@@ -888,11 +940,11 @@ async def api_error_handler(
 
 
 async def dataknobs_error_handler(
-    request: Request,  # type: ignore[name-defined]
+    request: Request,
     exc: DataknobsError,
     *,
     table: Mapping[type[DataknobsError], ErrorPolicy] | None = None,
-) -> JSONResponse:  # type: ignore[name-defined]
+) -> JSONResponse:
     """Handle a DataKnobs error according to its resolved policy.
 
     Without this handler every ``DataknobsError`` that is not an ``APIError``
@@ -957,17 +1009,22 @@ async def dataknobs_error_handler(
 
 
 async def http_exception_handler(
-    request: Request,  # type: ignore[name-defined]
-    exc: HTTPException,  # type: ignore[name-defined]
-) -> JSONResponse:  # type: ignore[name-defined]
-    """Handle FastAPI HTTP exceptions.
+    request: Request,
+    exc: HTTPException,
+) -> JSONResponse:
+    """Handle an HTTP exception, whether the router or the application raised it.
+
+    Typed as Starlette's ``HTTPException`` because that is what the router
+    raises for an unknown path or a method a route does not take; FastAPI's
+    ``HTTPException`` is a subclass, so one handler answers both.
 
     Args:
         request: FastAPI request object
         exc: HTTP exception
 
     Returns:
-        JSON response with error details
+        JSON response with error details, carrying the exception's headers: a
+        405's ``Allow``, a 401's ``WWW-Authenticate``, whatever the raiser set.
     """
     return _error_response(
         status_code=exc.status_code,
@@ -976,13 +1033,14 @@ async def http_exception_handler(
             message=str(exc.detail),
             detail={},
         ),
+        headers=dict(exc.headers) if exc.headers else None,
     )
 
 
 async def general_exception_handler(
-    request: Request,  # type: ignore[name-defined]
+    request: Request,
     exc: Exception,
-) -> JSONResponse:  # type: ignore[name-defined]
+) -> JSONResponse:
     """Handle unexpected exceptions.
 
     Args:
@@ -1054,8 +1112,34 @@ def _reject_unreachable_policy_keys(
             )
 
 
+def _add_handler(
+    app: FastAPI,
+    exc_type: type[_HandledError],
+    handler: Callable[[Request, _HandledError], Awaitable[JSONResponse]],
+) -> None:
+    """Register ``handler`` for ``exc_type``, with the pairing checked.
+
+    Starlette types every handler as taking ``Exception``, because one
+    registry holds handlers for every type; it guarantees the narrower type
+    only at run time, by calling a handler for instances of the class it was
+    registered under. This states that guarantee where the type checker can
+    see it, so a handler registered under a class it cannot take is a type
+    error here rather than an ``AttributeError`` in production.
+    """
+
+    async def handle(request: Request, exc: Exception) -> JSONResponse:
+        if not isinstance(exc, exc_type):
+            raise TypeError(
+                f"the handler for {exc_type.__name__} was called with "
+                f"{type(exc).__name__}, which Starlette does not do"
+            ) from exc
+        return await handler(request, exc)
+
+    app.add_exception_handler(exc_type, handle)
+
+
 def register_exception_handlers(
-    app: FastAPI,  # type: ignore[name-defined]
+    app: FastAPI,
     *,
     error_policy: Mapping[type[DataknobsError], ErrorPolicy] | None = None,
 ) -> Mapping[type[DataknobsError], ErrorPolicy]:
@@ -1108,7 +1192,7 @@ def register_exception_handlers(
         API exception's MRO, which is what keeps ``api_error_handler``
         responsible for them.
     """
-    from fastapi import HTTPException
+    from starlette.exceptions import HTTPException
 
     table = dict(DEFAULT_ERROR_POLICY)
     if error_policy:
@@ -1117,9 +1201,9 @@ def register_exception_handlers(
 
     bound = partial(dataknobs_error_handler, table=table)
 
-    app.add_exception_handler(APIError, api_error_handler)
-    app.add_exception_handler(DataknobsError, bound)
-    app.add_exception_handler(HTTPException, http_exception_handler)
-    app.add_exception_handler(Exception, general_exception_handler)
+    _add_handler(app, APIError, api_error_handler)
+    _add_handler(app, DataknobsError, bound)
+    _add_handler(app, HTTPException, http_exception_handler)
+    _add_handler(app, Exception, general_exception_handler)
 
     return MappingProxyType(table)

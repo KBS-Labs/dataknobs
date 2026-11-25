@@ -33,6 +33,7 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -53,9 +54,8 @@ from .models import (
     ArtifactStatus,
     ArtifactTypeDefinition,
     _generate_artifact_id,
-    _now_iso,
 )
-from .provenance import ProvenanceRecord, RevisionRecord, create_provenance
+from .provenance import ProvenanceRecord, RevisionRecord, create_provenance, now_iso
 from .transitions import validate_transition
 
 logger = logging.getLogger(__name__)
@@ -450,9 +450,12 @@ class ArtifactRegistry:
                 triggered_by=triggered_by,
             )
 
-            # Build new provenance from current
-            new_provenance = ProvenanceRecord.from_dict(current.provenance.to_dict())
-            new_provenance.revision_history.append(revision)
+            # The records are frozen: the revision is a new record, and the
+            # superseded version keeps the provenance it had.
+            new_provenance = dataclasses.replace(
+                current.provenance,
+                revision_history=(*current.provenance.revision_history, revision),
+            )
 
             new_artifact = Artifact(
                 id=artifact_id,
@@ -520,7 +523,7 @@ class ArtifactRegistry:
         validate_transition(artifact.status, status)
 
         artifact.status = status
-        artifact.updated_at = _now_iso()
+        artifact.updated_at = now_iso()
         await self._store_artifact(artifact)
 
         for hook in self._on_status_change_hooks:

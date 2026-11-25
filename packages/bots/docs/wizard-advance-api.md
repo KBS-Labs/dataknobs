@@ -105,6 +105,14 @@ Property returning the name of the wizard's start stage.
 
 Build wizard metadata from state without advancing. Useful for initial page renders or status checks.
 
+### `WizardReasoning.serialize_state(state)`
+
+The stored form of a state: the `fsm_state` a conversational save writes for it, as a dict `json.dumps(..., allow_nan=False)` can write. Memory banks and the artifact are not part of it. See [State Persistence](#state-persistence).
+
+### `WizardReasoning.ephemeral_keys`
+
+Property returning the keys this wizard never stores: `DEFAULT_EPHEMERAL_KEYS`, `settings.ephemeral_keys` and `settings.per_turn_keys`.
+
 ## Navigation
 
 ```python
@@ -120,18 +128,31 @@ result = await reasoning.advance({}, state, navigation="restart")
 
 ## State Persistence
 
-The caller is responsible for persisting `WizardState` between calls. Use `to_dict()` / `from_dict()` for safe round-trip serialization:
+The caller is responsible for persisting `WizardState` between calls. Serialize with `reasoning.serialize_state(state)` and restore with `WizardState.from_dict()`:
 
 ```python
 import json
 
 # Save
-state_dict = state.to_dict()
-json_str = json.dumps(state_dict)
+state_dict = reasoning.serialize_state(state)
+json_str = json.dumps(state_dict, allow_nan=False)
 
 # Restore
 state = WizardState.from_dict(json.loads(json_str))
 ```
+
+`serialize_state` writes the `fsm_state` a conversational save writes: keys the
+wizard never stores are left out (the framework's own, such as `_message` and
+`_intent`, plus `settings.ephemeral_keys` and `settings.per_turn_keys`), a value
+holding a live object is left out whole, and the rest is written converted (an
+`Enum` as its value, a `datetime` as its ISO text, a set as a sorted list, a NaN
+as `None`). The same applies to the subflow stack's saved parent data and to each
+transition's data snapshot. It does not change `state`, and shares no container
+with it. Memory banks and the artifact, which a conversational save persists
+beside `fsm_state`, are not included.
+
+`state.to_dict()` applies the same rule, but knows only the framework's ephemeral
+keys; `serialize_state(state)` is `state.to_dict(reasoning.ephemeral_keys)`.
 
 ## Hooks
 
@@ -233,6 +254,6 @@ async def advance_wizard(
         "completed": result.completed,
         "missing_fields": sorted(result.missing_fields) if result.missing_fields is not None else None,
         "changed_fields": sorted(result.changed_fields) if result.changed_fields is not None else None,
-        "state": result.state.to_dict(),
+        "state": reasoning.serialize_state(result.state),
     }
 ```

@@ -86,7 +86,8 @@ def _ollama_stub(
             """Silence the handler's per-request stderr noise."""
 
     server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # ``shutdown`` waits out one poll, half a second unless told otherwise.
+    thread = threading.Thread(target=lambda: server.serve_forever(0.01), daemon=True)
     thread.start()
     try:
         yield server.server_address[0], server.server_address[1]

@@ -735,6 +735,17 @@ class SyncPostgresDatabase(
         # migrator's INSERT bulk fast-path is safe.
         return True
 
+    def _existing_ids(self, ids: list[str]) -> set[str]:
+        """Which of ``ids`` are stored, asked in one statement."""
+        if not ids:
+            return set()
+        return {row["id"] for row in self._rows(*self.query_builder.build_existing_ids_query(ids))}
+
+    def _colliding_id(self, records: list[Record], default: str) -> str:
+        """The first of ``records``' ids that is stored, or ``default`` if none is."""
+        stored = self._existing_ids([r.id for r in records if r.id])
+        return next((r.id for r in records if r.id in stored), default)
+
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently using a single query.
 
@@ -776,8 +787,7 @@ class SyncPostgresDatabase(
         try:
             self.db.query(query, params_dict)
         except psycopg2.errors.UniqueViolation as e:
-            colliding = next((r.id for r in records if r.id and self.exists(r.id)), ids[0])
-            raise DuplicateRecordError(colliding) from e
+            raise DuplicateRecordError(self._colliding_id(records, ids[0])) from e
         except psycopg2.IntegrityError as e:
             # No id: a batch INSERT is one statement, and the driver names the
             # constraint rather than the row that tripped it.
@@ -984,8 +994,7 @@ class SyncPostgresDatabase(
         try:
             self.db.execute(sql, params)
         except psycopg2.errors.UniqueViolation as e:
-            colliding = next((r.id for r in records if r.id and self.exists(r.id)), ids[0])
-            raise DuplicateRecordError(colliding) from e
+            raise DuplicateRecordError(self._colliding_id(records, ids[0])) from e
         except psycopg2.IntegrityError as e:
             raise constraint_violation_error() from e
         return ids
@@ -1866,6 +1875,14 @@ class AsyncPostgresDatabase(
         async with self._require_pool().acquire() as conn:
             return {row["id"] for row in await conn.fetch(query, *params)}
 
+    async def _colliding_id(self, records: list[Record], default: str) -> str:
+        """The first of ``records``' ids that is stored, or ``default`` if none is.
+
+        Asked on a fresh connection, so never while a pinned one is held.
+        """
+        stored = await self._existing_ids([r.id for r in records if r.id])
+        return next((r.id for r in records if r.id in stored), default)
+
     async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
         """Create multiple records efficiently, in one transaction.
 
@@ -1923,8 +1940,7 @@ class AsyncPostgresDatabase(
             # asked before writing; a collision it did not see is reported as
             # the first batch id while the outer transaction rolls back.
             if _tx is None:
-                stored = await self._existing_ids([r.id for r in records if r.id])
-                colliding = next((r.id for r in records if r.id in stored), colliding)
+                colliding = await self._colliding_id(records, colliding)
             raise DuplicateRecordError(colliding) from e
         except asyncpg.exceptions.IntegrityConstraintViolationError as e:
             raise constraint_violation_error() from e
@@ -2388,12 +2404,7 @@ class AsyncPostgresDatabase(
                     columns=["id", "data", "metadata"],
                 )
         except asyncpg.exceptions.UniqueViolationError as e:
-            colliding = ids[0]
-            for record in records:
-                if record.id and await self.exists(record.id):
-                    colliding = record.id
-                    break
-            raise DuplicateRecordError(colliding) from e
+            raise DuplicateRecordError(await self._colliding_id(records, ids[0])) from e
         except asyncpg.exceptions.IntegrityConstraintViolationError as e:
             raise constraint_violation_error() from e
 

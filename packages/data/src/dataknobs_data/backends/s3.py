@@ -7,16 +7,21 @@ from __future__ import annotations
 
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import UTC, datetime
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.clock import now_iso, utc_now
 from dataknobs_common.aws import AwsSessionConfig
 from dataknobs_common.structured_config import StructuredConfigConsumer
 
 from dataknobs_data.database import SyncDatabase, version_conflict_error
 from dataknobs_data.exceptions import DuplicateRecordError
-from dataknobs_data.pooling.s3 import create_boto3_s3_client, is_s3_conditional_conflict
+from dataknobs_data.pooling.s3 import (
+    create_boto3_s3_client,
+    is_s3_conditional_conflict,
+    is_s3_missing_object,
+)
 from dataknobs_data.query import Query, is_storage_key_field
 from dataknobs_data.query_logic import ComplexQuery
 from dataknobs_data.records import Record
@@ -223,7 +228,7 @@ class SyncS3Database(
         # Set metadata
         record_copy.metadata = record_copy.metadata or {}
         record_copy.metadata["id"] = storage_id
-        now = datetime.now(UTC)
+        now = utc_now()
         record_copy.metadata["created_at"] = now.isoformat()
         record_copy.metadata["updated_at"] = now.isoformat()
 
@@ -317,10 +322,11 @@ class SyncS3Database(
         # Preserve and update metadata
         record.metadata = record.metadata or {}
         record.metadata["id"] = id
-        record.metadata["created_at"] = existing_metadata.get(
-            "created_at", datetime.now(UTC).isoformat()
-        )
-        record.metadata["updated_at"] = datetime.now(UTC).isoformat()
+        # One read stamps both, so a record stored without a ``created_at``
+        # gets the same instant as its ``updated_at``.
+        now = now_iso()
+        record.metadata["created_at"] = existing_metadata.get("created_at", now)
+        record.metadata["updated_at"] = now
 
         # Update the object
         obj_data = self._record_to_s3_object(record)
@@ -411,20 +417,7 @@ class SyncS3Database(
             List of all record IDs
         """
         self._check_connection()
-        record_ids = []
-
-        # Use paginator for large buckets
-        paginator = self.s3_client.get_paginator("list_objects_v2")
-        page_iterator = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
-
-        for page in page_iterator:
-            if "Contents" in page:
-                for obj in page["Contents"]:
-                    key = obj["Key"]
-                    # Extract record ID from key
-                    if key.startswith(self.prefix) and key.endswith(".json"):
-                        record_id = key[len(self.prefix) : -5]  # Remove prefix and .json
-                        record_ids.append(record_id)
+        record_ids = [key[len(self.prefix) : -len(".json")] for key in self._iter_keys()]
 
         logger.debug(f"Listed {len(record_ids)} records from S3")
         return record_ids
@@ -461,67 +454,76 @@ class SyncS3Database(
         # offset / limit / projection — the single canonical implementation
         # every backend shares (it correctly orders falsy sort values such
         # as a numeric ``0``).
-        results: list[tuple[str, Record]] = []
-        paginator = self.s3_client.get_paginator("list_objects_v2")
-        pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
-
-        for page in pages:
-            if "Contents" not in page:
-                continue
-
-            # Fetch objects in parallel
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = []
-                for obj in page["Contents"]:
-                    if obj["Key"].endswith(".json"):
-                        future = executor.submit(self._fetch_and_filter, obj["Key"], query)
-                        futures.append(future)
-
-                for future in as_completed(futures):
-                    record = future.result()
-                    if record:
-                        results.append((record.id or "", record))
+        results = [(record.id or "", record) for record in self._fetch_matching(query)]
 
         # Records are freshly deserialized from S3 (no shared aliasing), so
         # ``ensure_record_id`` inside the helper is the only copy needed.
         return self._process_search_results(results, query, deep_copy=False)
 
+    def _iter_keys(self, page_size: int | None = None) -> Iterator[str]:
+        """Every record's object key, in key order."""
+        params: dict[str, Any] = {"Bucket": self.bucket, "Prefix": self.prefix}
+        if page_size is not None:
+            params["MaxKeys"] = page_size
+        paginator = self.s3_client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(**params):
+            for obj in page.get("Contents", ()):
+                if obj["Key"].endswith(".json"):
+                    yield obj["Key"]
+
+    def _fetch_matching(self, query: Query, page_size: int | None = None) -> Iterator[Record]:
+        """The records matching ``query``'s filters, in key order.
+
+        Reads up to ``max_pool_connections`` objects ahead of the caller, so
+        one that stops early has fetched at most that many it did not use.
+        """
+        pending: deque[Future[Record | None]] = deque()
+        executor = ThreadPoolExecutor(max_workers=self.max_workers)
+        try:
+            for key in self._iter_keys(page_size):
+                pending.append(executor.submit(self._fetch_and_filter, key, query))
+                if len(pending) >= self.max_workers:
+                    record = pending.popleft().result()
+                    if record is not None:
+                        yield record
+            while pending:
+                record = pending.popleft().result()
+                if record is not None:
+                    yield record
+        finally:
+            executor.shutdown(cancel_futures=True)
+
     def _fetch_and_filter(self, key: str, query: Query) -> Record | None:
-        """Fetch an object and apply query filters."""
+        """The record at ``key``, or ``None`` when ``query`` does not match it.
+
+        ``None`` also when the object was deleted after it was listed. Any
+        other failure is raised: a result that leaves out a record it could
+        not read is indistinguishable from one that had nothing to leave out.
+        """
         try:
             response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
-            body = response["Body"].read()
-            obj_data = json.loads(body)
-            record = self._s3_object_to_record(obj_data)
+        except self.ClientError as e:
+            if is_s3_missing_object(e):
+                return None
+            raise
+        record = self._s3_object_to_record(json.loads(response["Body"].read()))
 
-            # Apply filters
-            for filter in query.filters:
-                # The reserved storage-key field routes to the storage key.
-                if is_storage_key_field(filter.field):
-                    field_value = record.id
-                else:
-                    field_value = record.get_value(filter.field)
-                if not filter.matches(field_value):
-                    return None
+        for filter in query.filters:
+            # The reserved storage-key field routes to the storage key.
+            if is_storage_key_field(filter.field):
+                field_value = record.id
+            else:
+                field_value = record.get_value(filter.field)
+            if not filter.matches(field_value):
+                return None
 
-            return record
-        except Exception as e:
-            logger.warning(f"Error fetching {key}: {e}")
-            return None
+        return record
 
     def _count_all(self) -> int:
         """Count all records in S3."""
         self._check_connection()
 
-        count = 0
-        paginator = self.s3_client.get_paginator("list_objects_v2")
-        pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
-
-        for page in pages:
-            if "Contents" in page:
-                count += sum(1 for obj in page["Contents"] if obj["Key"].endswith(".json"))
-
-        return count
+        return sum(1 for _ in self._iter_keys())
 
     def clear(self) -> int:
         """Clear all records from S3."""
@@ -558,31 +560,7 @@ class SyncS3Database(
         self._check_connection()
         config = config or StreamConfig()
 
-        # List objects and stream them
-        paginator = self.s3_client.get_paginator("list_objects_v2")
-        pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
-
-        batch = []
-        for page in pages:
-            if "Contents" not in page:
-                continue
-
-            for obj in page["Contents"]:
-                if not obj["Key"].endswith(".json"):
-                    continue
-
-                record = self._fetch_and_filter(obj["Key"], query or Query())
-                if record:
-                    batch.append(record)
-
-                    if len(batch) >= config.batch_size:
-                        for r in batch:
-                            yield r
-                        batch = []
-
-        # Yield remaining records
-        for r in batch:
-            yield r
+        yield from self._fetch_matching(query or Query(), page_size=config.batch_size)
 
     def stream_write(
         self, records: Iterator[Record], config: StreamConfig | None = None

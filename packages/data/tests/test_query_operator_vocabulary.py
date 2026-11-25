@@ -117,7 +117,7 @@ class TestTheQueryBuilderReadsTheSameVocabulary:
 
     def test_an_unknown_spelling_is_refused_here_too(self) -> None:
         with pytest.raises(ValueError, match="operator"):
-            QueryBuilder().where("colour", "contains", "blue")
+            QueryBuilder().where("colour", "matches", "blue")
 
 
 class TestAnUnknownSpellingIsRefused:
@@ -127,7 +127,7 @@ class TestAnUnknownSpellingIsRefused:
             "ne",  # the mongo/elasticsearch spelling of !=
             "eq",  # ...and of =
             "gt",
-            "contains",
+            "matches",
             "",
             "  ",
         ],

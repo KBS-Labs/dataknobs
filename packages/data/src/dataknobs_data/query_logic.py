@@ -103,9 +103,8 @@ class LogicCondition(Condition):
     ``NOT(Filter("colour", Operator.EQ, "blue"))`` matches a record with no
     colour, or a ``null`` one, because that record does not match
     ``colour == "blue"``. ``Filter("colour", Operator.NEQ, "blue")`` asks for a
-    colour that is not ``"blue"``, and matches neither. Every backend answers
-    a ``ComplexQuery`` as :meth:`matches` does, apart from the Elasticsearch
-    rendering of a negated operator, which keeps a document without the field.
+    colour that is not ``"blue"``, and matches neither. Every backend combines
+    the conditions of a ``ComplexQuery`` as :meth:`matches` does.
     """
 
     operator: LogicOperator

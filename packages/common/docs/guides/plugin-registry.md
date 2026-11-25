@@ -58,7 +58,7 @@ handler = handlers.create(config={"handler_type": "fast", "timeout": 5})
 | `strip_config_key` | `bool` | `False` | Remove the key field from config before passing it to the factory, when `key` is not given. An explicit `key=` leaves the config as given |
 | `on_first_access` | `Callable \| None` | `None` | Lazy init callback (supports re-entrant `register()` calls) |
 | `not_found_kind` | `str \| None` | `None` | Opt-in kind label rendered into the not-found error from `create()` / `create_async()`. When set (e.g. `"event bus backend"`), the message becomes `"Unknown event bus backend: <key>. Available backends: <sorted-keys>"`. When `None`, the historical `"Plugin '<key>' not registered"` text is used. |
-| `not_found_exception` | `type[Exception]` | `NotFoundError` | Exception class raised on not-found. Defaults to `NotFoundError` (the `DataknobsError`-rooted shape consumers catch programmatically). Domain shims preserving a historical `ValueError` contract pass `not_found_exception=ValueError`. Non-`DataknobsError` classes receive the message only (no `context=` kwarg). |
+| `not_found_exception` | `type[Exception]` | `NotFoundError` | Exception class raised on not-found by `create()` / `create_async()`; `get()` / `get_async()` always raise `NotFoundError`. Defaults to `NotFoundError` (the `DataknobsError`-rooted shape consumers catch programmatically). Domain shims preserving a historical `ValueError` contract pass `not_found_exception=ValueError`. Non-`DataknobsError` classes receive the message only (no `context=` kwarg). |
 
 ## Per-input-shape Split Convention
 
@@ -265,15 +265,84 @@ A synchronous factory needs no change and works through all four methods.
 
 ## Errors from a factory
 
-All four entry points wrap an exception the factory raised in
-`OperationError`, naming the key and the exception type and carrying the
-original on `__cause__`. The factory's own words stay out of the message: a
-factory builds a backend from deployment config, so its failure text is a
-driver's or an SDK's and can carry the connection URL it was handed.
+All four entry points wrap an exception the factory raised, naming the key
+and the exception type and carrying the original on `__cause__`. The factory's
+own words, and its `context`, stay out: a factory builds a backend from
+deployment config, so its failure text is a driver's or an SDK's and can carry
+the connection URL it was handed.
 
-`NotFoundError` and `OperationError` are the exceptions. Their text is ours
-and already bounded, so they pass through unchanged — which keeps the type a
-caller catches on:
+| The factory raised | The caller gets |
+|---|---|
+| a `NotFoundError`, or a subclass | `NotFoundError("Failed to create plugin '<key>' (<type>)")` |
+| anything else, `OperationError` and its subclasses included | `OperationError("Failed to create plugin '<key>' (<type>)")` |
+| a `NotFoundError` or `OperationError` a registry raised | that error, unchanged |
+| a `ConfigFieldError` that `StructuredConfig` wrote, or an error other than a `NotFoundError` raised `from` one | `PluginConfigError("Failed to create plugin '<key>': <refusal>")` |
+
+So a caller catching either base catches what it caught before. One catching
+a *subclass* raised inside the factory finds it on `__cause__`. The type is
+not enough to exempt an error from the bound, because it says nothing about
+who wrote the text: `OperationError` is a public base a factory raises with
+its own words.
+
+**A config refusal keeps its words.** A `ConfigFieldError` that
+`StructuredConfig.from_dict` raised names the config class, its fields and the
+keys the config wrote, and never a value, so the registry carries it: the
+caller gets a `PluginConfigError` whose message ends with the refusal's and
+whose `context` is the refusal's plus `key` and `registry`. It is an
+`OperationError` as well as a `ConfigFieldError`, so `except OperationError`
+catches it as before.
+
+```python
+sources = PluginRegistry("sources", config_key="type", strip_config_key=True)
+sources.register("file", FileSource)   # a StructuredConfigConsumer
+
+sources.create(config={"type": "file", "pth": "data.csv"})
+# PluginConfigError: Failed to create plugin 'file': FileSourceConfig does not
+#   accept 'pth' (did you mean 'path'?). Accepted keys: path, sheet.
+```
+
+What decides is a mark only `StructuredConfig` sets, never the type: a
+factory raising its own `ConfigFieldError` is bounded like any other error.
+The registry also follows `raise ... from`, so a factory that raises its own
+error from a refusal reports the refusal's words and not its own. It does not
+follow an error raised merely while handling a refusal, which may be one the
+factory recovered from. A `NotFoundError` raised `from` a refusal stays a
+bounded `NotFoundError`, so a caller catching that family keeps catching it.
+
+The mark records the refusal's words as `from_dict` wrote them, and those are
+what the registry carries. A factory that amends the refusal before raising it
+— prefixing an origin with `naming_refusals`, or adding to its `context` —
+adds nothing of its own: the amended refusal is still on `__cause__`, for the
+logs. The origin is the factory's text, and it can hold the connection URL the
+factory tried, so `naming_refusals` never vouches for it.
+
+The one exception is text dataknobs itself wrote above the refusal. An
+in-tree factory that names the refusal it re-raises — an error dataknobs
+marks as its own, raised `from` the refusal and repeating its words — has
+that error's words carried instead, with its `context` merged over the
+refusal's. A marked error that does not repeat the refusal's words, a
+`NotFoundError`, and an error a registry raised are never carried this way.
+That is how a bot's grounded `database` source reports which source refused a
+backend key:
+
+```text
+PluginConfigError: Failed to create plugin 'database': Source 'cases':
+  MemoryDatabaseConfig does not accept 'nonsense_key'. ...
+```
+
+A refusal is reported wherever it is on the `__cause__` chain, including one
+about config the factory built for itself rather than the caller's. Its text
+still names no value, but it reads as the caller's config error, so a factory
+that reads settings of its own with `from_dict` should catch that refusal and
+raise its own error rather than raise `from` it.
+
+A `NotFoundError` or `OperationError` a *registry* raised is text this module
+wrote, so it passes through an outer factory as itself. A registry whose
+`not_found_exception` is outside those families, such as `ValueError`, still
+has its miss wrapped in `OperationError`, so an outer call raises only the
+types it always has. A composite factory that resolves a sub-component
+through another registry and misses raises that registry's `NotFoundError`,
+with the inner key named:
 
 ```python
 def composite(config, **kwargs):
@@ -303,6 +372,79 @@ from dataknobs_common import PluginFactory
 def make_backend() -> PluginFactory[Backend]:
     ...
 ```
+
+## Wrapping a registry in a helper
+
+A package usually puts a function in front of its registry —
+`create_memory_from_config(config)` rather than
+`memory_backends.create(config=config)` — to turn the registry's miss into
+"Unknown memory type: … Available types: …" and to keep the exception types
+its callers already catch. The tempting body reads the registry's bounded
+error back off `__cause__`:
+
+```python
+# Don't: this reopens what the registry closed.
+except OperationError as exc:
+    if isinstance(exc.__cause__, ValueError):
+        raise exc.__cause__ from None
+```
+
+The type cannot tell a diagnostic you wrote from a driver's text. "Summary
+memory requires an LLM provider" and `ValueError("could not connect to
+postgres://admin:pw@db/prod")` are the same type, so the unwrap hands the
+second to your caller — and, behind an HTTP boundary that shows validation
+messages, to theirs.
+
+`create_surfacing` is that body, written once:
+
+```python
+from dataknobs_common import create_surfacing
+
+def create_widget(config: dict[str, Any]) -> Widget:
+    return create_surfacing(
+        widget_backends,
+        subject="widget",
+        unknown=lambda e: ValueError(
+            f"Unknown widget type: {e.context['key']}. "
+            f"Available types: {', '.join(sorted(widget_backends.list_keys()))}"
+        ),
+        config=config,
+    )
+```
+
+| When creating through the registry fails with | The helper raises |
+|---|---|
+| the registry's miss for the key | `unknown(error)`, or the `NotFoundError` when `unknown` is omitted |
+| a key declared unavailable (`declare_unavailable`) | the registry's `PluginUnavailableError("Plugin '<key>' is not available here: <reason>")` — both a `NotFoundError` and a `ValueError` |
+| a `PluginConfigError` | that error, as built |
+| a factory error a registry raised, or dataknobs wrote, and that has not changed since | that error, as itself |
+| a factory's `ValueError` or `ValidationError` | `FactoryValueError("Failed to create widget '<key>' (ValueError)")` — both a `ValueError` and a `ValidationError` |
+| a factory's `ResourceError`, `TimeoutError`, `ConcurrencyError`, `SerializationError` or `ConfigurationError` | a bounded error of the same family |
+| anything else a factory raised | the registry's bounded `OperationError` |
+
+In every bounded case the factory's error is on `__cause__`, for a log.
+`unknown` is called only for this registry's own miss, never for a factory's
+`NotFoundError`, a miss in another registry a factory looked something up
+in, or a key declared unavailable: that name is spelled correctly, and the
+registry's reason says what to install. `create_surfacing_async` is the twin
+over `create_async`.
+
+A helper that writes its own message around the failure rather than raising
+it asks `surfaced_cause(exc)` instead: the cause when its words may be shown,
+else `None`, in which case name the cause by `type(exc.__cause__).__name__`.
+
+**Your own factories' words are bounded.** What `surfaced_cause` recognises
+is a registry's error and the refusals dataknobs itself raises, marked where
+they are raised. A `ValueError` or `ValidationError` your factory raises
+reaches your caller as `FactoryValueError` naming the key, which is the safe direction: whatever
+your factory says goes to the log, not to whoever is on the other side of
+your API.
+
+`assert_no_cause_read` in `dataknobs_common.testing` keeps the unwrap from
+coming back: it fails on any read of `__cause__` or `__context__` under the
+roots you give it outside an allow-list of reviewed readers, including one
+spelled `getattr(exc, "__cause__")` and a `traceback` formatter, which renders
+the whole chain.
 
 ## Lazy Initialization
 

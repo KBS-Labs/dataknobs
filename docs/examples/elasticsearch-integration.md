@@ -583,9 +583,14 @@ except ElasticsearchConflictError:
     index.update("doc_001", {"doc": doc_data})
 ```
 
-Everything else is reported rather than raised: `search` answers a
-`ServerResponse` whose `.succeeded` is False, and `create` / `refresh` /
-`update` / `delete` answer bools.
+A missing document is an answer (`get` returns `None`; `exists`, `update` and
+`delete` return `False`), and so is creating an index that is already there
+(`create` returns `False`). `search` answers a `ServerResponse` whose
+`.succeeded` is False and whose `.result` is the error. Every other failure
+raises `ElasticsearchRequestError`, which carries `.status` and `.body`.
+
+Elasticsearch also answers when only some shards did. `count` raises then; a
+`search` succeeds, and `.result["_shards"]["failed"]` says so.
 
 ## Best Practices
 
@@ -595,8 +600,8 @@ Everything else is reported rather than raised: `search` answers a
    rather than indexing one document at a time
 3. **Refresh deliberately**: `index(..., refresh=True)` and `refresh()` cost
    throughput; use them in tests and after a batch, not per document
-4. **Check `.succeeded`**: a failed search answers an empty hit list rather
-   than raising
+4. **Check `.succeeded`**: a failed search answers the error rather than
+   raising, so reading hits from it finds none
 5. **Let `index()` do the retrying**: it already backs off on 5xx
 6. **Use `op_type="create"`** when an insert must not overwrite
 7. **Implement pagination**: page with `from`/`size`, and move to

@@ -14,11 +14,11 @@ import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, BinaryIO, ClassVar
 
 from botocore.exceptions import ClientError
 
+from dataknobs_common.clock import utc_now
 from dataknobs_common.aws import AwsSessionConfig, create_aioboto3_session
 from dataknobs_common.capabilities import Capability, CapabilityLike
 from dataknobs_common.exceptions import ConcurrencyError
@@ -413,7 +413,8 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             async with self._session.client("s3", **self._client_kwargs) as s3:
                 response = await s3.get_object(Bucket=self._bucket, Key=key)
                 raw = await response["Body"].read()
-            return json.loads(raw.decode("utf-8"))
+            metadata: dict = json.loads(raw.decode("utf-8"))
+            return metadata
         except ClientError as e:
             if e.response.get("Error", {}).get("Code") in _MISSING_KEY_CODES:
                 return {}
@@ -563,7 +564,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             content_type=content_type,
             size_bytes=len(data),
             checksum=checksum,
-            uploaded_at=datetime.now(UTC),
+            uploaded_at=utc_now(),
             metadata=metadata or {},
         )
 
@@ -576,7 +577,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
 
         # Update KB info
         kb_info = KnowledgeBaseInfo.from_dict(kb_metadata.get("info", {"domain_id": domain_id}))
-        kb_info.last_updated = datetime.now(UTC)
+        kb_info.last_updated = utc_now()
         kb_info.increment_version()
         kb_info.file_count = len(files)
         kb_info.total_size_bytes = sum(f.get("size_bytes", 0) for f in files.values())
@@ -604,7 +605,8 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
         try:
             async with self._session.client("s3", **self._client_kwargs) as s3:
                 response = await s3.get_object(Bucket=self._bucket, Key=key)
-                return await response["Body"].read()
+                content: bytes = await response["Body"].read()
+                return content
         except ClientError as e:
             if e.response.get("Error", {}).get("Code") in _MISSING_KEY_CODES:
                 return None
@@ -635,6 +637,10 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             raise
 
         async def _generator() -> AsyncIterator[bytes]:
+            # The check above does not narrow ``self._session`` in here: this
+            # body runs when the stream is iterated, after the call returned.
+            if not self._session:
+                raise RuntimeError("Backend not initialized")
             async with self._session.client("s3", **self._client_kwargs) as s3:
                 response = await s3.get_object(Bucket=self._bucket, Key=key)
                 body = response["Body"]
@@ -672,7 +678,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
 
         # Update KB info
         kb_info = KnowledgeBaseInfo.from_dict(kb_metadata.get("info", {"domain_id": domain_id}))
-        kb_info.last_updated = datetime.now(UTC)
+        kb_info.last_updated = utc_now()
         kb_info.increment_version()
         kb_info.file_count = len(files)
         kb_info.total_size_bytes = sum(f.get("size_bytes", 0) for f in files.values())
@@ -728,7 +734,7 @@ class S3KnowledgeBackend(KnowledgeResourceBackendMixin):
             domain_id=domain_id,
             file_count=0,
             total_size_bytes=0,
-            last_updated=datetime.now(UTC),
+            last_updated=utc_now(),
             version="1",
             ingestion_status=IngestionStatus.PENDING,
             metadata=metadata or {},

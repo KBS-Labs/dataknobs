@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import math
 import re
 import uuid
 import warnings
@@ -143,7 +144,7 @@ def validate_field_name(field: str) -> None:
     applying this check to one rejects every nested field; use
     :func:`validate_field_path` there.
     """
-    if not _FIELD_NAME_RE.match(field):
+    if not _FIELD_NAME_RE.fullmatch(field):
         raise ValueError(
             f"Invalid field name: {field!r}. Field names must match [A-Za-z_][A-Za-z0-9_]*."
         )
@@ -166,7 +167,7 @@ def validate_field_path(field: str) -> None:
     grammar calls this function; nothing re-spells it.
     """
     for part in field.split("."):
-        if not _FIELD_NAME_RE.match(part):
+        if not _FIELD_NAME_RE.fullmatch(part):
             raise ValueError(
                 f"Invalid field name segment {part!r} in {field!r}. "
                 f"Field segments must match [A-Za-z_][A-Za-z0-9_]*."
@@ -254,6 +255,12 @@ _JSON_TYPE_NAMES: Mapping[str, Mapping[str, tuple[str, ...]]] = MappingProxyType
         },
     }
 )
+
+#: What an element of a JSON list is called in a clause that reads one.
+_ELEMENT = "_dk_element"
+
+#: The two readings DuckDB splits a JSON number into.
+_SPLIT_NUMBERS = frozenset({_INTEGER_NUMBER, _REAL_NUMBER})
 
 #: The type DuckDB casts a value of each non-string kind to.
 _DUCKDB_CASTS: Mapping[str, str] = MappingProxyType(
@@ -1579,7 +1586,9 @@ class SQLQueryBuilder:
         """DuckDB's four ``ORDER BY`` keys for a JSON field (see :meth:`_jsonb_sort_keys`)."""
         text = self._build_json_field_expr(field, column=column)
         kind = f"json_type({column}, '$.{field}')"
-        is_integer, _ = self._duckdb_number_populations(field, column)
+        is_integer, _ = self._duckdb_number_populations(
+            self._type_is(self._json_type_expr(field, column), "number"), text
+        )
         number = f"{kind} IN ('BIGINT', 'UBIGINT', 'DOUBLE')"
         return [
             f"CASE {kind} WHEN 'VARCHAR' THEN 1 WHEN 'BIGINT' THEN 2 WHEN 'UBIGINT' THEN 2 "
@@ -1707,6 +1716,12 @@ class SQLQueryBuilder:
         {Operator.LIKE, Operator.NOT_LIKE, Operator.REGEX, Operator.STARTS_WITH}
     )
 
+    #: Operators that compare a value with each element of the list a field
+    #: holds: :meth:`_build_element_clause` renders them over a JSON field. A
+    #: layout whose columns hold one value each answers ``FALSE``, and its
+    #: negation every present value.
+    ELEMENT_OPERATORS = frozenset({Operator.CONTAINS, Operator.NOT_CONTAINS})
+
     def _json_type_is(self, field: str, column: str, kind: str) -> str | None:
         """A predicate that the JSON value at ``column.field`` is of ``kind``.
 
@@ -1715,15 +1730,20 @@ class SQLQueryBuilder:
         is validated by the :meth:`_build_json_field_expr` call that precedes
         every use; ``column`` is our own ``"data"``/``"metadata"``.
         """
-        names = _JSON_TYPE_NAMES.get(self.dialect)
-        if names is None:
+        if self.dialect not in _JSON_TYPE_NAMES:
             return None
-        options = names["string" if kind in _TIME_READINGS else kind]
+        return self._type_is(self._json_type_expr(field, column), kind)
+
+    def _json_type_expr(self, field: str, column: str) -> str:
+        """The type of the JSON value at ``column.field``, as the dialect names it."""
         if self.dialect == "postgres":
             json_expr = self._build_json_field_expr(field, column=column, as_text=False)
-            type_expr = f"jsonb_typeof({json_expr})"
-        else:
-            type_expr = f"json_type({column}, '$.{field}')"
+            return f"jsonb_typeof({json_expr})"
+        return f"json_type({column}, '$.{field}')"
+
+    def _type_is(self, type_expr: str, kind: str) -> str:
+        """A predicate that a JSON value whose type is ``type_expr`` is of ``kind``."""
+        options = _JSON_TYPE_NAMES[self.dialect]["string" if kind in _TIME_READINGS else kind]
         if len(options) == 1:
             return f"{type_expr} = '{options[0]}'"
         return f"{type_expr} IN ({', '.join(f"'{name}'" for name in options)})"
@@ -1757,15 +1777,22 @@ class SQLQueryBuilder:
 
         Returns ``None`` for a dialect that cannot read a JSON type.
         """
-        text = self._build_json_field_expr(field, column=column)
-        if kind in (_INTEGER_NUMBER, _REAL_NUMBER):
-            is_integer, is_real = self._duckdb_number_populations(field, column)
+        if self.dialect not in _JSON_TYPE_NAMES:
+            return None
+        return self._typed_value(
+            self._json_type_expr(field, column),
+            self._build_json_field_expr(field, column=column),
+            kind,
+        )
+
+    def _typed_value(self, type_expr: str, text: str, kind: str) -> tuple[str, str]:
+        """:meth:`_typed_json_value`, for a JSON value given its type and its text."""
+        is_kind = self._type_is(type_expr, "number" if kind in _SPLIT_NUMBERS else kind)
+        if kind in _SPLIT_NUMBERS:
+            is_integer, is_real = self._duckdb_number_populations(is_kind, text)
             if kind == _INTEGER_NUMBER:
                 return is_integer, f"CASE WHEN {is_integer} THEN TRY_CAST({text} AS HUGEINT) END"
             return is_real, f"CASE WHEN {is_real} THEN TRY_CAST({text} AS DOUBLE) END"
-        is_kind = self._json_type_is(field, column, kind)
-        if is_kind is None:
-            return None
         if kind in _TIME_READINGS:
             names_time, value = self.time_reading(text, kind)
             is_kind = f"{is_kind} AND {names_time}"
@@ -1778,8 +1805,9 @@ class SQLQueryBuilder:
             value = f"TRY_CAST({text} AS {_DUCKDB_CASTS[kind]})"
         return is_kind, f"CASE WHEN {is_kind} THEN {value} END"
 
-    def _duckdb_number_populations(self, field: str, column: str) -> tuple[str, str]:
-        """Tests that the JSON number at ``column.field`` is an integer, or a real.
+    @staticmethod
+    def _duckdb_number_populations(is_number: str, text: str) -> tuple[str, str]:
+        """Tests that a JSON value is an integer, or a real, given its number test and text.
 
         DuckDB has no type holding every JSON number exactly: a ``DOUBLE``
         rounds an integer past 2**53, and a ``HUGEINT`` rounds a fraction. So
@@ -1792,8 +1820,6 @@ class SQLQueryBuilder:
 
         Each test is false, not ``NULL``, for a present value it excludes.
         """
-        text = self._build_json_field_expr(field, column=column)
-        is_number = self._json_type_is(field, column, "number")
         integral = (
             f"regexp_full_match({text}, '-?[0-9]+') AND TRY_CAST({text} AS HUGEINT) IS NOT NULL"
         )
@@ -1986,12 +2012,21 @@ class SQLQueryBuilder:
         engine compares exactly and the driver can always bind. So a bound
         outside 64 bits neither raises on SQLite nor rounds on DuckDB.
 
+        On PostgreSQL a ``float`` is passed as the decimal JSON writes it as,
+        which is how ``jsonb`` holds a stored one. Left to the drivers,
+        psycopg2 writes ``0.1`` and asyncpg the decimal the double is exactly,
+        which no stored ``0.1`` equals. An infinity has no such decimal, and is
+        passed as it is.
+
         The default ``bind`` of :meth:`typed_clause`.
         """
         domain = self.number_domain(reading)
-        if domain is None:
-            return self.bind_bound(reading, bound)
-        return comparand(domain, op, bound)
+        if domain is not None:
+            return comparand(domain, op, bound)
+        bound = self.bind_bound(reading, bound)
+        if self.dialect == "postgres" and isinstance(bound, float) and math.isfinite(bound):
+            return Decimal(repr(bound))
+        return bound
 
     def typed_clause(
         self,
@@ -2481,6 +2516,9 @@ class SQLQueryBuilder:
         # time bound reads it as the time it names (if it names one of the
         # bound's kind), and a bound of any other kind never matches it.
         if is_storage_key_field(field):
+            if op in self.ELEMENT_OPERATORS:
+                # A string, which contains nothing.
+                return ("FALSE" if op == Operator.CONTAINS else "id IS NOT NULL"), []
             if op in self.TYPED_OPERATORS:
 
                 def storage_key_for(kind: str | None) -> tuple[str | None, str] | None:
@@ -2504,6 +2542,9 @@ class SQLQueryBuilder:
         # when prefixed ``metadata.`` (dot-notation nesting).
         column, nested_path = resolve_json_column_and_path(field)
         text_expr = self._build_json_field_expr(nested_path, column=column)
+
+        if op in self.ELEMENT_OPERATORS:
+            return self._build_element_clause(op, nested_path, column, value, param_start)
 
         if op in self.TYPED_OPERATORS and self.dialect in _JSON_TYPE_NAMES:
 
@@ -2535,6 +2576,65 @@ class SQLQueryBuilder:
                 clause = f"({guard} AND {clause})"
 
         return clause, params
+
+    def _build_element_clause(
+        self, op: Operator, field: str, column: str, value: Any, param_start: int
+    ) -> tuple[str, list[Any]]:
+        """``CONTAINS`` / ``NOT_CONTAINS`` over the JSON list at ``column.field``.
+
+        Each element is compared with the value as :meth:`typed_clause`
+        compares a field for ``EQ``, in a subquery over the elements, which has
+        no row for a value that is not a list. ``NOT_CONTAINS`` is every
+        present value that does not.
+
+        Raises:
+            ValueError: For a dialect that cannot read a JSON type.
+        """
+        if self.dialect not in _JSON_TYPE_NAMES:
+            raise ValueError(f"Unsupported operator for dialect {self.dialect!r}: {op}")
+        present = f"{self._build_json_field_expr(field, column=column)} IS NOT NULL"
+        element = f"{_ELEMENT}.value"
+        if self.dialect == "postgres":
+            listed = self._build_json_field_expr(field, column=column, as_text=False)
+            # A ``CASE``, since the function raises for a value that is no array.
+            source = (
+                f"jsonb_array_elements(CASE WHEN jsonb_typeof({listed}) = 'array' "
+                f"THEN {listed} ELSE '[]'::jsonb END) AS {_ELEMENT}(value)"
+            )
+            type_expr, text = f"jsonb_typeof({element})", f"({element} #>> '{{}}')"
+        elif self.dialect == "sqlite":
+            # ``json_each`` answers a value that is no array as one row.
+            path = f"{column}, '$.{field}'"
+            source = f"json_each({path}) AS {_ELEMENT} WHERE json_type({path}) = 'array'"
+            type_expr, text = f"{_ELEMENT}.type", element
+        else:
+            source = (
+                f"(SELECT unnest(json_extract({column}, '$.{field}[*]')) AS value) AS {_ELEMENT}"
+            )
+            type_expr, text = f"json_type({element})", f"json_extract_string({element}, '$')"
+
+        def element_for(kind: str | None) -> tuple[str | None, str] | None:
+            if kind is None:
+                return None, text
+            if kind == _NEVER:
+                return None
+            return self._typed_value(type_expr, text, kind)
+
+        equal, params = self.typed_clause(
+            Operator.EQ,
+            value,
+            param_start,
+            element_for,
+            present,
+            readings=_split_numbers if self.dialect == "duckdb" else None,
+        )
+        if equal == "FALSE":
+            return ("FALSE" if op == Operator.CONTAINS else present), []
+        joined = "AND" if self.dialect == "sqlite" else "WHERE"
+        contains = f"EXISTS (SELECT 1 FROM {source} {joined} {equal})"
+        if op == Operator.CONTAINS:
+            return contains, params
+        return f"({present} AND NOT {contains})", params
 
     def _record_to_json(self, record: Record) -> str:
         """Convert a Record to JSON string for storage."""

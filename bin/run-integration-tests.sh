@@ -165,8 +165,10 @@ cleanup() {
 
 # Set trap for cleanup on exit (only if not in Docker)
 if [ "$IN_DOCKER" = false ]; then
-    trap cleanup EXIT INT TERM
+    trap cleanup EXIT
 fi
+source "$ROOT_DIR/bin/stop-on-signal.sh"
+stop_on_signals
 
 # Main execution
 echo -e "${GREEN}DataKnobs Integration Test Runner${NC}"
@@ -186,7 +188,7 @@ fi
 # If services-only mode, exit here
 if [ "$SERVICES_ONLY" = true ]; then
     echo -e "\n${GREEN}Services started successfully!${NC}"
-    trap - EXIT INT TERM  # Remove cleanup trap
+    trap - EXIT  # Remove cleanup trap
     exit 0
 fi
 

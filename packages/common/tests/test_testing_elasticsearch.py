@@ -211,6 +211,10 @@ class _RecordingHandler(logging.Handler):
         self.records.append(record)
 
 
+class _RefusedRequestError(Exception):
+    """Stands in for ``ElasticsearchRequestError`` in the stubbed module."""
+
+
 def _drive_cleanup_with_exception(
     monkeypatch,
     exc_to_raise: type[BaseException],
@@ -230,7 +234,9 @@ def _drive_cleanup_with_exception(
         def delete(self) -> None:
             raise AssertionError("delete should not be reached")
 
-    fake_module = SimpleNamespace(SimplifiedElasticsearchIndex=_StubIndex)
+    fake_module = SimpleNamespace(
+        SimplifiedElasticsearchIndex=_StubIndex, ElasticsearchRequestError=_RefusedRequestError
+    )
     monkeypatch.setitem(sys.modules, "dataknobs_utils.elasticsearch_utils", fake_module)
 
     handler = _RecordingHandler()
@@ -272,6 +278,13 @@ def test_cleanup_swallows_connection_error_and_logs(monkeypatch):
 def test_cleanup_swallows_value_error_and_logs(monkeypatch):
     """ValueError during cleanup is logged at WARNING and swallowed."""
     records, propagated = _drive_cleanup_with_exception(monkeypatch, ValueError)
+    assert propagated is None
+    assert any("Failed to clean up" in r.getMessage() for r in records)
+
+
+def test_cleanup_swallows_a_refused_request_and_logs(monkeypatch):
+    """A request Elasticsearch refuses during cleanup is logged and swallowed."""
+    records, propagated = _drive_cleanup_with_exception(monkeypatch, _RefusedRequestError)
     assert propagated is None
     assert any("Failed to clean up" in r.getMessage() for r in records)
 

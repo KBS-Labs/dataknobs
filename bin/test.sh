@@ -135,14 +135,19 @@ init_random_seed() {
 }
 
 # Build extra pytest args for parallel execution and verbosity
+# Args: $1=xdist distribution mode (default: loadscope), $2=worker count when
+# PYTEST_WORKERS names none (default: 4)
+#
+# loadscope keeps a class, or a module's functions, on one worker.
 build_extra_args() {
+    local dist="${1:-loadscope}" default_workers="${2:-4}"
     local parts=()
     if [ "$PARALLEL" = "yes" ]; then
-        # PYTEST_WORKERS controls xdist worker count (default: 4)
+        # PYTEST_WORKERS controls xdist worker count
         # Using a fixed count rather than "auto" to avoid oversubscription
         # when multiple packages run concurrently
-        local workers="${PYTEST_WORKERS:-4}"
-        parts+=("-n" "$workers" "--dist" "loadscope")
+        local workers="${PYTEST_WORKERS:-$default_workers}"
+        parts+=("-n" "$workers" "--dist" "$dist")
     fi
     case "$VERBOSITY" in
         quiet)   parts+=("-q") ;;
@@ -154,6 +159,16 @@ build_extra_args() {
         parts+=("--randomly-seed=$RANDOMLY_SEED")
     fi
     echo "${parts[*]}"
+}
+
+# The xdist distribution mode for one package's unit suite. common's slowest
+# tests are two classes that wait on a live SQS queue, so keeping each class on
+# one worker sets the suite's floor.
+unit_dist_mode() {
+    case "$1" in
+        common) echo "worksteal" ;;
+        *)      echo "loadscope" ;;
+    esac
 }
 
 # Consolidated function to execute pytest with proper error handling
@@ -226,6 +241,11 @@ set_integration_env_vars() {
         export TEST_OLLAMA="${TEST_OLLAMA:-true}"
     fi
 }
+
+# Measure coverage through sys.monitoring rather than a C trace function: the
+# same lines for less time. It does not measure branches before Python 3.14;
+# nothing here asks for them.
+export COVERAGE_CORE="${COVERAGE_CORE:-sysmon}"
 
 # Function to show usage
 show_usage() {
@@ -572,7 +592,7 @@ run_unit_tests() {
 
     # Run tests
     local extra_args
-    extra_args=$(build_extra_args)
+    extra_args=$(build_extra_args "$(unit_dist_mode "$package")")
     local cmd="pytest $test_path $exclude_args $cov_args $extra_args $PYTEST_ARGS --color=yes"
     execute_pytest "$cmd" "unit tests for $package"
 }
@@ -640,6 +660,12 @@ run_integration_tests() {
 # behind, and --durations=10 because one number for the whole suite says it is
 # expensive without saying which part is: the first run with the flag attributed
 # 45 of 54 seconds to a single file re-invoking the shell lint per test.
+#
+# Under --parallel, worksteal and eight workers rather than the packages'
+# loadscope and four. The cost is concentrated in a few files, and loadscope
+# keeps a file's functions on one worker, so the slowest file would set the
+# floor. The gate runs two other jobs beside this one, at most four workers
+# each.
 run_workspace_tests() {
     echo -e "${YELLOW}Running workspace guards${NC}"
 
@@ -650,7 +676,7 @@ run_workspace_tests() {
     fi
 
     local extra_args
-    extra_args=$(build_extra_args)
+    extra_args=$(build_extra_args worksteal 8)
     local cmd="pytest $test_path --ignore=$test_path/integration -p no:cacheprovider --durations=10 $extra_args $PYTEST_ARGS --color=yes"
     execute_pytest "$cmd" "workspace guards"
 }
@@ -803,7 +829,7 @@ SERVICES_STARTED=false
 
 # Function to cleanup services if we started them
 #
-# Reached only through `trap cleanup_services EXIT INT TERM` below, which the
+# Reached only through `trap cleanup_services EXIT` below, which the
 # linter does not read as a call site. (Do not begin a comment line with the
 # tool's name — it is parsed as a malformed directive.)
 # shellcheck disable=SC2329
@@ -817,7 +843,9 @@ cleanup_services() {
 }
 
 # Set trap for cleanup on exit
-trap cleanup_services EXIT INT TERM
+trap cleanup_services EXIT
+source "$ROOT_DIR/bin/stop-on-signal.sh"
+stop_on_signals
 
 # Run every named target. Each gets its own pytest process — packages have
 # always been run one at a time by the discovery path, and naming several

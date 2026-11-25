@@ -55,6 +55,9 @@ class Operator(Enum):
         # Range query
         filter_between = Filter("age", Operator.BETWEEN, [20, 40])
 
+        # An element of a list
+        filter_contains = Filter("tags", Operator.CONTAINS, "urgent")
+
         # Build query
         query = Query(filters=[filter_gt, filter_like])
         ```
@@ -76,6 +79,8 @@ class Operator(Enum):
     NOT_EXISTS = "not_exists"  # Field does not exist
     BETWEEN = "between"  # Value between two bounds (inclusive)
     NOT_BETWEEN = "not_between"  # Value not between two bounds
+    CONTAINS = "contains"  # A list, one of whose elements equals the value
+    NOT_CONTAINS = "not_contains"  # Has a value that is not such a list
 
 
 class SortOrder(Enum):
@@ -221,6 +226,9 @@ _MEMBERSHIP_OPERATORS = frozenset({Operator.IN, Operator.NOT_IN})
 
 #: The two operators whose value is a range: a lower and an upper bound.
 _RANGE_OPERATORS = frozenset({Operator.BETWEEN, Operator.NOT_BETWEEN})
+
+#: The two operators whose value is one element of the list a field holds.
+_ELEMENT_OPERATORS = frozenset({Operator.CONTAINS, Operator.NOT_CONTAINS})
 
 #: How much of a refused value's ``repr`` a refusal quotes.
 _REFUSED_VALUE_REPR_LIMIT = 40
@@ -415,6 +423,13 @@ def _values_equal(a: Any, b: Any) -> bool:
         a, b = pair
     a, b = _align_temporal(a, b)
     return bool(a == b)
+
+
+def _list_elements(value: Any) -> Collection[Any]:
+    """The elements of a list, tuple or numpy array; none for any other value."""
+    if type(value).__module__ == "numpy" and getattr(value, "ndim", None):
+        return list(value.tolist())
+    return value if isinstance(value, (list, tuple)) else ()
 
 
 class _Times:
@@ -620,13 +635,17 @@ class Filter:
     is neither a string nor a mapping --- and anything else is refused here,
     when the filter is built. A string used to mean substring match in memory
     and single-character match in SQL; a mapping is its keys in memory and in
-    SQL, and a terms *lookup* in Elasticsearch. The SQL backends and the
-    backends that filter in memory then answer as :meth:`matches` does: nothing
-    is in an empty list, a ``None`` member matches nothing, and ``NOT_IN``
-    selects only records whose field has a value, as ``NEQ`` does.
-    Elasticsearch does not yet: its ``NOT_IN`` also selects a document that
-    lacks the field, and it chooses a string field's exact-match path from
-    the first member only.
+    SQL, and a terms *lookup* in Elasticsearch. Every backend then answers as
+    :meth:`matches` does: nothing is in an empty list, a ``None`` member matches
+    nothing, and ``NOT_IN`` selects only records whose field has a value, as
+    ``NEQ`` does. (Elasticsearch compares a string field with any bound as text.)
+
+    **Elements.** ``CONTAINS`` and ``NOT_CONTAINS`` take one value, compared
+    with each element of the list a field holds as ``EQ`` compares it; a
+    collection is refused here. Only a list contains anything: a string is not
+    searched for a substring, nor a mapping for a key. ``NOT_CONTAINS`` selects
+    every other record whose field has a value. (Elasticsearch reads a list
+    inside a list as its elements.)
 
     **Range.** ``BETWEEN`` and ``NOT_BETWEEN`` take exactly two bounds, as a
     list or tuple, and anything else is refused here too.
@@ -668,9 +687,11 @@ class Filter:
                 is not a collection, or is a string or a mapping; or if it is
                 ``BETWEEN`` or ``NOT_BETWEEN`` and the value is not a list or
                 tuple of exactly two bounds (a set has no order to say which
-                bound is which). ``ValueError`` because it is what this module
-                raises for a bad operator or sort order, so an
-                ``except ValueError`` around query building catches it.
+                bound is which); or if it is ``CONTAINS`` or ``NOT_CONTAINS``
+                and the value is a collection other than a string.
+                ``ValueError`` because it is what this module raises for a bad
+                operator or sort order, so an ``except ValueError`` around
+                query building catches it.
         """
         if self.operator in _MEMBERSHIP_OPERATORS:
             if isinstance(self.value, Mapping):
@@ -689,6 +710,13 @@ class Filter:
                 return
             needs = "needs two bounds, as a list or tuple"
             remedy = "Pass [lower, upper]."
+        elif self.operator in _ELEMENT_OPERATORS:
+            if isinstance(self.value, (str, bytes, bytearray)) or not (
+                isinstance(self.value, Collection) or getattr(self.value, "ndim", None)
+            ):
+                return
+            needs = "needs one value, which an element is compared with"
+            remedy = "Use a filter per element."
         else:
             self._own_value()
             return
@@ -768,6 +796,9 @@ class Filter:
                 self._compare_values(record_value, lower, lambda a, b: a >= b)
                 and self._compare_values(record_value, upper, lambda a, b: a <= b)
             )
+        elif self.operator in _ELEMENT_OPERATORS:
+            found = any(_values_equal(e, self.value) for e in _list_elements(record_value))
+            return found if self.operator == Operator.CONTAINS else not found
         elif self.operator in (Operator.LIKE, Operator.NOT_LIKE):
             if not isinstance(self.value, str):
                 raise ValueError(f"LIKE/NOT_LIKE pattern must be a string, got: {self.value!r}")

@@ -257,19 +257,34 @@ removed = await store.prune("user-42")               # every windowed section
 - **Not consent-gated.** Pruning is data minimization, so — like `clear` — it is
   never blocked by a consent scope.
 
-Time is measured against an injected clock. By default the coordinator uses
-wall-clock UTC; inject a `now` collaborator (a `Callable[[], datetime]`) to make
-retention deterministic in tests or drive it from an external clock:
+Time is measured against the store's clock. By default that is
+`dataknobs_common.clock.utc_now`, the library's one read of the current time,
+so a test fixes it for every store at once with `use_clock` (see the
+[clock guide](https://kbs-labs.github.io/dataknobs/packages/common/clock/)):
 
 ```python
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-store = await AsyncUserStateStore.from_config(
-    config, now=lambda: datetime.now(UTC),
-)
+from dataknobs_common.clock import use_clock
+from dataknobs_common.testing import FixedClock
+
+clock = FixedClock(datetime(2026, 1, 1, tzinfo=UTC))
+with use_clock(clock):
+    store = await AsyncUserStateStore.from_config(config)
+    ...                               # writes are stamped 2026-01-01
+    clock.advance(timedelta(days=40))
+    await store.prune("user-1")       # a 30-day window has now passed
 ```
 
-Prefer a **timezone-aware** clock (as above): `_written_at` stamps are recorded
+Inject a `now` collaborator (a `Callable[[], datetime]`) to give one store a
+clock of its own, or to drive retention from an external clock. An injected
+clock wins over the ambient one, so `use_clock` does not reach that store:
+
+```python
+store = await AsyncUserStateStore.from_config(config, now=clock)
+```
+
+Prefer a **timezone-aware** clock (the ambient one always is): `_written_at` stamps are recorded
 with whatever awareness the clock returns, and expiry compares the stamp against
 `now`. A record whose stamp cannot be confidently compared to `now` — a missing
 or unparseable stamp, or an aware/naive timezone mismatch between the stamp and

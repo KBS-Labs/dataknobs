@@ -775,14 +775,66 @@ def to_dict(self) -> dict:
 ## JSON Safety Utilities
 
 The serialization module also provides utilities for preparing arbitrary data structures
-for JSON serialization — useful when persisting state that may contain non-serializable
-values (functions, asyncio tasks, custom objects).
+for JSON serialization. There are two policies over one walk, for two purposes:
+
+| | `sanitize_for_json` | `as_data` |
+|---|---|---|
+| for | state that may hold live objects (functions, asyncio tasks), saved as far as it can be | a value that must arrive whole, such as a reply made of nested frozen dataclasses |
+| order | `Enum`, non-finite float, primitives, `dict`, list/tuple, set, dataclass, date/time/`Decimal`/`UUID`/path, `to_dict()` | `using`, `Enum`, non-finite float, primitives, `to_dict()`, dataclass, any `Mapping`, list/tuple, set |
+| a mapping | `dict` only; keys kept as they are | any `Mapping`; keys written as text the way `json.dumps` writes them, two keys written the same refused |
+| NaN, infinity | `None`, not reported; as a key, its entry dropped and reported | refused; as a key, written as text (`"NaN"`, `"Infinity"`) |
+| a set | a sorted list | a sorted list |
+| `datetime`, `date`, `time`, `Decimal`, `UUID`, a path | their text form (`isoformat()`, `str()`), not reported | refused, unless `using` names the type |
+| a `to_dict()` that raises | dropped | refused, the original as `__cause__` |
+| no rule | dropped, reported by `on_drop` | refused at once, naming the path |
+| a container that holds itself | dropped where it repeats | refused |
+| paths | `notes.tare`, `items[1]`, `tags{}`, `<root>` | `value.notes['tare']`, `value.items[1]` |
+
+`validate_json_safe` reports what `sanitize_for_json` would drop, without dropping it.
+`sanitize_and_report` gives both answers from one walk.
 
 ### sanitize_for_json()
 
-Recursively traverses a value and drops anything that isn't JSON-serializable
-(dicts, lists, strings, numbers, booleans, None). Handles dataclasses, sets,
-tuples, bytes, datetime, Enum, and objects with `to_dict()`.
+Recursively traverses a value and drops anything that isn't JSON-serializable.
+It keeps `None`, booleans, numbers, strings, dicts and lists; converts tuples
+to lists, dataclasses to dicts (field by field), an `Enum` to its value, and an
+object with a `to_dict()` returning a dict to that dict. A dataclass is
+converted field by field even when it defines its own `to_dict()`. A set or
+frozenset becomes a list of its members, sorted by each member's JSON so the
+same set always gives the same list. Anything else is dropped, including
+`bytes` and `timedelta`, which have no one standard text form.
+
+A value with one standard text form is written in it, as Django's and
+pydantic's JSON encoders write it: a `datetime`, `date` or `time` as
+`isoformat()`, a `Decimal` as `str()` (a float would round it), a `UUID` and a
+path as `str()`. A NaN or infinite `Decimal` becomes `None`, as a float one
+does. These are conversions, not drops, so none is reported; each reads back
+as a `str`, and a caller that needs the type back parses it on the way in.
+
+A NaN or infinite float is written as `None`, as `JSON.stringify` writes it.
+`json.dumps` would write it as `NaN` or `Infinity`, which is not JSON:
+`JSON.parse` and a Postgres `jsonb` column refuse it, though Python's own
+`json.loads` reads it back. Writing `None` keeps the key that holds it, the
+rest of its record and every position in its list, so `[20.5, nan, 21.0]`
+gives `[20.5, None, 21.0]`. It is a conversion rather than a drop, so it is
+not reported, as an `Enum` is not. It is lossy: NaN, an infinity and `None`
+all read back as `None`. A value that must keep the difference belongs with
+`as_data`, which refuses it.
+
+A dict keeps the keys `json.dumps` can write (`str`, `int`, a finite `float`,
+`bool`, `None`), and an `Enum` key becomes its value. An entry whose key is
+anything else, a tuple for instance, is dropped and reported like any other
+drop. So is an entry whose key is a NaN or infinite float
+(`a.inf (non-finite float key inf)`): `json.dumps` refuses that key under
+`allow_nan=False`, and two NaN keys are two entries it would write as one.
+
+A dropped value is left out of the dict, list or dataclass that holds it. A
+value dropped at the top level has no container to be left out of, so
+`sanitize_for_json` returns `None` for it (or raises, with `on_drop="error"`).
+
+A dict, list or dataclass that holds itself is dropped where it repeats, and
+reported as a `cycle`. Only the containers on the current path count, so a
+value reached twice by different routes is kept both times.
 
 ```python
 from dataknobs_common.serialization import sanitize_for_json
@@ -808,9 +860,12 @@ except SerializationError as e:
 
 **Parameters:**
 - `value` (Any): The value to sanitize
-- `on_drop` (str): `"silent"` (default), `"warn"`, or `"error"`
+- `on_drop` (`OnDrop`, i.e. `Literal["silent", "warn", "error"]`): `"silent"`
+  (default), `"warn"`, or `"error"`. Any other value raises `ValueError`, so a
+  misspelt `"error"` is not taken as silent.
 
-**Returns:** A JSON-safe copy of the input with non-serializable values removed.
+**Returns:** A JSON-safe copy of the input with non-serializable values removed;
+`None` when the input itself is dropped.
 
 ### validate_json_safe()
 
@@ -831,6 +886,149 @@ if not problems:
 - `value` (Any): The value to check
 
 **Returns:** `list[str]` of paths to non-serializable values. Empty list means fully safe.
+
+It is the same walk as `sanitize_for_json(value, on_drop="error")`, and each
+entry is what that call's `SerializationError` would list in
+`context["dropped_paths"]`.
+
+### sanitize_and_report()
+
+Both answers from one walk: what `sanitize_for_json` returns, and what it
+would report. For a caller that decides by the report what to do with the
+data, and would otherwise walk the value twice, calling each `to_dict()`
+twice. Nothing is logged or raised.
+
+```python
+from dataknobs_common.serialization import sanitize_and_report
+
+data, dropped = sanitize_and_report({"name": "Alice", "callback": some_function})
+# data == {"name": "Alice"}
+# dropped == ["callback (type=function)"]
+
+if not dropped:
+    store(data)  # all of the value, already converted
+```
+
+**Parameters:**
+- `value` (Any): The value to sanitize. It is never modified.
+
+**Returns:** `tuple[Any, list[str]]`: the value as `sanitize_for_json` returns
+it, and the paths `validate_json_safe` returns. An empty list means the data is
+all of the value.
+
+### as_data()
+
+Walks a value into JSON-shaped data and **refuses** what it has no rule for,
+rather than dropping it. Data that lost a field without saying so reads as data
+where that field was empty: a dashboard shows no tags, with nothing to say why.
+
+```python
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Any
+
+from dataknobs_common.exceptions import SerializationError
+from dataknobs_common.serialization import as_data
+
+
+@dataclass(frozen=True)
+class Price:
+    cents: int
+    currency: str
+
+    def to_dict(self) -> dict[str, Any]:
+        # A value that chose its own shape: an amount as text, never a float
+        whole, part = divmod(self.cents, 100)
+        return {"amount": f"{whole}.{part:02d}", "currency": self.currency}
+
+
+@dataclass(frozen=True)
+class Product:
+    sku: str
+    tags: frozenset[str]
+    price: Price
+    notes: dict[str, Any]
+
+
+kettle = Product("SKU-1042", frozenset({"stainless", "kitchen"}), Price(3450, "EUR"), {})
+as_data(kettle)
+# {"sku": "SKU-1042", "tags": ["kitchen", "stainless"],
+#  "price": {"amount": "34.50", "currency": "EUR"}, "notes": {}}
+
+try:
+    as_data(Product("SKU-1042", frozenset(), Price(3450, "EUR"), {"tare": Decimal("0.15")}))
+except SerializationError as e:
+    print(e)                   # value.notes['tare'] is of type Decimal, which has no rule as data
+    print(e.context["path"])   # value.notes['tare']
+```
+
+Its rules, in order:
+
+1. a type in `using` → that type's serialiser, its result walked. The
+   serialiser is not applied to the value it returned, so one returning its own
+   type cannot loop, but a value of that type anywhere inside the result is
+   shown by it too. The exact type is looked up first, then the first listed base;
+2. an `Enum` → its value, walked;
+3. `None`, `bool`, `int`, `float`, `str` → itself, except a NaN or infinite
+   float: JSON cannot write it, so it is refused;
+4. an object with a callable `to_dict()` (not a class) → its result, walked.
+   This comes before the dataclass rule, so a dataclass's own `to_dict()` is used;
+5. a dataclass instance → its fields, in declaration order;
+6. any `Mapping` (a `MappingProxyType`, say) → its items. An `Enum` key is
+   read as its value first; a `None`, `bool`, `int` or `float` key is written
+   as `json.dumps` writes it (`"null"`, `"true"`, `"1.5"`), so the two agree on
+   the same dict; any other key is written with `str()`. Two keys written the
+   same, `1` and `"1"`, are refused: one would replace the other;
+7. a `list` or `tuple` → a list;
+8. a `set` or `frozenset` → a list sorted by each item's JSON, so the same set
+   always gives the same data;
+9. anything else → refused.
+
+Every refusal is a `SerializationError` whose message and `context["path"]`
+name where the value was. A `to_dict()` or `using` serialiser that raises is
+refused too, with the original exception as `__cause__`; when that exception
+is itself a refusal from a nested `as_data`, the outer path is the one named.
+A container that holds itself is refused, and so is a value nested past the
+interpreter's recursion limit. A set's member has no position, so its path is
+written `value.tags{}`.
+
+`using` shows a type differently in one place without giving it a `to_dict()`
+that every other caller would get:
+
+```python
+as_data(order, using={Supplier: lambda s: s.supplier_id})
+```
+
+**Parameters:**
+- `value` (Any): The value to walk
+- `using` (`Mapping[type, Callable[[Any], Any]]`, keyword-only): per-call
+  serialisers by type. The type is exported as `Using`.
+
+**Returns:** dicts with `str` keys, lists and JSON scalars.
+
+### fields_data()
+
+A dataclass's fields as data, with some given in place of the field's value —
+for a value with one field too large to carry whole:
+
+```python
+from dataknobs_common.serialization import fields_data
+
+fields_data(order, lines={"count": len(order.lines)})
+# {"order_id": "ORD-88", "lines": {"count": 200}, "placed_by": "warehouse-2"}
+```
+
+A replacement is walked by the rules of `as_data`. A name that is not a field is
+refused (`Order has no field items`), so a renamed field cannot leave a
+replacement behind unnoticed. It takes only a dataclass instance, and a refusal
+names its path from the class: `Order.lines[0]`.
+
+**Parameters:**
+- `value` (Any, positional-only): a dataclass instance
+- `using` (keyword-only): as for `as_data`
+- `**replaced`: field names, each with the value to give in its place
+
+**Returns:** `dict[str, Any]` of the fields, in declaration order.
 
 ---
 

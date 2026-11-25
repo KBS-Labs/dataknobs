@@ -635,6 +635,28 @@ resolver.register_factory("databases", AsyncCallableFactory(create_database))
 db = await resolver.resolve_async("databases", "conversations")
 ```
 
+A plain `async def` function, or a factory whose `create` or `build` is
+`async def`, works through `resolve_async` too: whatever the factory returns
+is awaited when it is awaitable. `resolve` cannot await, so it refuses such a
+factory with a `BindingResolverError` naming its type and saying to call
+`resolve_async()`, and caches nothing.
+
+**How a factory is called.** Both methods follow one precedence. A class with
+`from_config` and none of `create`, `create_async` or `build` is the resource
+itself, and is built through `from_config_async(config)` (by `resolve_async`,
+when it has one) or `from_config(config)` -- the test `ObjectBuilder` applies
+to a `factory:`. Anything else is a factory, called through
+`create_async(**config)` (by `resolve_async`), `create(**config)`,
+`build(**config)`, or `factory(**config)`. Last, an object that is not a
+class and has none of those -- a registered singleton, a module -- is built
+through `from_config_async(config)` (by `resolve_async`, when it has one) or
+`from_config(config)`. A class with both `from_config` and `create` is a
+factory, and goes through `create`. A factory object whose class
+inherits `ConfigurableBase` therefore still goes through its `create`, even
+though that base gives it a `from_config` classmethod. `register_factory`'s
+parameter type, `RegisteredFactory` (in `dataknobs_config.binding_resolver`),
+names each of these shapes, so registering any of them type-checks.
+
 ## Usage Patterns
 
 ### Pattern 1: Direct Environment Config
@@ -848,8 +870,8 @@ llm_providers:
 | `unregister_factory(type)` | Remove factory |
 | `has_factory(type)` | Check if factory registered |
 | `get_registered_types()` | List registered types |
-| `resolve(type, name, use_cache, **overrides)` | Resolve to instance |
-| `resolve_async(type, name, use_cache, **overrides)` | Async resolution |
+| `resolve(type, name, use_cache, **overrides)` | Resolve to instance; refuses an async factory |
+| `resolve_async(type, name, use_cache, **overrides)` | Async resolution; awaits what the factory returns |
 | `get_cached(type, name)` | Get cached instance |
 | `is_cached(type, name)` | Check if cached |
 | `clear_cache(type)` | Clear cache |

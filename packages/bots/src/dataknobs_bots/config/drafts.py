@@ -31,14 +31,14 @@ Example:
 from __future__ import annotations
 
 import logging
-import time
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
+from dataknobs_common.clock import now_iso, utc_now
 from dataknobs_common.paths import safe_join_or_raise
 from dataknobs_common.structured_config import StructuredConfig
 
@@ -151,7 +151,7 @@ class ConfigDraftManager:
             The generated draft ID.
         """
         draft_id = uuid.uuid4().hex[:8]
-        now = datetime.now(UTC).isoformat()
+        now = now_iso()
 
         metadata = DraftMetadata(
             draft_id=draft_id,
@@ -193,7 +193,7 @@ class ConfigDraftManager:
 
         existing = self._read_file(draft_path)
         existing_meta = existing.get(self._metadata_key, {})
-        now = datetime.now(UTC).isoformat()
+        now = now_iso()
 
         metadata = DraftMetadata(
             draft_id=draft_id,
@@ -331,7 +331,9 @@ class ConfigDraftManager:
             Number of stale drafts removed.
         """
         age_limit = max_age_hours if max_age_hours is not None else self._max_age_hours
-        cutoff = time.time() - (age_limit * 3600)
+        # Measured on the clock the stamps come from, so a draft ages under
+        # ``use_clock`` exactly as it was stamped under it.
+        cutoff = utc_now().timestamp() - (age_limit * 3600)
         cleaned = 0
 
         if not self._output_dir.exists():
