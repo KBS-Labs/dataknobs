@@ -288,8 +288,9 @@ class SyncS3Database(
         unconditional. The compare-and-set holds against any S3 implementation
         that honors conditional writes (real AWS S3, recent LocalStack).
 
-        The stored object's ``created_at`` is kept, and its body is read for
-        that: one that is not JSON raises ``json.JSONDecodeError``.
+        The stored object is read to keep its ``created_at``. One that is not a
+        record raises ``ValueError``, and one S3 will not return (archived, or
+        not permitted) raises botocore's error.
         """
         self._check_connection()
 
@@ -300,7 +301,7 @@ class SyncS3Database(
             response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
             stored = self._stored_metadata(response["Body"].read())
         except self.ClientError as e:
-            if e.response["Error"]["Code"] == "NoSuchKey":
+            if is_s3_missing_object(e):
                 return False
             raise
 

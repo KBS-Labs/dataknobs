@@ -345,8 +345,9 @@ class AsyncS3Database(
         stale token raises ``ConcurrencyError``. When ``None`` the update is
         unconditional.
 
-        The stored object's ``created_at`` is kept, and its body is read for
-        that: one that is not JSON raises ``json.JSONDecodeError``.
+        The stored object is read to keep its ``created_at``. One that is not a
+        record raises ``ValueError``, and one S3 will not return (archived, or
+        not permitted) raises botocore's error.
         """
         self._check_connection()
 
@@ -364,9 +365,9 @@ class AsyncS3Database(
         try:
             async with self._client() as s3:
                 body = await self._fetch_body(s3, key)
-                # An update never inserts. A conditional one does not rely on
-                # this read: the IfMatch PUT decides, and answers for a key
-                # deleted since.
+                # An update never inserts. Where the read succeeds, the IfMatch
+                # PUT decides a conditional one; a missing or unreadable object
+                # ends it here, whatever the token.
                 if body is None:
                     return False
                 obj = self._object_for_write(record, id, self._stored_metadata(body))
@@ -466,8 +467,9 @@ class AsyncS3Database(
         record must already exist with a matching ETag, otherwise it raises
         ``ConcurrencyError``. A conditional upsert never inserts.
 
-        An object already stored keeps its ``created_at``, and its body is read
-        for that: one that is not JSON raises ``json.JSONDecodeError``.
+        An object already stored is read to keep its ``created_at``. One that
+        is not a record raises ``ValueError``, and one S3 will not return
+        (archived, or not permitted) raises botocore's error.
         """
         self._check_connection()
 

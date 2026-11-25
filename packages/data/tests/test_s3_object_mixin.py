@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -27,11 +27,13 @@ CALLERS = "2020-01-01T00:00:00+00:00"
         (STORED, None, STORED),
         (None, CALLERS, CALLERS),
         (None, datetime(2020, 1, 1, tzinfo=UTC), CALLERS),
+        (None, date(2020, 1, 1), "2020-01-01"),
+        (None, 1577836800.5, 1577836800.5),
         (None, None, NOW.isoformat()),
     ],
 )
 def test_created_at_is_the_stored_then_the_callers_then_the_clocks(
-    stored: Any, callers: Any, expected: str
+    stored: Any, callers: Any, expected: Any
 ) -> None:
     record = Record({"v": 1}, metadata={"created_at": callers, "mine": 1})
     clock = FixedClock(NOW - timedelta(seconds=1))
@@ -54,14 +56,17 @@ def test_the_id_written_under_wins_over_every_id_the_record_carries() -> None:
     assert (record.id, record.metadata) == ("other", {"id": "meta"})
 
 
-@pytest.mark.parametrize("body", [{"v": 1}, {"metadata": None}, {"metadata": []}, [], None])
+@pytest.mark.parametrize("body", [{"v": 1}, {"metadata": None}, {"metadata": []}])
 def test_a_stored_object_holding_no_metadata_reads_as_none(body: Any) -> None:
     assert S3ObjectMixin._stored_metadata(json.dumps(body).encode()) == {}
 
 
-def test_a_stored_object_that_is_not_json_is_not_read_as_empty() -> None:
-    with pytest.raises(json.JSONDecodeError):
-        S3ObjectMixin._stored_metadata(b"{not json")
+@pytest.mark.parametrize(
+    "body", [b"{not json", b'{"a": "\xff\xfe"}', b"[1]", b"null", b'"text"', b""]
+)
+def test_a_stored_object_that_is_not_a_record_is_not_read_as_empty(body: bytes) -> None:
+    with pytest.raises(ValueError):
+        S3ObjectMixin._stored_metadata(body)
 
 
 def test_both_twins_build_what_they_store_here() -> None:

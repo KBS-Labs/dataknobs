@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.clock import now_iso
@@ -28,11 +28,17 @@ class S3ObjectMixin:
         """The metadata of a stored object, empty where it holds none.
 
         Raises:
-            json.JSONDecodeError: The object is not JSON. A write over it
-                would discard what is there, so it is not read as empty.
+            ValueError: The object is not a record: not UTF-8, not JSON, or
+                JSON that is not an object. A write over it would discard what
+                is there, so it is not read as empty.
         """
         stored = json.loads(body)
-        metadata = stored.get("metadata") if isinstance(stored, dict) else None
+        if not isinstance(stored, dict):
+            raise ValueError(
+                f"The stored object is not a record: expected a JSON object, "
+                f"found {type(stored).__name__}"
+            )
+        metadata = stored.get("metadata")
         return metadata if isinstance(metadata, dict) else {}
 
     def _object_for_write(
@@ -42,7 +48,8 @@ class S3ObjectMixin:
 
         ``created_at`` is the stored object's where it has one, else the
         caller's, so a copied record keeps its time, else now. ``updated_at``
-        is now, from the same read of the clock. The caller's record is not
+        is now, from the same read of the clock. A ``date`` or ``datetime`` is
+        stored as ISO 8601 text and any other ``created_at`` as given. The caller's record is not
         written to: one passed to two writes would carry the first one's
         stamps and id into the second.
 
@@ -56,7 +63,7 @@ class S3ObjectMixin:
         created_at = (stored or {}).get("created_at")
         if created_at is None:
             created_at = metadata.get("created_at")
-        if isinstance(created_at, datetime):
+        if isinstance(created_at, date):
             created_at = created_at.isoformat()
         metadata["id"] = id
         metadata["created_at"] = now if created_at is None else created_at

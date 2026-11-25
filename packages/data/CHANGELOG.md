@@ -198,7 +198,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   s3://bucket/p// s3://bucket/p/ --recursive`), or from `/` to the bucket root.
 - **`SyncS3Database.create` keeps a `created_at` in the record's metadata**, as
   `AsyncS3Database` does, where it replaced it with the time of the write. A
-  `datetime` there is stored as ISO text on both. A record read and created
+  `date` or `datetime` there is stored as ISO text on both; any other value is
+  stored as given, and one JSON cannot hold raises `TypeError`. A record read and created
   again under a new id keeps the old time; drop the key to have it stamped.
 - **BREAKING: an S3 read that fails raises.** `SyncS3Database.search` and
   `stream_read` logged and left out any record they could not fetch, decode or
@@ -2019,8 +2020,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   write, or with the caller's value, `None` included; `SyncS3Database` kept it.
   Both now keep the stored value, else take the caller's, else the clock's. The
   async twin reads the object to do it: a conditional `update` and an `upsert`
-  make two requests where they made one, and an object that is not JSON raises
-  `JSONDecodeError`, as on the sync twin, where it was replaced.
+  make two requests where they made one.
+
+  **A replacement now needs the stored object to be readable**, as a sync
+  `update` did. Over an archived object (GLACIER) the async `update` and
+  `upsert` raise botocore's `InvalidObjectState`, where they replaced it. An
+  async writer needs `s3:GetObject` (and `kms:Decrypt` under SSE-KMS) beside
+  `s3:PutObject`, and `s3:ListBucket` for an `upsert` of a new id not to be
+  refused. On both twins an object that is not a record (not UTF-8, not JSON,
+  or not a JSON object) raises `ValueError` and is left as it is; a streaming
+  write counts it as failed. The async twin replaced it, and the sync one
+  raised `AttributeError` for JSON that is not an object. An async conditional
+  `update` with a stale token over such an object raises that error rather than
+  `ConcurrencyError`, as the sync twin does.
 
 - **An S3 `update` leaves the caller's record alone.** Both twins wrote `id`,
   `created_at` and `updated_at` into its metadata, and on the async twin one
