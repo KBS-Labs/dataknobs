@@ -29,13 +29,15 @@ Field-path rules:
   reached through its keyword sub-field by every operator but existence, and by
   a sort, so a comparison is against the **full, un-analyzed** value. Any other
   field (keyword, number, date, boolean) is reached directly. A pattern on a
-  field that holds no strings matches nothing.
-* A text field with no keyword sub-field (a custom mapping) has no full value to
-  reach: an equality or pattern on it matches nothing, a range compares its
-  analyzed terms, and Elasticsearch refuses to sort by it. Nothing being
-  matched, the negated forms match every value. So does ``NOT_LIKE`` on any
-  other field that is reached directly and holds neither strings nor numbers
-  nor booleans, such as a date.
+  field that holds no strings (a number, boolean, object or vector) matches
+  nothing, negated or not.
+* What the index cannot answer raises ``ValueError``, negated or not: any
+  comparison or pattern on a text field with no keyword sub-field (a custom
+  mapping), which has no full value to reach, and a pattern on a field that is
+  not matched as text, such as a date or an ``ip``. Elasticsearch itself refuses
+  to sort by the former. Under an alias, one index that maps the field this
+  way is enough, except where another gives it a keyword sub-field, which is
+  then used.
 
 Semantics:
 
@@ -111,9 +113,11 @@ _PATTERN_OPS = frozenset({Operator.LIKE, Operator.STARTS_WITH, Operator.REGEX})
 _EXISTENCE_OPS = frozenset({Operator.EXISTS, Operator.NOT_EXISTS})
 
 #: Elasticsearch types whose terms are words rather than the stored value.
-_ANALYZED_TYPES = frozenset({"text", "match_only_text"})
+_ANALYZED_TYPES = frozenset({"text", "match_only_text", "search_as_you_type"})
 #: Elasticsearch types that hold a string's full value.
 _EXACT_STRING_TYPES = frozenset({"keyword", "constant_keyword", "wildcard", "flattened"})
+#: Elasticsearch types a pattern can be tried against.
+_PATTERN_TYPES = _EXACT_STRING_TYPES | {"version"}
 #: The Elasticsearch types that hold one kind of value alone, and it.
 _SCALAR_TYPES = {
     **dict.fromkeys(
@@ -132,6 +136,8 @@ _SCALAR_TYPES = {
     ),
     "boolean": "boolean",
 }
+#: Elasticsearch types no string is stored in, so no pattern matches.
+_STRINGLESS_TYPES = frozenset({*_SCALAR_TYPES, "object", "nested", "dense_vector"})
 #: The kinds of bound (:func:`~dataknobs_data.query.value_kind`) that can relate
 #: to a value of an Elasticsearch type. It reads a bound of another kind as a
 #: spelling of its own (``"3"`` as the number) or refuses it. A date takes a
@@ -200,14 +206,14 @@ class FieldTypes:
             return "id"
         return self._exact.get(name, f"data.{name}")
 
-    def holds_exact_strings(self, name: str) -> bool:
+    def takes_patterns(self, name: str) -> bool:
         """Whether :meth:`value_path` can be matched against a pattern.
 
         True for a field that is not mapped, which no document has a value for.
         """
         if is_storage_key_field(name) or name in self._exact or name not in self._types:
             return True
-        return bool(self._types[name] & _EXACT_STRING_TYPES)
+        return bool(self._types[name] & _PATTERN_TYPES)
 
     def relates(self, name: str, bound: Any) -> bool:
         """Whether a bound can relate to any value a field holds.
@@ -229,17 +235,21 @@ class FieldTypes:
         return any(t not in _BOUND_KINDS or kind in _BOUND_KINDS[t] for t in types)
 
     def holds_only_words(self, name: str) -> bool:
-        """Whether a field is text whose full value nothing holds.
+        """Whether a field is text whose full value nothing holds, in any index.
 
         Its own terms are words, and a word is not the value.
         """
         types = self._types.get(name)
-        return types is not None and name not in self._exact and types <= _ANALYZED_TYPES
+        return types is not None and name not in self._exact and bool(types & _ANALYZED_TYPES)
 
     def holds_no_strings(self, name: str) -> bool:
-        """Whether a field holds only numbers and booleans."""
+        """Whether no value of a field is a string."""
         types = self._types.get(name)
-        return types is not None and types <= _SCALAR_TYPES.keys()
+        return types is not None and types <= _STRINGLESS_TYPES
+
+    def described(self, name: str) -> str:
+        """The types a mapped field has, for an error to name."""
+        return " and ".join(sorted(self._types[name]))
 
 
 def condition_fields(condition: Condition | None) -> set[str]:
@@ -337,7 +347,7 @@ def build_filter_es_query(filter_obj: Filter, types: FieldTypes) -> dict[str, An
     Pure and self-contained, so a caller only ever composes the returned clauses
     under ``bool``/``must``. A negated operator matches a document that has a
     value the operator it negates does not match. Raises ``ValueError`` for an
-    operator this translator cannot express.
+    operator this translator cannot express, or that the index cannot answer.
     """
     op = filter_obj.operator
     if op == Operator.NOT_EXISTS:
@@ -366,23 +376,29 @@ def _positive_clause(op: Operator, filter_obj: Filter, types: FieldTypes) -> dic
         return {"exists": {"field": path}}
     if op in _PATTERN_OPS:
         clause = _pattern_clause(op, path, value)
-        return clause if types.holds_exact_strings(name) else None
+        if types.holds_no_strings(name):
+            return None
+        if types.holds_only_words(name) or not types.takes_patterns(name):
+            raise _unanswerable(filter_obj, types)
+        return clause
     if op == Operator.EQ:
-        return {"term": {path: value}} if _can_equal(name, value, types) else None
+        return {"term": {path: value}} if _relates(filter_obj, value, types) else None
     if op == Operator.IN:
-        members = [m for m in value if _can_equal(name, m, types)]
+        members = [m for m in value if _relates(filter_obj, m, types)]
         return {"terms": {path: members}} if members else None
     if op in _RANGE_BOUNDS:
-        if not types.relates(name, value):
+        if not _relates(filter_obj, value, types):
             return None
         return {"range": {path: {_RANGE_BOUNDS[op]: value}}}
     if op == Operator.BETWEEN:
         # A Filter refuses a range that is not two bounds when it is built.
         lower, upper = value
-        if not (types.relates(name, lower) and types.relates(name, upper)):
+        if not all(types.relates(name, bound) for bound in value):
             return None
         if not _same_kind(lower, upper):
             return None
+        if types.holds_only_words(name):
+            raise _unanswerable(filter_obj, types)
         return {"range": {path: {"gte": lower, "lte": upper}}}
 
     raise ValueError(f"Unsupported operator: {op}")
@@ -398,11 +414,26 @@ def _pattern_clause(op: Operator, path: str, value: Any) -> dict[str, Any]:
     return {"prefix": {path: value}}
 
 
-def _can_equal(name: str, value: Any, types: FieldTypes) -> bool:
-    """Whether equality with ``value`` can match, by how the field is mapped."""
-    if isinstance(value, str) and types.holds_only_words(name):
+def _relates(filter_obj: Filter, bound: Any, types: FieldTypes) -> bool:
+    """:meth:`FieldTypes.relates`, raising where the index cannot say further."""
+    if not types.relates(filter_obj.field, bound):
         return False
-    return types.relates(name, value)
+    if types.holds_only_words(filter_obj.field):
+        raise _unanswerable(filter_obj, types)
+    return True
+
+
+def _unanswerable(filter_obj: Filter, types: FieldTypes) -> ValueError:
+    """The error for an operator the index holds nothing to answer with."""
+    name = filter_obj.field
+    asked = f"Elasticsearch cannot answer {filter_obj.operator.name} on {name!r}, "
+    mapped = f"which the index has mapped as {types.described(name)}"
+    if types.holds_only_words(name):
+        return ValueError(
+            f"{asked}{mapped} with no keyword sub-field: only its words can be reached. "
+            "Map it with a keyword sub-field, or as a keyword."
+        )
+    return ValueError(f"{asked}{mapped}: a pattern is matched against a keyword.")
 
 
 def _same_kind(lower: Any, upper: Any) -> bool:

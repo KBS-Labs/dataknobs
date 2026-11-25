@@ -34,6 +34,7 @@ FOREIGN_MAPPINGS: dict[str, Any] = {
                 "day": {"type": "date"},
                 "ip": {"type": "ip"},
                 "words": {"type": "text"},
+                "release": {"type": "version"},
                 "flat": {"type": "flattened"},
                 "alias": {"type": "alias", "path": "data.kw"},
             }
@@ -49,6 +50,8 @@ ROWS: dict[str, dict[str, Any]] = {
         "rank": 3,
         "flat": {"k": "x"},
         "ip": "10.0.0.1",
+        "release": "1.2.0",
+        "obj": {"k": 1},
         "flag": True,
     },
     "b": {
@@ -59,6 +62,8 @@ ROWS: dict[str, dict[str, Any]] = {
         "rank": 1,
         "flat": {"k": "y"},
         "ip": "10.0.0.2",
+        "release": "1.10.0",
+        "obj": {"k": 1},
         "flag": False,
     },
     "c": {
@@ -69,6 +74,8 @@ ROWS: dict[str, dict[str, Any]] = {
         "rank": 2,
         "flat": {"k": "z"},
         "ip": "10.0.0.3",
+        "release": "2.0.0",
+        "obj": {"k": 1},
         "flag": False,
     },
 }
@@ -202,13 +209,30 @@ class TestAnIndexMappedElsewhere:
             ("rank", Operator.IN, ["3"], []),
             ("flag", Operator.EQ, "true", []),
             ("flag", Operator.EQ, True, ["a"]),
-            # Only words are reachable here, and equality is not about a word.
-            ("words", Operator.EQ, "apple", []),
-            ("words", Operator.NEQ, "apple", ["a", "b", "c"]),
-            ("words", Operator.IN, ["apple"], []),
-            # A pattern matches neither a number nor a date.
+            # Only words are reachable here, and no comparison is about a word.
+            ("words", Operator.EQ, "apple", "ValueError"),
+            ("words", Operator.NEQ, "apple", "ValueError"),
+            ("words", Operator.IN, ["apple"], "ValueError"),
+            ("words", Operator.NOT_IN, ["apple"], "ValueError"),
+            ("words", Operator.GT, "apple", "ValueError"),
+            ("words", Operator.NOT_BETWEEN, ["a", "b"], "ValueError"),
+            ("words", Operator.LIKE, "app%", "ValueError"),
+            ("words", Operator.NOT_LIKE, "app%", "ValueError"),
+            ("words", Operator.EQ, None, []),
+            ("words", Operator.EXISTS, None, ["a", "b", "c"]),
+            # Nor can a pattern be tried against a date or an address.
+            ("day", Operator.STARTS_WITH, "20", "ValueError"),
+            ("day", Operator.NOT_LIKE, "20%", "ValueError"),
+            ("ip", Operator.LIKE, "10%", "ValueError"),
+            ("ip", Operator.REGEX, "10.*", "ValueError"),
+            # These hold no strings, so a pattern matches none of them.
             ("rank", Operator.LIKE, "1%", []),
-            ("day", Operator.STARTS_WITH, "20", []),
+            ("rank", Operator.NOT_LIKE, "1%", []),
+            ("obj", Operator.LIKE, "1%", []),
+            ("obj", Operator.NOT_LIKE, "1%", []),
+            ("release", Operator.STARTS_WITH, "1.", ["a", "b"]),
+            ("release", Operator.LIKE, "1.%", ["a", "b"]),
+            ("release", Operator.NOT_LIKE, "1.%", ["c"]),
         ],
     )
     async def test_every_field_filters(

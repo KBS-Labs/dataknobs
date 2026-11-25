@@ -514,7 +514,7 @@ def test_existence_asks_the_field_itself(op: Operator) -> None:
     assert _field_path(Filter("f", op), TYPES) == "data.f"
 
 
-@pytest.mark.parametrize("kind", ["long", "double", "date", "boolean"])
+@pytest.mark.parametrize("kind", ["long", "double", "boolean", "object", "nested", "dense_vector"])
 class TestAFieldThatHoldsNoStrings:
     @pytest.mark.parametrize(
         ("op", "value"), [(Operator.EQ, 5), (Operator.GT, 5), (Operator.GT, "5")]
@@ -524,8 +524,12 @@ class TestAFieldThatHoldsNoStrings:
 
     @pytest.mark.parametrize("op", [Operator.LIKE, Operator.STARTS_WITH, Operator.REGEX])
     def test_matches_no_pattern(self, kind: str, op: Operator) -> None:
-        # Elasticsearch refuses these on the field itself.
         assert build_filter_es_query(Filter("x", op, "p"), _learned(x=kind)) == NOTHING
+
+    def test_matches_no_negated_pattern(self, kind: str) -> None:
+        # A pattern asks for a string, negated or not.
+        spec = Filter("x", Operator.NOT_LIKE, "p")
+        assert build_filter_es_query(spec, _learned(x=kind)) == NOTHING
 
 
 # --- a bound relates to its own kind ---------------------------------------
@@ -569,7 +573,7 @@ def _negatives(bound: Any) -> list[Filter]:
 OTHER_KINDS = [
     *((kind, bound) for kind in NUMBER_TYPES for bound in ("3", "red", True, NOON)),
     *(("boolean", bound) for bound in ("true", 1, 0, NOON)),
-    *((kind, bound) for kind in ("long", "boolean", "date", "text") for bound in (None, NAN)),
+    *((kind, bound) for kind in ("long", "boolean", "date") for bound in (None, NAN)),
 ]
 
 
@@ -633,19 +637,79 @@ def test_a_range_may_give_one_time_as_a_string() -> None:
     ) == {"range": {"data.x": {"gte": "2024-01-01", "lte": NOON}}}
 
 
-@pytest.mark.parametrize("kind", ["text", "match_only_text"])
-def test_no_string_equals_text_with_no_full_value(kind: str) -> None:
+# --- what an index cannot answer -------------------------------------------
+
+
+PATTERN_OPERATORS = [Operator.LIKE, Operator.NOT_LIKE, Operator.STARTS_WITH, Operator.REGEX]
+WORDS = ["text", "match_only_text", "search_as_you_type"]
+
+
+def _typed(*kinds: str) -> FieldTypes:
+    """A field with no sub-field, mapped as each of ``kinds`` by one index or another."""
     types = FieldTypes()
-    types.learn(["x"], {"data.x": {kind: {}}})
-    assert build_filter_es_query(Filter("x", Operator.EQ, "s"), types) == NOTHING
-    assert build_filter_es_query(Filter("x", Operator.IN, ["s"]), types) == NOTHING
-    assert build_filter_es_query(Filter("x", Operator.NEQ, "s"), types) == {
-        "exists": {"field": "data.x"}
+    types.learn(["x"], {"data.x": {kind: {} for kind in kinds}})
+    return types
+
+
+def _raises(spec: Filter, types: FieldTypes) -> None:
+    with pytest.raises(ValueError, match=rf"{spec.operator.name} on 'x'"):
+        build_filter_es_query(spec, types)
+
+
+@pytest.mark.parametrize("bound", ["s", 5, True, NOON])
+@pytest.mark.parametrize("kind", WORDS)
+def test_text_with_no_full_value_cannot_be_compared(kind: str, bound: Any) -> None:
+    for spec in _positives(bound) + _negatives(bound):
+        _raises(spec, _typed(kind))
+
+
+@pytest.mark.parametrize("kind", [*WORDS, "date", "date_nanos", "ip", "geo_point"])
+@pytest.mark.parametrize("op", PATTERN_OPERATORS)
+def test_a_pattern_the_index_cannot_try_raises(kind: str, op: Operator) -> None:
+    _raises(Filter("x", op, "p"), _typed(kind))
+
+
+@pytest.mark.parametrize("other", ["long", "keyword"])
+def test_one_index_of_an_alias_without_the_full_value_is_enough(other: str) -> None:
+    for spec in (Filter("x", Operator.EQ, "s"), Filter("x", Operator.NOT_LIKE, "s")):
+        _raises(spec, _typed("text", other))
+
+
+def test_a_pattern_on_a_date_in_one_index_and_a_number_in_another_raises() -> None:
+    _raises(Filter("x", Operator.LIKE, "p"), _typed("date", "long"))
+
+
+@pytest.mark.parametrize("kind", WORDS)
+def test_what_matches_nothing_whatever_the_field_holds_does_not_raise(kind: str) -> None:
+    types = _typed(kind)
+    for bound in (None, NAN):
+        for spec in _positives(bound):
+            assert build_filter_es_query(spec, types) == NOTHING, spec
+        for spec in _negatives(bound):
+            assert build_filter_es_query(spec, types) == {"exists": {"field": "data.x"}}, spec
+    assert build_filter_es_query(Filter("x", Operator.IN, []), types) == NOTHING
+
+
+def test_a_null_member_does_not_hide_one_that_cannot_be_compared() -> None:
+    for members in ([None, "s"], ["s", None]):
+        _raises(Filter("x", Operator.IN, members), _typed("text"))
+
+
+@pytest.mark.parametrize("kind", [*WORDS, "date", "ip"])
+def test_existence_is_always_answered(kind: str) -> None:
+    present = {"exists": {"field": "data.x"}}
+    assert build_filter_es_query(Filter("x", Operator.EXISTS), _typed(kind)) == present
+
+
+def test_a_version_can_be_matched_against_a_pattern() -> None:
+    assert build_filter_es_query(Filter("x", Operator.STARTS_WITH, "1."), _typed("version")) == {
+        "prefix": {"data.x": "1."}
     }
-    # A range is over the words.
-    assert build_filter_es_query(Filter("x", Operator.GT, "s"), types) == {
-        "range": {"data.x": {"gt": "s"}}
-    }
+
+
+def test_the_error_says_what_to_change() -> None:
+    with pytest.raises(ValueError, match=r"mapped as text.*keyword"):
+        build_filter_es_query(Filter("x", Operator.EQ, "s"), _typed("text"))
 
 
 @pytest.mark.parametrize("kind", [*NUMBER_TYPES, "boolean"])
@@ -763,11 +827,3 @@ def test_a_sort_reaches_each_fields_full_value() -> None:
 def test_a_type_says_which_bounds_it_can_hold(kind: str, bound: Any, relates: bool) -> None:
     """A date holds epoch milliseconds, and any field can hold a list."""
     assert _learned(x=kind).relates("x", bound) is relates
-
-
-@pytest.mark.parametrize("kind", ["date", "ip"])
-def test_a_negated_pattern_on_a_field_no_pattern_reaches(kind: str) -> None:
-    """Its values are strings, which a pattern cannot be tried against."""
-    assert build_filter_es_query(Filter("x", Operator.NOT_LIKE, "a%"), _learned(x=kind)) == {
-        "exists": {"field": "data.x"}
-    }
