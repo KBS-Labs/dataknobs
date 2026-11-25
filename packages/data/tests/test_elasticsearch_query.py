@@ -17,8 +17,8 @@ Contract pinned here:
 * ``LIKE``/``NOT_LIKE`` translate SQL wildcards (``%``→``*``, ``_``→``?``),
   escape literal Lucene metacharacters (``*``/``?``/backslash), and match
   case-insensitively, matching the in-memory and SQL backends.
-* ``REGEX`` targets the ``.keyword`` sub-field so the pattern matches the full
-  value, not a single analyzed token.
+* ``REGEX`` targets the ``.keyword`` sub-field, so the pattern is found in
+  the full value, not a single analyzed token.
 * ``STARTS_WITH`` is a case-sensitive ``prefix`` (no ``case_insensitive`` flag).
 * Every negation returns a self-contained ``{"bool": {"must_not": …}}`` clause.
 * An unsupported operator raises rather than silently matching everything.
@@ -235,7 +235,7 @@ def test_regex_uses_keyword_full_value() -> None:
     # REGEX targets the .keyword sub-field (full, un-analyzed value), NOT the
     # analyzed base path where a regexp would match a single lowercased token.
     assert build_filter_es_query(Filter("f", Operator.REGEX, "a.*z"), TYPES) == {
-        "regexp": {"data.f.keyword": "a.*z"}
+        "regexp": {"data.f.keyword": {"value": ".*a[^\n]*z.*", "flags": "NONE"}}
     }
 
 
@@ -246,7 +246,7 @@ def test_regex_multi_token_pattern_targets_full_value() -> None:
     # Pin that REGEX resolves to .keyword so cross-token patterns work like the
     # in-memory (re.search) and SQL backends, not the old per-token data.name.
     assert build_filter_es_query(Filter("name", Operator.REGEX, "alice.*smith"), TYPES) == {
-        "regexp": {"data.name.keyword": "alice.*smith"}
+        "regexp": {"data.name.keyword": {"value": ".*alice[^\n]*smith.*", "flags": "NONE"}}
     }
 
 
@@ -284,7 +284,10 @@ def test_starts_with_is_case_sensitive_prefix() -> None:
             Filter("id", Operator.GT, "orders/1"),
             {"range": {"id": {"gt": "orders/1"}}},
         ),
-        (Filter("id", Operator.REGEX, "orders/.*"), {"regexp": {"id": "orders/.*"}}),
+        (
+            Filter("id", Operator.REGEX, "^orders/"),
+            {"regexp": {"id": {"value": "orders\\/.*", "flags": "NONE"}}},
+        ),
         (Filter("id", Operator.EXISTS), {"exists": {"field": "id"}}),
     ],
 )
@@ -691,7 +694,7 @@ def test_one_index_of_an_alias_that_takes_no_pattern_is_enough(op: Operator, oth
 
 def test_an_alias_whose_every_index_takes_patterns_is_answered() -> None:
     clause = build_filter_es_query(Filter("x", Operator.REGEX, "p"), _typed("keyword", "wildcard"))
-    assert clause == {"regexp": {"data.x": "p"}}
+    assert clause == {"regexp": {"data.x": {"value": ".*p.*", "flags": "NONE"}}}
 
 
 @pytest.mark.parametrize("kind", WORDS)

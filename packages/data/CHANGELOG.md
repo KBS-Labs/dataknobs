@@ -55,6 +55,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was a substring of the first field, or every record when none were named, and
   found nothing in a `text` field with no keyword sub-field. A missing index is
   `ValueError` there too, where it was `NotFoundError`.
+- **BREAKING: `REGEX` on Elasticsearch finds the pattern anywhere in the value**,
+  as on the other backends, in Python's syntax rather than Lucene's.
+
+  | Pattern | Before | Now |
+  |---|---|---|
+  | `eag` | matched `eag` alone | finds `eagle` |
+  | `^eag`, `gle$` | matched nothing | anchored |
+  | `@`, `~x` | matched every record | the characters themselves |
+  | `(?:ab)` | matched nothing | finds `ab` |
+  | `"`, `\t` | the client's error | the characters themselves |
+  | `.` | matched a newline | does not |
+  | look-around, `\b`, back-references, inline flags that change matching | matched nothing, or the client's error | `ValueError` |
+  | not a regular expression | the client's error | `ValueError` |
+  | a long repeat, as `x{1000}` | matched the whole value | the client's error |
+
+  Wrap a pattern in `^(?:...)\Z` to match the whole value as before. `\d` and
+  `\w` are ASCII.
 - **An Elasticsearch `hybrid_search` whose `text_fields` include one that cannot
   hold the text** (a number, date, boolean, ip, range, geo or vector field)
   matches nothing in that field, on both backends. The async backend raised
