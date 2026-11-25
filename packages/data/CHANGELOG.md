@@ -79,6 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   between two pages of a read, a search that timed out, and a field lookup over
   an alias some index of which is down. `context["failures"]` lists the failures
   Elasticsearch gave. A stream may have yielded records before it raises.
+- **BREAKING: a native Elasticsearch hybrid search falls back to client-side
+  fusion only when the node cannot run one**, because its version or licence
+  leaves RRF out. A rejected request, a refused permission or a lost connection
+  raises, where it was logged as "Native RRF not available" and the search was
+  sent again as two others.
 - **BREAKING: a failed item in an Elasticsearch batch raises `DatabaseError`**,
   whose `context["failures"]` names every one, after the rest of the batch has
   been written. `create_batch` and `upsert_batch` left the id out of their

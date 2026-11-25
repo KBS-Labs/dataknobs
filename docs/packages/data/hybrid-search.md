@@ -98,7 +98,9 @@ fused = weighted_score_fusion(
 
 ### Elasticsearch
 
-Native RRF retriever (Elasticsearch 8.8+):
+Native RRF retriever, on the async backend, where the node's version and licence
+allow it. A node that cannot run one is sent the two searches and they are fused
+client-side; any other failure raises.
 
 ```python
 results = await es_backend.hybrid_search(

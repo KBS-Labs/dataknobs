@@ -25,6 +25,7 @@ from dataknobs_utils.elasticsearch_responses import (
     incomplete_reason,
     says_document_missing,
     says_index_exists,
+    says_rrf_unsupported,
 )
 
 from ..exceptions import DatabaseError, DuplicateRecordError
@@ -42,6 +43,11 @@ def is_missing_document(error: Any) -> bool:
 def is_existing_index(error: Any) -> bool:
     """Whether an ``ApiError`` says the index being created is already there."""
     return says_index_exists(error.body)
+
+
+def is_rrf_unsupported(error: Any) -> bool:
+    """Whether an exception says the node cannot run an ``rrf`` retriever."""
+    return says_rrf_unsupported(getattr(error, "body", None))
 
 
 def require_complete(response: Any, operation: str) -> Any:

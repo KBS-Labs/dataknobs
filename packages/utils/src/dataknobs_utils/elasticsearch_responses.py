@@ -48,6 +48,26 @@ def says_index_exists(body: Any) -> bool:
     return error_type(body) == "resource_already_exists_exception"
 
 
+def says_rrf_unsupported(body: Any) -> bool:
+    """Whether a refused search says the node cannot run an ``rrf`` retriever.
+
+    A node too old for retrievers, or for ``rank_window_size``, cannot parse the
+    request, and one whose licence leaves RRF out refuses it.
+    """
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return False
+    kind, reason = error_type(body), error_reason(body) or ""
+    if kind == "security_exception":
+        # Also the type of a refused permission, which names no feature.
+        return "(RRF)" in str(error.get("license.expired.feature"))
+    if kind == "parsing_exception":
+        return reason.startswith("Unknown key for a ") and reason.endswith("in [retriever].")
+    return (
+        kind == "x_content_parse_exception" and "[rrf] unknown field [rank_window_size]" in reason
+    )
+
+
 def incomplete_reason(body: Any) -> str | None:
     """Why a successful response leaves something out; ``None`` if it does not.
 
