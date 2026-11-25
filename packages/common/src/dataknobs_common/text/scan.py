@@ -615,8 +615,8 @@ def narrowest(
     Raises:
         ValueError: For a hit whose span is not ``0 <= start <= end <=
             len(text)``, naming the hit's index -- the spans are a caller's,
-            as :func:`probe_spans`'s ``tokens`` are, and are checked alike
-            rather than sliced into an ``IndexError`` or, for a negative
+            as :func:`probe_spans`'s ``tokens`` are, and their range is
+            checked rather than sliced into an ``IndexError`` or, for a negative
             start, a core the hit never covered. Unlike tokens, hits may be
             empty and may overlap.
     """

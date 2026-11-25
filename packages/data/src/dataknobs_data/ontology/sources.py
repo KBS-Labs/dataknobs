@@ -783,7 +783,9 @@ class RecordEntitySource(DynamicCapabilityMixin):
         ``form_edge`` is the ``surface_forms.form_edge:`` the binding
         declared, for the reason :meth:`longest_form_tokens` is declared
         rather than counted -- or None where it declared none, which a scan
-        reads as *extend over the whole run* and answers in full.
+        reads as *extend over the whole run* and answers in full. A document
+        declaring a scan over such a binding is refused at load unless the
+        rung caps that run itself.
         """
         return SourceDescription(
             source_id=self._source_id,

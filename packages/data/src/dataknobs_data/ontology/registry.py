@@ -2874,17 +2874,26 @@ def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
     its forms in default tokens under its own fold. Which keys mean that is
     the rung's knowledge, so the registry publishes the rung's own answer as
     ``window_bounded`` in its metadata and this reads it per declared spec.
-    A rung kind that publishes none gets the reading this door had before it
+    A rung kind that publishes nothing gets the reading this door had before it
     could ask: bounded exactly when the binding declares
     ``longest_form_tokens``.
 
-    **The remedy is asked as well.** Over a binding with no count, whether
-    declaring one would help depends on the rung: a scan with its own
+    **Publishing ``False`` is the third reading**, for a class that inherits an
+    answer and defines none: it runs its parent's enumeration, which trusts a
+    declared number only over the default tokens and fold, and its factory may
+    fix either where no spec says so. Nothing the document or the binding
+    declares bounds it as far as anything here can tell, so it is unbounded
+    until the class answers for itself.
+
+    **The remedy is asked as well, per rung.** Over a binding with no count,
+    whether declaring one would help depends on the rung: a scan with its own
     tokenizer would not trust it, and telling its author to declare one sends
-    them to a second refusal. So each unbounded spec is asked again, as if
-    the binding declared a count, and ``longest_form_tokens`` is offered only
-    when every one of them would then be bounded; otherwise ``max_window`` is
-    the only remedy named.
+    them to a second refusal. So each unbounded spec is asked again as if the
+    binding declared a count, and again as if it set ``max_window``, and is
+    offered what its answer accepted. A kind with no answer has nothing
+    reading its spec, so only the binding's key is named; one publishing
+    ``False`` is told to define the answer. Rungs needing different remedies
+    are told theirs separately.
 
     **The edge is the second bound, refused on the same terms.** A probe that
     starts or ends on a token is widened over the punctuation beside it, as far
@@ -2916,110 +2925,163 @@ def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
     lookup = projection.surface_forms
     if lookup is None:
         return
-    longest = lookup.longest_form_tokens
-    edge = lookup.form_edge
-    window_unbounded: set[str] = set()
-    edge_unbounded: set[str] = set()
-    a_count_would_bound = True
-    an_edge_would_bound = True
-    for spec in _declared_rungs(config):
-        kind = str(spec.get("kind", ""))
-        metadata = async_signal_backends.get_metadata(kind)
-        if metadata.get("bounded_by_longest_form"):
-            ask = metadata.get("window_bounded")
-            if not (ask(spec, longest) if callable(ask) else longest is not None):
-                window_unbounded.add(kind)
-                # Would a declared count bound it? Any positive count asks that.
-                if callable(ask) and not ask(spec, 1):
-                    a_count_would_bound = False
-        if metadata.get("bounded_by_form_edge"):
-            ask = metadata.get("edge_bounded")
-            if not (ask(spec, edge) if callable(ask) else edge is not None):
-                edge_unbounded.add(kind)
-                # Would a declared edge bound it? Any edge asks that; 0 is one.
-                if callable(ask) and not ask(spec, 0):
-                    an_edge_would_bound = False
-    if not window_unbounded and not edge_unbounded:
+    refusals = [
+        refusal
+        for bound, declared in (
+            (_WINDOW_BOUND, lookup.longest_form_tokens),
+            (_EDGE_BOUND, lookup.form_edge),
+        )
+        if (refusal := _unbounded_rungs(config, bound, declared))
+    ]
+    if not refusals:
         return
-    parts: list[str] = []
-    if window_unbounded:
-        parts.append(
-            _an_unbounded_window(
-                binding, sorted(window_unbounded), longest is None and a_count_would_bound
-            )
-        )
-    if edge_unbounded:
-        parts.append(
-            _an_unbounded_edge(
-                binding,
-                sorted(edge_unbounded),
-                edge is None and an_edge_would_bound,
-                first=not window_unbounded,
-            )
-        )
+    rungs = {bound.name: kinds for bound, kinds, _ in refusals}
+    lead = f"binding {binding!r} is read by "
     raise ValidationError(
-        ". ".join(parts),
+        ". ".join(
+            f"{lead if index == 0 else 'It is also read by '}{kinds}, which {bound.does}. "
+            f"{'. '.join(remedies)} -- {bound.cost}"
+            for index, (bound, kinds, remedies) in enumerate(refusals)
+        ),
         context={
             "source_id": binding,
-            "rungs": sorted(window_unbounded | edge_unbounded),
-            "window_rungs": sorted(window_unbounded),
-            "edge_rungs": sorted(edge_unbounded),
+            "rungs": sorted(set().union(*rungs.values())),
+            "window_rungs": rungs.get("window", []),
+            "edge_rungs": rungs.get("edge", []),
             "surface_forms_table": lookup.table,
         },
     )
 
 
-def _an_unbounded_window(binding: str, rungs: list[str], a_count_would_bound: bool) -> str:
-    """The window half of the refusal, naming the remedy that would bound ``rungs``."""
-    if a_count_would_bound:
-        remedy = (
-            "A live table cannot be counted, so the binding must declare "
-            "`surface_forms.longest_form_tokens:`, or the rung must cap its own "
-            "window with `max_window:`"
-        )
-    else:
-        remedy = (
-            "A count in `surface_forms.longest_form_tokens:` is in default "
-            "tokens under the source's fold, and this rung does not trust one "
-            "-- a `tokenizer:` or `normalizer:` of its own is what stops the "
-            "shipped scan trusting it -- so cap its window with `max_window:`"
-        )
-    return (
-        f"binding {binding!r} is read by {rungs}, which probes every window "
-        f"of a query unless something bounds that enumeration. {remedy} -- "
-        f"without a bound the scan spends n(n+1)/2 reads per query, each one a "
-        f"round trip"
-    )
+class _ScanBound(NamedTuple):
+    """One of the two numbers a scanning rung's cost depends on.
 
-
-def _an_unbounded_edge(
-    binding: str, rungs: list[str], an_edge_would_bound: bool, *, first: bool
-) -> str:
-    """The edge half of the refusal, naming the remedy that would bound ``rungs``.
-
-    Its own sentence after the window half when both bounds are missing, so a
-    document lacking both is told both at once.
+    What the window and the edge differ in; how a rung is asked about either,
+    and how it is told what would help, is :func:`_unbounded_rungs`.
     """
-    if an_edge_would_bound:
-        remedy = (
-            "A live table cannot be measured, so the binding must declare "
-            "`surface_forms.form_edge:` (`0` when no form has punctuation at "
-            "either end), or the rung must cap the widening with `max_edge:`"
-        )
-    else:
-        remedy = (
-            "An edge in `surface_forms.form_edge:` is measured beside default "
-            "tokens under the source's fold, and this rung does not trust one "
-            "-- a `tokenizer:` or `normalizer:` of its own is what stops the "
-            "shipped scan trusting it -- so cap the widening with `max_edge:`"
-        )
-    lead = f"binding {binding!r} is read by {rungs}, which" if first else f"{rungs} also"
+
+    name: str
+    fact: str
+    question: str
+    binding_key: str
+    binding_value: str
+    cap_key: str
+    smallest: int
+    untrusted: str
+    does: str
+    cost: str
+
+
+_WINDOW_BOUND = _ScanBound(
+    name="window",
+    fact="bounded_by_longest_form",
+    question="window_bounded",
+    binding_key="longest_form_tokens",
+    binding_value="",
+    cap_key="max_window",
+    smallest=1,
+    untrusted="counted in default tokens",
+    does="probes every window of a query unless something bounds that enumeration",
+    cost=("without a bound the scan spends n(n+1)/2 reads per query, each one a round trip"),
+)
+
+_EDGE_BOUND = _ScanBound(
+    name="edge",
+    fact="bounded_by_form_edge",
+    question="edge_bounded",
+    binding_key="form_edge",
+    binding_value=" (`0` when no form has punctuation at either end)",
+    cap_key="max_edge",
+    smallest=0,
+    untrusted="measured beside default tokens",
+    does="widens a probe over the punctuation beside it unless something bounds how far",
+    cost=(
+        "without a bound, one token between two runs of r punctuation characters "
+        "costs (r + 1)**2 - 1 reads, each one a round trip"
+    ),
+)
+
+
+def _unbounded_rungs(
+    config: OntologyConfig, bound: _ScanBound, declared: int | None
+) -> tuple[_ScanBound, list[str], list[str]] | None:
+    """The declared rung kinds ``bound`` leaves unbounded, and a remedy clause per group.
+
+    Grouped by remedy rather than merged, because rungs of one document can
+    need different ones: a kind that publishes no answer has its spec read by
+    nothing, so only the binding's key helps it, while a scan with its own
+    tokenizer trusts no binding key and only a cap does.
+    """
+    groups: dict[str, set[str]] = {}
+    for spec in _declared_rungs(config):
+        kind = str(spec.get("kind", ""))
+        metadata = async_signal_backends.get_metadata(kind)
+        if not metadata.get(bound.fact):
+            continue
+        ask = metadata.get(bound.question)
+        if callable(ask):
+            if not ask(spec, declared):
+                groups.setdefault(_asked_remedy(ask, spec, bound, declared), set()).add(kind)
+        elif ask is False:
+            groups.setdefault(
+                f"define `{bound.question}` on the class registered, which inherits "
+                f"one and publishes none, returning `super().{bound.question}(...)` "
+                f"if its factory reads a spec as its parent's does",
+                set(),
+            ).add(kind)
+        elif declared is None:
+            groups.setdefault(_binding_remedy(bound), set()).add(kind)
+    if not groups:
+        return None
+    kinds = sorted(set().union(*groups.values()))
+    return bound, kinds, [f"For {sorted(group)}, {text}" for text, group in groups.items()]
+
+
+def _binding_remedy(bound: _ScanBound) -> str:
+    """Declaring the number, as a clause."""
     return (
-        f"{lead} widens a probe over the punctuation beside it unless "
-        f"something bounds how far. {remedy} -- without a bound, one token "
-        f"between two runs of r punctuation characters costs (r + 1)**2 - 1 "
-        f"reads, each one a round trip"
+        f"the binding must declare `surface_forms.{bound.binding_key}:`"
+        f"{bound.binding_value}, which a live table cannot be asked for"
     )
+
+
+def _asked_remedy(
+    ask: Callable[[Mapping[str, Any], int | None], bool],
+    spec: Mapping[str, Any],
+    bound: _ScanBound,
+    declared: int | None,
+) -> str:
+    """What the rung's own answer says would bound ``spec``: the number, its cap, or neither."""
+    number = declared is None and _would_bound(ask, spec, bound.smallest)
+    cap = _would_bound(ask, {**spec, bound.cap_key: bound.smallest}, declared)
+    if number and cap:
+        return f"{_binding_remedy(bound)}, or the rung must cap it with `{bound.cap_key}:`"
+    if number:
+        return _binding_remedy(bound)
+    if cap:
+        return (
+            f"cap it with `{bound.cap_key}:`: a `surface_forms.{bound.binding_key}:` is "
+            f"{bound.untrusted} under the source's fold, and this rung does not trust "
+            f"one -- a `tokenizer:` or `normalizer:` of its own is what stops the "
+            f"shipped scan trusting it"
+        )
+    return f"set what the rung's own `{bound.question}` reads as a bound"
+
+
+def _would_bound(
+    ask: Callable[[Mapping[str, Any], int | None], bool],
+    spec: Mapping[str, Any],
+    declared: int | None,
+) -> bool:
+    """``ask`` about a spec or a number nobody wrote; a refusal of it is a no.
+
+    The cap is this door's guess at a key, so an answer that refuses keys it
+    does not read is saying the guess would not help.
+    """
+    try:
+        return ask(spec, declared)
+    except (ValidationError, ValueError, TypeError):
+        return False
 
 
 def _refuse_an_undeclared_projection_type(

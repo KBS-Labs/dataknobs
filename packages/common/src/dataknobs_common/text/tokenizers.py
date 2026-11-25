@@ -25,6 +25,10 @@ looked up. Two entries ship:
   ``'t`` instead. A rung over it takes the general path, since it is not
   ``token_spans``.
 
+**A tokenizer must be thread-safe.** The asynchronous rungs call any tokenizer
+but ``token_spans`` through :func:`asyncio.to_thread`, so concurrent queries
+call one instance from several threads, none of them the one that built it.
+
 Register your own with a factory taking that tokenizer's parameters -- the
 spec's keys other than ``name`` -- and returning the tokenizer::
 
@@ -54,7 +58,8 @@ from dataknobs_common.text.scan import _APOSTROPHE_MODES, token_spans, word_span
 __all__ = ["TOKENIZERS", "Tokenizer", "tokenizer_from_config"]
 
 #: A string in, its tokens out: half-open spans into the string, in order, not
-#: overlapping, none empty. Spans may touch.
+#: overlapping, none empty. Spans may touch. An async rung calls it from worker
+#: threads, several at once under concurrent queries, so it must be thread-safe.
 Tokenizer: TypeAlias = Callable[[str], Sequence[tuple[int, int]]]
 
 

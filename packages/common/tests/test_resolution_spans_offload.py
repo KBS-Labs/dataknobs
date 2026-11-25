@@ -26,15 +26,12 @@ import pytest
 from dataknobs_common.entity_resolution import (
     AsyncLexicalSignal,
     AsyncScanningSignal,
+    signals,
     token_spans,
 )
 from dataknobs_common.ontology import AsyncMappingEntitySource, Entity
 from dataknobs_common.testing import assert_no_blocking, is_blockbuster_available
-
-pytestmark = pytest.mark.skipif(
-    not is_blockbuster_available(),
-    reason="blockbuster is required to detect a blocking call on the loop",
-)
+from dataknobs_common.text import scan
 
 _QUERY = "a beagle b"
 
@@ -56,6 +53,10 @@ def _blocking_tokenizer(text: str) -> tuple[tuple[int, int], ...]:
     return token_spans(text)
 
 
+@pytest.mark.skipif(
+    not is_blockbuster_available(),
+    reason="blockbuster is required to detect a blocking call on the loop",
+)
 @pytest.mark.parametrize("index", [0, 1], ids=["scanning", "lexical"])
 async def test_a_blocking_tokenizer_does_not_run_on_the_event_loop(index: int) -> None:
     rung = _rungs(_blocking_tokenizer)[index]
@@ -78,3 +79,29 @@ async def test_a_caller_s_tokenizer_runs_on_a_worker_thread(index: int) -> None:
 
     assert ran_on, "the rung never called its tokenizer"
     assert threading.get_ident() not in ran_on, "the tokenizer ran on the event loop's thread"
+
+
+@pytest.mark.parametrize("index", [0, 1], ids=["scanning", "lexical"])
+async def test_the_default_tokenizer_stays_on_the_loop(
+    index: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pure and linear in the query, so a thread hop would cost more than it saves.
+
+    Replaced in both modules that call it, before the rung is built: the rung
+    asks whether its tokenizer *is* the default, so the recorder has to be
+    what both names mean.
+    """
+    ran_on: list[int] = []
+
+    def recording(text: str) -> tuple[tuple[int, int], ...]:
+        ran_on.append(threading.get_ident())
+        return token_spans(text)
+
+    monkeypatch.setattr(signals, "token_spans", recording)
+    monkeypatch.setattr(scan, "token_spans", recording)
+    rung = [AsyncScanningSignal, AsyncLexicalSignal][index](_source())
+
+    await rung.candidates(_QUERY, k=5)
+
+    assert ran_on, "the rung never called the default tokenizer"
+    assert set(ran_on) == {threading.get_ident()}

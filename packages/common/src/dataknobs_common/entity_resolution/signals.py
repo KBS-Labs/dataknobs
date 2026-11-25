@@ -689,10 +689,12 @@ def _scan_bounds(
 def _query_tokens(tokenizer: Tokenizer, query: str) -> tuple[tuple[int, int], ...]:
     """The query's tokens by ``tokenizer``, checked once where they are not the default's.
 
-    The one way every rung that takes a tokenizer gets a query's tokens. The
-    asynchronous twins call it off the event loop for any tokenizer but the
-    default, since a caller's tokenizer may load a dictionary or reach a
-    service and nothing here bounds what it does.
+    For the near-spelling rungs, which count and enumerate the tokens
+    themselves. A scan hands its tokens to
+    :func:`~dataknobs_common.text.probe_spans`, which makes the same check, so
+    it does not call this one. The asynchronous twin calls it off the event
+    loop for any tokenizer but the default, since a caller's tokenizer may
+    load a dictionary or reach a service and nothing here bounds what it does.
 
     :func:`~dataknobs_common.text.token_spans` produces valid spans by
     construction, so its output is not re-checked on every query; a caller's
@@ -706,6 +708,11 @@ def _query_tokens(tokenizer: Tokenizer, query: str) -> tuple[tuple[int, int], ..
     if tokenizer is token_spans:
         return token_spans(query)
     return _checked_tokens(query, tokenizer(query))
+
+
+def _materialised_tokens(tokenizer: Tokenizer, query: str) -> tuple[tuple[int, int], ...]:
+    """Every token ``tokenizer`` finds, unchecked, so a lazy sequence is read here too."""
+    return tuple(tokenizer(query))
 
 
 def _evidence(query: str, found: Sequence[FormHit]) -> list[FormHit]:
@@ -1172,27 +1179,6 @@ class _RatioScorer:
         if self._matcher.quick_ratio() < self._threshold:
             return 0.0
         return self._matcher.ratio()
-
-
-def _near_forms_of_query(
-    query: str,
-    forms: Sequence[str],
-    *,
-    tokenizer: Tokenizer,
-    max_query_tokens: int | None,
-    threshold: float,
-    scorer: Callable[[str, str], float],
-    fold: Callable[[str], str],
-) -> list[tuple[str, tuple[int, int], float]]:
-    """:func:`_near_forms` over the query's tokens by ``tokenizer``, counted first.
-
-    The lexical twins' whole computation from a query and a catalogue, taking
-    only values, so the asynchronous twin hands all of it to one thread: the
-    caller's tokenizer and the scoring loop it feeds go off the loop together.
-    """
-    tokens = _query_tokens(tokenizer, query)
-    _checked_query(tokens, max_query_tokens)
-    return _near_forms(query, forms, threshold=threshold, scorer=scorer, fold=fold, tokens=tokens)
 
 
 def _scorer_for(
@@ -1679,7 +1665,8 @@ class ScanningSignal(DeclaredSignal):
         defines the classmethod: this answer reads a spec as the shipped
         factory does, and a subclass's factory may read it otherwise. One
         whose factory reads it the same way defines it and returns
-        ``super().window_bounded(spec, longest_form_tokens)``.
+        ``super().window_bounded(spec, longest_form_tokens)``. Until it does,
+        a door reads it as unbounded whatever the source declares.
 
         Raises:
             ValidationError: For a spec the factory would refuse.
@@ -1699,8 +1686,9 @@ class ScanningSignal(DeclaredSignal):
 
         Published under ``edge_bounded`` in a rung's metadata, on the same
         terms as :meth:`window_bounded`: only from a class whose own body
-        defines it. A rung declaring ``bounded_by_form_edge`` that publishes
-        none is treated as bounded exactly when the source declares an edge.
+        defines it. A rung declaring ``bounded_by_form_edge`` with no answer to
+        define or inherit is treated as bounded exactly when the source
+        declares an edge.
 
         Raises:
             ValidationError: For a spec the factory would refuse.
@@ -1712,7 +1700,8 @@ class ScanningSignal(DeclaredSignal):
         bound, edge = _scan_bounds(
             self._entities, self._normalizer, self._tokenizer, self._max_window, self._max_edge
         )
-        tokens = _query_tokens(self._tokenizer, query)
+        # None is the default's fast path: probe_spans checks any other tokens.
+        tokens = None if self._tokenizer is token_spans else self._tokenizer(query)
         for span in probe_spans(query, bound, edge=edge, tokens=tokens):
             hits = self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
             found += _hits_at(span, self._order(hits))
@@ -1909,14 +1898,16 @@ class LexicalSignal(DeclaredSignal):
         hits are all 1.0; here the order is the score's and
         :func:`_ranked` is where it is decided.
         """
-        found = _near_forms_of_query(
+        # Counted before the catalogue is read, which the cap exists to spare.
+        tokens = _query_tokens(self._tokenizer, query)
+        _checked_query(tokens, self._max_query_tokens)
+        found = _near_forms(
             query,
             list(self._catalogue.surface_forms()),
-            tokenizer=self._tokenizer,
-            max_query_tokens=self._max_query_tokens,
             threshold=self._threshold,
             scorer=_scorer_for(self._scorer, self._threshold),
             fold=self._fold,
+            tokens=tokens,
         )
         return _ranked(
             [
@@ -2207,9 +2198,9 @@ class AsyncScanningSignal(AsyncDeclaredSignal):
             self._entities, self._normalizer, self._tokenizer, self._max_window, self._max_edge
         )
         tokens = (
-            token_spans(query)
+            None
             if self._tokenizer is token_spans
-            else await asyncio.to_thread(_query_tokens, self._tokenizer, query)
+            else await asyncio.to_thread(_materialised_tokens, self._tokenizer, query)
         )
         for span in probe_spans(query, bound, edge=edge, tokens=tokens):
             hits = await self._entities.by_surface_form(self._fold(query[span[0] : span[1]]))
@@ -2297,24 +2288,29 @@ class AsyncLexicalSignal(AsyncDeclaredSignal):
         ``assert_no_blocking`` reports it and a test asserting the answer
         cannot see it either.
 
-        :func:`_near_forms_of_query` is a plain function taking only values,
-        which is what makes it handable to a thread. It tokenizes the query
-        as well as scoring it, so the caller's tokenizer runs off the loop in
-        the same hop; that tokenizer may load a dictionary or reach a service.
-        And
-        :func:`_scorer_for` building a scorer per query is what makes it safe
+        :func:`_near_forms` is a plain function taking only values, which is
+        what makes it handable to a thread. And :func:`_scorer_for` building a scorer per query is what makes it safe
         to, since the default one is stateful and would otherwise be shared
         across whatever else the loop is running.
+
+        **A caller's tokenizer has a hop of its own**, before the catalogue is
+        read, because the cap it is counted against exists to spare that read.
+        The default runs on the loop: it is pure and linear in the query.
         """
+        tokens = (
+            token_spans(query)
+            if self._tokenizer is token_spans
+            else await asyncio.to_thread(_query_tokens, self._tokenizer, query)
+        )
+        _checked_query(tokens, self._max_query_tokens)
         found = await asyncio.to_thread(
-            _near_forms_of_query,
+            _near_forms,
             query,
             list(await self._catalogue.surface_forms()),
-            tokenizer=self._tokenizer,
-            max_query_tokens=self._max_query_tokens,
             threshold=self._threshold,
             scorer=_scorer_for(self._scorer, self._threshold),
             fold=self._fold,
+            tokens=tokens,
         )
         hits: list[FormHit] = []
         for form, span, score in found:

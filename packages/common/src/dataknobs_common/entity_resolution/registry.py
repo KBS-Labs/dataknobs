@@ -197,25 +197,30 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
     that configuration (a ``max_window`` caps it, a tokenizer stops it
     trusting the count), and the class is the only place that rule can live
     without a door restating it. A rung that defines no such classmethod
-    gets no entry, so its metadata is what it was, and a door reading the
-    key falls back to *bounded exactly when the source declares a count*.
+    and inherits none gets no entry, so its metadata is what it was, and a
+    door reading the key falls back to *bounded exactly when the source
+    declares a count*.
 
     ``edge_bounded``, ``(spec, form_edge) -> bool``, is the same question about
     the second bound, beside the third fact, ``bounded_by_form_edge``: whether
     the rung widens its probes over punctuation as far as the source's
     ``form_edge`` allows -- see
     :meth:`~dataknobs_common.entity_resolution.ScanningSignal.edge_bounded`.
-    A rung with the fact and no answer falls back to *bounded exactly when the
-    source declares an edge*.
+    A rung with the fact and no answer of its own or its parents' falls back to
+    *bounded exactly when the source declares an edge*.
 
     **Unlike the facts, the answers are not inherited.** The answer reads a spec
     the way the class's own factory does, and a subclass is usually
     registered with a factory of its own -- one that fixes a tokenizer in
     code, say, which no spec names -- so an inherited answer could accept a
     scan that enumerates every window. Only a class whose own body defines
-    ``window_bounded`` or ``edge_bounded`` publishes it; a subclass that reads its spec as its
-    parent's factory does says so by defining it and delegating to
-    ``super()``.
+    ``window_bounded`` or ``edge_bounded`` publishes it. A class that only
+    inherits one publishes ``False`` under that key: it runs its parent's
+    enumeration, which stops trusting a declared number when the tokenizer or
+    the fold is its own, and nothing says whether this factory sets one, so a
+    door reads it as unbounded whatever the source declares. A subclass that
+    reads its spec as its parent's factory does says so by defining the
+    classmethod and delegating to ``super()``.
     Signal metadata is read through ``get_metadata`` and never serialised,
     so a callable here travels nowhere.
 
@@ -228,8 +233,9 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
 
     Returns:
         A new dict: ``base``, plus each fact read off ``rung``, plus
-        ``window_bounded`` and ``edge_bounded`` where ``rung``'s own body
-        defines them.
+        ``window_bounded`` and ``edge_bounded``: the classmethod where
+        ``rung``'s own body defines it, ``False`` where it only inherits one,
+        and no entry where there is none.
     """
     metadata = dict(
         base,
@@ -239,8 +245,8 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
     )
     for question in ("window_bounded", "edge_bounded"):
         answer = getattr(rung, question, None)
-        if question in vars(rung) and callable(answer):
-            metadata[question] = answer
+        if callable(answer):
+            metadata[question] = answer if question in vars(rung) else False
     return metadata
 
 

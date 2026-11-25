@@ -315,8 +315,12 @@ is left alone, which is why the refusal is here rather than on the rung. Which
 kinds are bounded this way is read from what each kind declares about itself, as
 with the lookup rule above — and whether a particular rung spec is bounded is
 asked of the rung too, through the `window_bounded` answer the signal registry
-publishes for it. A consumer's rung kind that publishes none is treated as
-bounded exactly when the binding declares `longest_form_tokens`.
+publishes for it. A consumer's rung kind that has none is treated as
+bounded exactly when the binding declares `longest_form_tokens`. A subclass of
+a rung that has one does not inherit it: it is refused until its own body
+defines `window_bounded`, because its factory may fix a tokenizer no spec
+names, and then neither declared number bounds it. One whose factory reads a
+spec as its parent's does returns `super().window_bounded(...)`.
 
 `form_edge` is the second number. A window starts and ends on a token, so a
 form whose first or last character is punctuation — `(beagle)`, `C.D.C.` — is
@@ -331,8 +335,10 @@ the edge is **refused at load** on the same terms: declare `form_edge`, or set
 `max_edge` on the `scan` rung. As with the window, whether a rung is bounded is
 asked of the rung, through the `edge_bounded` answer the signal registry
 publishes, and a consumer's kind declaring `bounded_by_form_edge` that
-publishes none is bounded exactly when the binding declares `form_edge`. A
-document missing both numbers is told about both in one error.
+has none is bounded exactly when the binding declares `form_edge`; a subclass
+defines `edge_bounded` as it does `window_bounded`. A document missing both
+numbers is told about both in one error, and rungs that need different remedies
+are each told their own.
 
 A rung naming its own `tokenizer:` or `normalizer:` does not read `form_edge`
 either, for the reason it does not trust `longest_form_tokens`: the edge was

@@ -1805,9 +1805,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tokens under the source's fold, and needs `max_window:`. Whether a declared
   rung is bounded is the rung's answer, read from the signal registry's
   `window_bounded` metadata, so a consumer's rung kind is covered too; one
-  that publishes no answer is bounded exactly when the binding declares
-  `longest_form_tokens:`. The refusal names only the remedy that would bound
-  the rung: a scan that would not trust a count is not told to declare one.
+  that has no answer is bounded exactly when the binding declares
+  `longest_form_tokens:`, and a subclass that inherits one without defining its
+  own is refused until it does. The refusal names, per rung, only the remedy
+  that would bound it: a scan that would not trust a count is not told to
+  declare one, and a kind whose spec nothing reads is not told to set a cap.
 
   `surface_forms.form_edge:` is the second number a scan reads: how many
   punctuation characters the widest edge of any form in the table carries —
@@ -1825,8 +1827,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already carry the punctuation. As for the window, whether a rung is bounded
   is its own answer, read from the signal registry's `edge_bounded` metadata;
   a consumer's kind declaring `bounded_by_form_edge` and no answer is bounded
-  exactly when the binding declares `form_edge:`; and the refusal names only
-  the remedy that would bound the rung. A document missing both bounds is
+  exactly when the binding declares `form_edge:`; a subclass must define its
+  own; and the refusal names each rung only the remedy that would bound it. A document missing both bounds is
   told both in one error.
 
   The fold a surface-form lookup compares by is `str.casefold`, and no engine

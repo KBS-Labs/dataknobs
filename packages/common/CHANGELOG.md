@@ -2427,8 +2427,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged by a tokenizer; its `max_query_tokens` counts the tokenizer's
   tokens. The async twins call any tokenizer except `token_spans` off the
   event loop, through `asyncio.to_thread`, because a tokenizer may load a
-  dictionary or call a service. `AsyncLexicalSignal` tokenizes in the same
-  thread call that scores, so it adds no extra hop.
+  dictionary or call a service — so a tokenizer must be thread-safe, since
+  concurrent queries call one instance from several threads. Both lexical rungs
+  count a query's tokens before they read the catalogue.
 
 - **`ScanningSignal.window_bounded(spec, longest_form_tokens)`** and its async
   twin's: whether a rung built from a configuration spec bounds its window
@@ -2439,7 +2440,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumer's rung declaring `bounded_by_longest_form` opts in by defining the
   same classmethod on its own class: the answer is not inherited, because a
   subclass's factory may read the spec differently, so a subclass that wants
-  to be asked defines it and delegates to `super()`.
+  to be asked defines it and delegates to `super()`. One that does not is
+  published as `False`, and a door reads it as unbounded.
   `ScanningSignal.edge_bounded(spec, form_edge)` is the same question about
   the second bound, how far a probe widens over punctuation, published as
   `edge_bounded` on the same terms beside a third class fact,
@@ -2758,9 +2760,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`declared_signal_metadata(rung, base)`**, exported from
   `dataknobs_common.entity_resolution`: the registered metadata for a rung,
-  with `reads_surface_forms` and `bounded_by_longest_form` read off the class
-  rather than restated beside it. Registering a rung is the extension point,
-  and both keys are read at *load* time by doors that hold a composition and
+  with `reads_surface_forms`, `bounded_by_longest_form` and
+  `bounded_by_form_edge` read off the class rather than restated beside it, and
+  the class's `window_bounded` and `edge_bounded` answers published with them.
+  Registering a rung is the extension point, and these keys are read at *load* time by doors that hold a composition and
   no instances — so a registration that omits one is not refused, it is never
   asked about, while the rung's own construction-time guard still fires. The
   facts are read with a default, so a rung written against the bare

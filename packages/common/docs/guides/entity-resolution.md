@@ -944,7 +944,10 @@ its `max_query_tokens` counts the tokenizer's tokens.
 The async twins call a tokenizer through `asyncio.to_thread`, so a tokenizer
 that loads a dictionary on first use or calls a service does not stall the
 event loop. Only `token_spans` is called on the loop, because it is pure and
-cheap.
+cheap. Your tokenizer must therefore be **thread-safe**: concurrent queries call
+one instance from several threads, none of them necessarily the thread that
+built it. One holding a `sqlite3` connection, or keeping state between calls,
+needs a lock or a thread-local.
 
 What is worth writing yourself is a rung that asks the index a question the
 shipped one cannot, and there is a concrete one. A probe is a run of whole
