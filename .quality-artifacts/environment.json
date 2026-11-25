@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-11-25T05:11:32Z",
+  "timestamp": "2026-11-25T05:52:06Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.13.9 (Homebrew 2026-11-17 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "native-hybrid-search-falls-back-only-without-rrf",
-  "git_commit": "dd8287b0cc0f69557edb5cae72302f3f1b05235d",
+  "git_branch": "an-operator-the-elasticsearch-index-cannot-answer-raises",
+  "git_commit": "61214efecd57ff2cdb3baca84baa763529260cb2",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
