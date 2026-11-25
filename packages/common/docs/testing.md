@@ -763,18 +763,15 @@ to the logs.
 from pathlib import Path
 
 from dataknobs_common.testing import (
-    GUARDED_ERROR_NAMES,
     assert_no_broad_except_in_error_text,
+    error_names_in,
 )
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 
 
 def test_no_broad_except_feeds_a_rendered_error_message():
-    assert_no_broad_except_in_error_text(
-        _SRC,
-        error_names=GUARDED_ERROR_NAMES | {"MyPackageConfigError"},
-    )
+    assert_no_broad_except_in_error_text(_SRC, error_names=error_names_in("my_package"))
 ```
 
 Scans `*.py` under each root and fails if a broad `except ... as exc` reaches a
@@ -810,10 +807,32 @@ guard, because it also reports green over the listed shapes written slightly
 differently. The cost is the occasional false positive, which `ignore=`
 covers.
 
-`GUARDED_ERROR_NAMES` is derived from `dataknobs_common.exceptions` at import
-rather than written out, so a new shared exception is guarded the day it is
-added; union your package's own names onto it. Matching is on the bare class
-name at the raise site, so an aliased import is covered by listing the alias.
+`error_names_in(package)` names the errors a package's raise sites use. It
+imports every module under the package and collects each name bound to an
+exception class that is a `DataknobsError`, or is defined in the package or in
+any dataknobs package, so a new error class is guarded the day it is added.
+`also=["acme_core"]` adds another package's plain exceptions. It also reads the
+files, for an error imported or defined inside a function, nested in a class, or
+raised as `module.SomeError`.
+
+Matching is on the bare name at the raise site, and an alias is included under
+the name the module gives it. Two names are not seen: one assigned inside a
+function (`err = SomeError`), and one reached through an object another package
+defines (`self.Inner` inherited from it). Union those on.
+
+A module that cannot be imported fails the call, because the errors it defines
+would go unguarded under a green scan. Install what it needs, or exempt it with
+`skip_modules=["my_package.module"]`, which also skips what is under it; an
+entry that matches nothing fails. `__main__` modules, and files whose name is
+not an identifier, are read without being imported.
+
+Two shapes of raise are not scanned, and a site written either way needs a test
+of its own: an exception kept in a variable and quoted by a raise after the
+handler (the last error of a retry loop), and one whose error a helper builds
+(`raise self._error(exc)`).
+
+`GUARDED_ERROR_NAMES` is the shared part on its own: the names in
+`dataknobs_common.exceptions`. `error_names_in` always includes it.
 
 `ignore={"pkg/module.py:120"}` exempts a site reviewed and judged bounded —
 pair each entry with a comment saying why. Matching is on a path-component

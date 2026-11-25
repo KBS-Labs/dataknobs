@@ -10,12 +10,22 @@ from enum import Enum
 from typing import Any, Callable, ClassVar, Dict, TYPE_CHECKING
 
 from dataknobs_fsm.core.exceptions import FunctionError, ResourceError
-from dataknobs_fsm.functions.base import FunctionContext, as_state_test_callable
+from dataknobs_fsm.functions.base import (
+    FunctionContext,
+    ResourceError as ProviderResourceError,
+    TransformError,
+    as_state_test_callable,
+)
 
 if TYPE_CHECKING:
     from dataknobs_fsm.execution.context import ExecutionContext
 
 logger = logging.getLogger(__name__)
+
+#: Errors an arc quotes. Their messages are this package's words, or those of an
+#: author who chose one of these types to say something. Anything else a
+#: function raises is named by its type alone.
+_WORDED = (FunctionError, ResourceError, TransformError, ProviderResourceError)
 
 
 class DataIsolationMode(Enum):
@@ -524,9 +534,18 @@ class ArcExecution:
                 return bool(result[0])
             return bool(result)
 
-        except Exception as e:
+        except _WORDED as e:
+            # Worded by this package, or by an author who chose one of its types.
             raise FunctionError(
                 f"Pre-test execution failed: {e}",
+                from_state=self.source_state,
+                to_state=self.arc_def.target_state,
+            ) from e
+        except Exception as e:
+            # Bounded message: the pre-test is consumer code, and its text can
+            # carry a connection URL. __cause__ carries it to the logs.
+            raise FunctionError(
+                f"Pre-test execution failed ({type(e).__name__})",
                 from_state=self.source_state,
                 to_state=self.arc_def.target_state,
             ) from e
@@ -612,12 +631,20 @@ class ArcExecution:
 
             return result
 
-        except Exception as e:
-            self.execution_count += 1
-            self.failure_count += 1
-
+        except _WORDED as e:
+            # Worded by this package, or by an author who chose one of its types.
+            self._record_failure()
             raise FunctionError(
                 f"Arc execution failed: {e}",
+                from_state=self.source_state,
+                to_state=self.arc_def.target_state,
+            ) from e
+        except Exception as e:
+            # Bounded message: a transform is consumer code, and its text can
+            # carry a connection URL. __cause__ carries it to the logs.
+            self._record_failure()
+            raise FunctionError(
+                f"Arc execution failed ({type(e).__name__})",
                 from_state=self.source_state,
                 to_state=self.arc_def.target_state,
             ) from e
@@ -629,6 +656,11 @@ class ArcExecution:
             # resources are released by the caller.
             if owns_resources and "resources" in locals():
                 self._release_resources(context)
+
+    def _record_failure(self) -> None:
+        """Count one failed execution."""
+        self.execution_count += 1
+        self.failure_count += 1
 
     async def _execute_single_transform_async(
         self,
@@ -653,7 +685,9 @@ class ArcExecution:
             Transformed data.
 
         Raises:
-            FunctionError: If the transform function is not found or fails.
+            FunctionError: If the transform function is not found, is not
+                callable, or returns a failed ``ExecutionResult``. What the
+                function itself raises is not wrapped here.
         """
         # Look up the transform function
         if hasattr(self.function_registry, "get_function"):
@@ -695,7 +729,11 @@ class ArcExecution:
                 else transform_func(data, func_context)
             )
         else:
-            raise ValueError(f"Transform {transform_name} is not callable")
+            raise FunctionError(
+                f"Transform {transform_name} is not callable",
+                from_state=self.source_state,
+                to_state=self.arc_def.target_state,
+            )
 
         # Await if the result is a coroutine
         if inspect.isawaitable(result):

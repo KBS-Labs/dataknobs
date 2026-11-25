@@ -471,7 +471,12 @@ states:
 
 All transforms in the list share a single `FunctionContext` (with the same
 resources and metadata). If any transform raises an error, the entire arc
-execution fails with a `FunctionError`.
+execution fails with a `FunctionError`. Its message names the type of what was
+raised, and the original is its `__cause__`. A transform that raises
+`TransformError` or `ResourceError` (from `dataknobs_fsm.functions.base`), or
+`FunctionError` or `ResourceError` (from `dataknobs_fsm.core.exceptions`), keeps
+its words. `dataknobs_fsm.functions.FunctionError` is another class, an alias of
+`StateTransitionError`, and does not.
 
 Each transform function receives `(data, func_context)` and returns the
 transformed data. If a transform returns an `ExecutionResult`, a successful

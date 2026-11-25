@@ -187,16 +187,22 @@ http_resource = HTTPServiceResource(
     base_url="https://api.example.com",
     timeout=30,
     headers={"Authorization": "Bearer token"},
-    retry_count=3
+    max_retries=3
 )
 
-manager.register_provider("api", http_resource)
-
-# Use in state
-with manager.resource_context("api", "state_123") as api:
-    response = api.get("/users/123")
-    data = response.json()
+# A response is a dict: "status", "headers" and the decoded "body"
+with http_resource.session_context() as session:
+    response = http_resource.get("/users/123", session=session)
+    data = response["body"]
 ```
+
+A request that fails raises `ResourceError`. Its message gives the status and
+its standard phrase (`HTTP 404: Not Found`), or the type of the last error
+(`Request failed after 3 attempts (URLError)`), never the server's or the
+transport's own text, which can carry a credential from the URL. The original is
+the error's `__cause__`. Its `operation` is the method and path, without the query
+string or host. After five failures in one session, further requests on
+it raise `ResourceError` without being sent until the circuit's wait has passed.
 
 ### LLM Resource
 

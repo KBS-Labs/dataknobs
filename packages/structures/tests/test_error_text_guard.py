@@ -31,12 +31,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from dataknobs_common.testing import (
-    GUARDED_ERROR_NAMES,
     assert_no_broad_except_in_error_text,
+    error_names_in,
 )
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 
 
 def test_no_broad_except_feeds_a_rendered_error_message():
-    assert_no_broad_except_in_error_text(_SRC, error_names=GUARDED_ERROR_NAMES)
+    assert_no_broad_except_in_error_text(_SRC, error_names=error_names_in("dataknobs_structures"))

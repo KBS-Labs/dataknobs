@@ -1358,6 +1358,8 @@ class AdvancedFSM(ResourceSurface):
             result = await arc_exec.execute_async(context, context.data)
             return True, result
         except Exception as e:
+            # The result names the failure's type; the log is where its text is.
+            logger.error("Arc transform failed on '%s': %s", arc.name, e, exc_info=e)
             return False, str(e)
 
     async def _execute_state_transforms_async(

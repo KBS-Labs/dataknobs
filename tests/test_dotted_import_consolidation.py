@@ -47,6 +47,12 @@ DEFERRED = {
     # than an oversight: a module that will not import is recorded as a
     # hole in the sweep, because one silently skipped reads as a clean tree.
     "common/src/dataknobs_common/testing/dataclass_sweep.py:184",
+    # `error_names_in`, the same case: it imports a package a test names and
+    # then every module found in its files. There is no separator, no attribute
+    # to look up and no shape to check, and a module that will not import fails
+    # the call, because the errors it defines would go unguarded.
+    "common/src/dataknobs_common/testing/error_text.py:263",
+    "common/src/dataknobs_common/testing/error_text.py:280",
     # The `dataknobs_utils` package door's PEP 562 `__getattr__`: imports one
     # of its **own** submodules by a name that has already been checked
     # against a frozen literal set three lines above, so an unknown name

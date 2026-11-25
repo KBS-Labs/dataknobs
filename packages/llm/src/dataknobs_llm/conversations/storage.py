@@ -131,6 +131,8 @@ See Also:
 import copy
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List
@@ -942,6 +944,25 @@ class ConversationStorage(ABC):
         pass
 
 
+@contextmanager
+def _bounded(operation: str) -> Iterator[None]:
+    """Report what fails inside as a ``StorageError`` naming the operation.
+
+    The driver's text stays out of the message: it can carry a connection URL.
+    ``__cause__`` carries it to the logs. A ``StorageError`` is already worded
+    and passes through.
+
+    Args:
+        operation: What the caller is doing, as its errors word it
+    """
+    try:
+        yield
+    except StorageError:
+        raise
+    except Exception as e:
+        raise StorageError(f"Failed to {operation} ({type(e).__name__})") from e
+
+
 class DataknobsConversationStorage(ConversationStorage):
     """Conversation storage using dataknobs_data backends.
 
@@ -1126,34 +1147,49 @@ class DataknobsConversationStorage(ConversationStorage):
         # Reconstruct conversation state
         return ConversationState.from_dict(data)
 
+    def _read_record(self, record: Any, operation: str) -> ConversationState:
+        """Convert a stored record, keeping the reason a record is refused.
+
+        The two errors caught here are worded by this package about the record.
+        Anything else a conversion raises is left to the caller's bounded
+        handler.
+
+        Args:
+            record: Record object from storage
+            operation: What the caller is doing, as its errors word it
+
+        Returns:
+            Conversation state
+
+        Raises:
+            StorageError: If the record's schema or a stored message is refused
+        """
+        try:
+            return self._record_to_state(record)
+        except (SchemaVersionError, ValidationError) as e:
+            raise StorageError(f"Failed to {operation}: {e}") from e
+
     async def save_conversation(self, state: ConversationState) -> None:
         """Save conversation to backend."""
-        try:
+        with _bounded("save conversation"):
             record = self._state_to_record(state)
             # Use upsert to insert or update
             await self.backend.upsert(state.conversation_id, record)
-        except Exception as e:
-            raise StorageError(f"Failed to save conversation: {e}") from e
 
     async def load_conversation(self, conversation_id: str) -> ConversationState | None:
         """Load conversation from backend."""
-        try:
+        with _bounded("load conversation"):
             # Read record by ID
             record = await self.backend.read(conversation_id)
             if record is None:
                 return None
 
-            return self._record_to_state(record)
-
-        except Exception as e:
-            raise StorageError(f"Failed to load conversation: {e}") from e
+            return self._read_record(record, "load conversation")
 
     async def delete_conversation(self, conversation_id: str) -> bool:
         """Delete conversation from backend."""
-        try:
+        with _bounded("delete conversation"):
             return await self.backend.delete(conversation_id)
-        except Exception as e:
-            raise StorageError(f"Failed to delete conversation: {e}") from e
 
     async def delete_conversations(
         self,
@@ -1169,7 +1205,7 @@ class DataknobsConversationStorage(ConversationStorage):
                 "to prevent accidental deletion of all conversations."
             )
 
-        try:
+        with _bounded("delete conversations"):
             try:
                 from dataknobs_data.query import Query
             except ImportError:
@@ -1191,7 +1227,7 @@ class DataknobsConversationStorage(ConversationStorage):
                     query.filter(f"metadata.{key}", "=", value)
 
             results = await self.backend.search(query)
-            states = [self._record_to_state(record) for record in results]
+            states = [self._read_record(record, "delete conversations") for record in results]
 
             # Post-query content filtering
             if content_contains:
@@ -1206,13 +1242,6 @@ class DataknobsConversationStorage(ConversationStorage):
 
             return deleted_ids
 
-        except ValueError:
-            raise
-        except StorageError:
-            raise
-        except Exception as e:
-            raise StorageError(f"Failed to delete conversations: {e}") from e
-
     async def update_metadata(self, conversation_id: str, metadata: Dict[str, Any]) -> None:
         """Update conversation metadata.
 
@@ -1225,7 +1254,7 @@ class DataknobsConversationStorage(ConversationStorage):
         Raises:
             StorageError: If conversation not found or update fails
         """
-        try:
+        with _bounded("update metadata"):
             # Load existing conversation
             state = await self.load_conversation(conversation_id)
             if state is None:
@@ -1237,11 +1266,6 @@ class DataknobsConversationStorage(ConversationStorage):
             # Save back
             await self.save_conversation(state)
 
-        except StorageError:
-            raise
-        except Exception as e:
-            raise StorageError(f"Failed to update metadata: {e}") from e
-
     async def list_conversations(
         self,
         filter_metadata: Dict[str, Any] | None = None,
@@ -1251,15 +1275,15 @@ class DataknobsConversationStorage(ConversationStorage):
         sort_order: "SortOrder | str" = "desc",
     ) -> List[ConversationState]:
         """List conversations from backend."""
-        # Read before the `try`, and unconditionally: a spelling this method
+        # Read before the bounded block, and unconditionally: a spelling this method
         # cannot honour is the caller's error, and laundering it through the
-        # broad `except Exception` below would report it as a storage failure
+        # bounded block below would report it as a storage failure
         # the caller can do nothing about. Unconditionally, because the sort
         # itself is guarded by `if sort_by` --- so an invalid order used to
         # pass silently whenever no field was named, which reads to a caller
         # as acceptance.
         order = _read_sort_order(sort_order)
-        try:
+        with _bounded("list conversations"):
             # Import Query for filtering
             try:
                 from dataknobs_data.query import Query
@@ -1285,10 +1309,7 @@ class DataknobsConversationStorage(ConversationStorage):
             results = await self.backend.search(query)
 
             # Convert records to conversation states
-            return [self._record_to_state(record) for record in results]
-
-        except Exception as e:
-            raise StorageError(f"Failed to list conversations: {e}") from e
+            return [self._read_record(record, "list conversations") for record in results]
 
     async def count_conversations(
         self,
@@ -1299,7 +1320,7 @@ class DataknobsConversationStorage(ConversationStorage):
         Uses a backend query without deserializing full conversation states,
         which is more efficient than the default implementation.
         """
-        try:
+        with _bounded("count conversations"):
             try:
                 from dataknobs_data.query import Query
             except ImportError:
@@ -1315,11 +1336,6 @@ class DataknobsConversationStorage(ConversationStorage):
 
             return await self.backend.count(query)
 
-        except StorageError:
-            raise
-        except Exception as e:
-            raise StorageError(f"Failed to count conversations: {e}") from e
-
     async def search_conversations(
         self,
         content_contains: str | None = None,
@@ -1332,10 +1348,10 @@ class DataknobsConversationStorage(ConversationStorage):
         sort_order: "SortOrder | str" = "desc",
     ) -> List[ConversationState]:
         """Search conversations with content, time range, and metadata filters."""
-        # Before the `try`, for the same reason as `list_conversations`: the
+        # Before the bounded block, for the same reason as `list_conversations`: the
         # fault is in the argument, not in the storage.
         order = _read_sort_order(sort_order)
-        try:
+        with _bounded("search conversations"):
             try:
                 from dataknobs_data.query import Query
             except ImportError:
@@ -1364,7 +1380,7 @@ class DataknobsConversationStorage(ConversationStorage):
             query.sort_by(sort_by, order)
 
             results = await self.backend.search(query)
-            states = [self._record_to_state(record) for record in results]
+            states = [self._read_record(record, "search conversations") for record in results]
 
             # Post-query content filtering: walk each conversation's message
             # tree and check if any message content matches.
@@ -1381,11 +1397,6 @@ class DataknobsConversationStorage(ConversationStorage):
                 states = states[offset : offset + limit]
 
             return states
-
-        except StorageError:
-            raise
-        except Exception as e:
-            raise StorageError(f"Failed to search conversations: {e}") from e
 
     @staticmethod
     def _conversation_contains_text(state: ConversationState, needle: str) -> bool:

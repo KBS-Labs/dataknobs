@@ -286,6 +286,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ArcExecution` keeps a function's own text out of its errors.**
+  `execute_async` and `can_execute_async` raised a `FunctionError` quoting
+  whatever a transform or pre-test raised, which for a database driver can be
+  its connection URL. The message names the type instead, `Arc execution failed
+  (ConnectionError)`, with the original on `__cause__`. A `TransformError`, a
+  `ResourceError` or a `core.exceptions.FunctionError` the function raises, and
+  a failed `ExecutionResult`, keep their words. `AdvancedFSM`'s stepping reports that message in `StepResult.error` and
+  now logs the failure with its traceback.
+
+- **`HTTPServiceResource` keeps a server's or transport's text out of its
+  errors.** A failed request quoted the last error, a password in `base_url`
+  included, and dropped it as the cause. It now reads `Request failed after 3
+  attempts (URLError)`, or `(HTTP 503: Service Unavailable)`, raised from that
+  error. A status below 500 gives the code's standard phrase rather than the
+  server's. The error's `operation` is the method and path, without the query
+  string or host. A URL that cannot be parsed raises `ResourceError` too, where
+  it raised `ValueError`. A response that is retried is closed.
+
+- **An open `HTTPServiceResource` circuit raises `ResourceError`.** It raised
+  `TypeError`, as did a session that could not be acquired.
+
+- **`HTTPServiceResource` leaves the caller's `headers` alone.** Its auth header
+  was written into the dict it was given, so a dict shared by two resources sent
+  one's credential to the other's service. The dict is copied, so changing it
+  after construction no longer changes what is sent.
+
 - **`dataknobs-fsm[postgres]` installs from wheels.** It forwards to
   `dataknobs-data[postgres]`, which required the source-built `psycopg2` and so
   failed to install without `pg_config`. That extra now requires
