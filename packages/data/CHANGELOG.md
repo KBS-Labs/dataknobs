@@ -196,6 +196,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   database with no `prefix` keeps its location by setting `prefix: ""`. The
   other two move their objects once: from `p//` to `p/` (`aws s3 mv
   s3://bucket/p// s3://bucket/p/ --recursive`), or from `/` to the bucket root.
+- **`SyncS3Database.create` keeps a `created_at` in the record's metadata**, as
+  `AsyncS3Database` does, where it replaced it with the time of the write. A
+  `datetime` there is stored as ISO text on both. A record read and created
+  again under a new id keeps the old time; drop the key to have it stamped.
 - **BREAKING: an S3 read that fails raises.** `SyncS3Database.search` and
   `stream_read` logged and left out any record they could not fetch, decode or
   filter, and `AsyncS3Database.read`, `exists` and `delete` answered `None` or
@@ -2009,6 +2013,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the clock.** For a stored object with no `created_at`, the two stamps came
   from two reads and differed by microseconds; they are now the same instant,
   as `AsyncS3Database` already wrote them.
+
+- **`AsyncS3Database` keeps a stored record's `created_at`.** `update`,
+  `upsert` and their batch and streaming forms replaced it with the time of the
+  write, or with the caller's value, `None` included; `SyncS3Database` kept it.
+  Both now keep the stored value, else take the caller's, else the clock's. The
+  async twin reads the object to do it: a conditional `update` and an `upsert`
+  make two requests where they made one, and an object that is not JSON raises
+  `JSONDecodeError`, as on the sync twin, where it was replaced.
+
+- **An S3 `update` leaves the caller's record alone.** Both twins wrote `id`,
+  `created_at` and `updated_at` into its metadata, and on the async twin one
+  record passed to two updates stored the first one's `created_at` under the
+  second id. The stored `id` is the id written to: a record read under one id
+  and passed to an `update` of another was stored as the first. Stored metadata
+  of `null` no longer raises `AttributeError` on the sync twin.
+
+- **A conditional `SyncS3Database.update` answers `False` when the object is
+  deleted mid-write**, where it raised botocore's `NoSuchKey`.
 
 - **`OntologyRegistry` refuses a malformed document top level as the loader
   does, on every door.** A document with no `id:` raises a `ConfigFieldError`

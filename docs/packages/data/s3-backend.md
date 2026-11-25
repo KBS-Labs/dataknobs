@@ -161,6 +161,21 @@ record_id = db.create(record)
 # Tags: id=xxx, created_at=xxx, created_by=admin, version=1.0, department=Engineering
 ```
 
+### Creation and Update Times
+
+Every write stamps `created_at` and `updated_at` into the stored record's
+metadata, as ISO 8601 text. `updated_at` is the time of the write. `created_at`
+is, in order:
+
+1. the stored object's, when the write replaces one;
+2. the one in the record's metadata, so a copied or migrated record keeps its
+   time;
+3. the time of the write.
+
+The record passed in is not changed. Both `update` and `upsert` read the stored
+object to keep its `created_at`, so each is at least two requests, and an object
+that is not JSON raises `json.JSONDecodeError`. Delete it to replace it.
+
 ### Searching and Filtering
 ```python
 # Note: S3 doesn't support native queries
