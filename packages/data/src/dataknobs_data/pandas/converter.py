@@ -188,6 +188,12 @@ class DataFrameConverter:
     ) -> list[Record]:
         """Convert DataFrame to list of Records.
 
+        A cell holding a numpy integer, float or bool becomes the Python one, a
+        ``Timestamp`` a ``datetime``, which drops its nanoseconds with a
+        ``UserWarning``, and a missing value (``NaN``, ``NaT``, ``NA``)
+        ``None``. Any other cell is kept as it is, as are the values inside a
+        list, dict or array.
+
         Args:
             df: DataFrame to convert
             options: Conversion options
@@ -224,15 +230,21 @@ class DataFrameConverter:
             # read as metadata otherwise.
             return bool(prefix) and isinstance(col, str) and col.startswith(prefix)
 
+        def _python_value(cell: Any) -> Any:
+            return self.type_mapper.convert_value_from_pandas(
+                cell, self.type_mapper.infer_field_type_from_value(cell)
+            )
+
         records = []
 
-        # Convert each row to a Record
-        for idx, row in df.iterrows():
+        # Convert each row to a Record. A row of a mixed frame is one Series,
+        # which would hold an int beside a float as a float.
+        for idx, row in df.astype(object).iterrows():
             # Extract metadata for this row from metadata columns
             row_metadata = {}
             for col in row.index:
                 if _is_metadata_column(col):
-                    row_metadata[col[len(prefix) :]] = row[col]
+                    row_metadata[col[len(prefix) :]] = _python_value(row[col])
             if options.metadata_columns:
                 for col in options.metadata_columns:
                     if col in row.index:
@@ -242,7 +254,7 @@ class DataFrameConverter:
                             row_metadata.update(col_value)
                         else:
                             # Otherwise store it with the column name (without leading underscore)
-                            row_metadata[col.lstrip("_")] = col_value
+                            row_metadata[col.lstrip("_")] = _python_value(col_value)
 
             # Prepare row data (excluding metadata columns)
             row_data = {}
@@ -250,7 +262,7 @@ class DataFrameConverter:
                 if _is_metadata_column(col):
                     continue
                 if options.metadata_columns is None or col not in options.metadata_columns:
-                    row_data[col] = row[col]
+                    row_data[col] = _python_value(row[col])
 
             # Determine record ID
             record_id = None

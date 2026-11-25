@@ -21,6 +21,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   metadata the frame does not name.** It replaced each record with its row,
   erasing them. Each record is read before it is written. Use `update_batch` to
   replace whole records.
+- **BREAKING: `BatchOperations.transform_and_save` updates the records it
+  queried.** It inserted a copy of each, reporting success, when their ids were
+  generated, when any had a field named `id` or `record_id`, or when the
+  transformer lost the name of the frame's index. The index is now the records'
+  ids. A returned row that names none of them, or one twice, raises `ValueError`
+  before anything is written; insert new rows and aggregates with
+  `bulk_insert_dataframe`. A transformer that returns no frame raises `TypeError`.
+- **BREAKING: `transform_and_save` writes only the cells the transformer
+  changed.** It wrote the whole frame, leaving `NaN` in fields a record lacked and
+  turning an untouched int into a float when another record lacked the field. Its
+  statistics have `unchanged`, and the same keys when the query finds nothing. The
+  progress callback counts the rows that changed.
+- **BREAKING: a record made from a DataFrame holds Python numbers, bools and
+  datetimes.** A numpy one becomes its Python equivalent, a `Timestamp` becomes a
+  `datetime` (dropping its nanoseconds, with a `UserWarning`) and a missing value
+  (`NaN`, `NaT`, `NA`) becomes `None`, in fields and in metadata. An int beside a
+  float column stays an int. Values inside a list, dict or array are kept as they
+  are. SQLite, DuckDB and file databases refused a frame of integers, and
+  SQLite one with a missing number. `update_from_dataframe` finds a record whose
+  integer id column is beside a float one. `TypeMapper` no longer reads a list
+  holding one missing value as missing.
 - **BREAKING: an Elasticsearch filter compares a field holding a list whole**, as
   the other backends do, on both twins and in vector pre-filters. A list matched
   when any element did, `NEQ` and the other negations left it out, an empty one

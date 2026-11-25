@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 from dataclasses import dataclass
 from typing import Any, cast, TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 from dataknobs_common import (
@@ -20,6 +22,7 @@ from dataknobs_common import (
 from dataknobs_common.callbacks import is_async_callable
 
 from .converter import ConversionOptions, DataFrameConverter
+from .type_mapper import is_missing
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -35,6 +38,58 @@ logger = logging.getLogger(__name__)
 #: ``assert_no_leaked_bridge_threads`` watches this name too --- it is a
 #: diagnostic label, not a way out of the leak guard.
 BRIDGE_THREAD_NAME = "dk-sync-batch-ops"
+
+#: What a cell can hold that compares elementwise and is not an array.
+_PANDAS_OBJECTS = (pd.Series, pd.DataFrame, pd.Index)
+
+
+def _is_same_value(left: Any, right: Any) -> bool:
+    """Whether two cells hold the same value; ``True`` is not ``1``, and ``2.0`` is ``2``.
+
+    Missing values are the same. ``==`` is asked last: it has no one answer for
+    ``NA``, an array or a pandas object.
+    """
+    if is_missing(left) or is_missing(right):
+        return is_missing(left) and is_missing(right)
+    if isinstance(left, np.ndarray) or isinstance(right, np.ndarray):
+        return (
+            isinstance(left, np.ndarray)
+            and isinstance(right, np.ndarray)
+            and _is_same_array(left, right)
+        )
+    if isinstance(left, _PANDAS_OBJECTS) or isinstance(right, _PANDAS_OBJECTS):
+        return type(left) is type(right) and bool(left.equals(right))
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(
+            _is_same_value(value, right[key]) for key, value in left.items()
+        )
+    if isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
+        return (
+            type(left) is type(right)
+            and len(left) == len(right)
+            and all(_is_same_value(a, b) for a, b in zip(left, right, strict=True))
+        )
+    if isinstance(left, bool) is not isinstance(right, bool):
+        return False
+    return left is right or bool(left == right)
+
+
+def _is_same_array(left: np.ndarray, right: np.ndarray) -> bool:
+    """Whether two arrays have one shape, dtype and contents."""
+    if left.dtype != right.dtype or left.shape != right.shape:
+        return False
+    if left.dtype == object:
+        return _is_same_value(left.tolist(), right.tolist())
+    # Only these dtypes hold a missing value, and numpy refuses others.
+    return np.array_equal(left, right, equal_nan=left.dtype.kind in "fcmM")
+
+
+def _keep_changed_fields(record: Record, queried: Record) -> None:
+    """Drop the fields whose value is the one queried; an absent one is ``None``."""
+    for name in list(record.fields):
+        before = queried.fields[name].value if name in queried.fields else None
+        if _is_same_value(record.fields[name].value, before):
+            del record.fields[name]
 
 
 @dataclass
@@ -450,11 +505,21 @@ class BatchOperations:
             if id_column not in df.columns:
                 raise ValueError(f"ID column '{id_column}' not found in DataFrame")
             # Use specified column as ID source
-            for i, record in enumerate(records):
-                record_id = str(df.iloc[i][id_column])
-                updates.append((record_id, record))
+            # From the column: a row would hold an int beside a float as a float.
+            for value, record in zip(df[id_column], records, strict=True):
+                updates.append((str(value), record))
 
-        # Process updates in chunks
+        self._write_updates(op, updates, config, stats)
+        return stats
+
+    def _write_updates(
+        self,
+        op: BridgedOperation,
+        updates: list[tuple[str, Record]],
+        config: BatchConfig,
+        stats: dict[str, Any],
+    ) -> None:
+        """Lay each update over its stored record, in chunks, counting in ``stats``."""
         for i in range(0, len(updates), config.chunk_size):
             chunk = updates[i : i + config.chunk_size]
 
@@ -509,8 +574,6 @@ class BatchOperations:
                 processed = stats["updated"] + stats["failed"] + stats["not_found"]
                 config.progress_callback(processed, len(updates))
 
-        return stats
-
     def aggregate(
         self,
         query: Query,
@@ -555,40 +618,106 @@ class BatchOperations:
         transformer: Callable[[pd.DataFrame], pd.DataFrame],
         config: BatchConfig | None = None,
     ) -> dict[str, Any]:
-        """Query, transform with pandas, and save back.
+        """Query, transform with pandas, and write the changes to the same records.
+
+        The frame's index is the records' storage ids, named ``record_id``
+        unless a field has that name. The transformer may filter and reorder
+        rows, and add and change columns. A cell that differs from the one
+        queried is written; every other field keeps its stored value, as does
+        the column or row a transformer drops. An int and a float that are
+        equal do not differ. A missing value (``NaN``, ``NaT``, ``NA``) in a
+        cell that had one is written as ``None``.
+
+        Each record is read again before it is written, so a change made to the
+        same cell since the query is overwritten. A record deleted since is
+        counted in ``not_found``.
 
         Args:
             query: Query to get records
             transformer: Function to transform DataFrame
-            config: Batch configuration
+            config: Batch configuration. ``progress_callback`` counts the rows
+                that changed, and is not called when none did.
 
         Returns:
-            Operation statistics
+            Operation statistics: ``total_rows`` the transformer returned, and
+            of them ``updated``, ``unchanged``, ``not_found`` and ``failed``,
+            with the ``errors``
+
+        Raises:
+            TypeError: The transformer returned something else than a frame.
+            ValueError: A returned row's index is not the id of a queried
+                record, or appears twice, or a column does. Nothing is written.
+                Insert new rows or aggregates with :meth:`bulk_insert_dataframe`.
         """
         config = config or BatchConfig()
+        stats: dict[str, Any] = {
+            "total_rows": 0,
+            "updated": 0,
+            "unchanged": 0,
+            "not_found": 0,
+            "failed": 0,
+            "errors": [],
+        }
 
         # One loop for the read and the write back: the halves are one
         # operation against one database, and giving the second half a loop of
         # its own is what strands a connection the first half bound.
         with self._operation_loop() as op:
-            df = self._query_as_dataframe(op, query)
+            records = self._search(op, query)
+            if not records:
+                return stats
 
-            if df.empty:
-                return {"total_rows": 0, "transformed": 0}
+            df = self.converter.records_to_dataframe(records)
+            df.index = pd.Index([record.storage_id for record in records], dtype=object)
+            # pandas refuses to sort or group by a name both levels have.
+            df.index.name = None if "record_id" in df.columns else "record_id"
 
-            # Apply transformation
-            transformed_df = transformer(df)
-
-            # Save back if index preserved (has record IDs)
-            if df.index.name == "record_id" and transformed_df.index.name == "record_id":
-                return self._update_from_dataframe(
-                    op,
-                    transformed_df,
-                    id_column=None,  # Use index
-                    config=config,
+            # Copied, because a transformer may change its frame, and a list
+            # held in it, in place.
+            queried = dict(
+                zip(
+                    df.index,
+                    copy.deepcopy(self.converter.dataframe_to_records(df)),
+                    strict=True,
                 )
-            # Insert as new records
-            return self._bulk_insert_dataframe(op, transformed_df, config)
+            )
+
+            transformed_df = transformer(df)
+            self._check_transformed(transformed_df, queried)
+
+            updates = []
+            for record_id, record in zip(
+                transformed_df.index,
+                self.converter.dataframe_to_records(transformed_df),
+                strict=True,
+            ):
+                _keep_changed_fields(record, queried[record_id])
+                if record.fields:
+                    updates.append((record_id, record))
+
+            stats["total_rows"] = len(transformed_df)
+            stats["unchanged"] = len(transformed_df) - len(updates)
+            self._write_updates(op, updates, config, stats)
+            return stats
+
+    @staticmethod
+    def _check_transformed(transformed: Any, queried: dict[str, Record]) -> None:
+        """Refuse a transformer's result whose rows do not each name a queried record."""
+        if not isinstance(transformed, pd.DataFrame):
+            raise TypeError(
+                f"The transformer must return a DataFrame, not {type(transformed).__name__}"
+            )
+        if not transformed.columns.is_unique:
+            raise ValueError("The transformer returned a frame with a repeated column")
+        unknown = [label for label in transformed.index if label not in queried]
+        if unknown:
+            raise ValueError(
+                f"The transformer returned {len(unknown)} row(s) whose index is not the id of a "
+                f"queried record, the first {unknown[0]!r}. Keep the index of the frame it was "
+                "given, or insert new rows with bulk_insert_dataframe"
+            )
+        if not transformed.index.is_unique:
+            raise ValueError("The transformer returned more than one row for a record")
 
     def _insert_chunk(
         self,

@@ -227,7 +227,8 @@ print(pivot_table)
 
 ### Transform and Save
 
-Apply complex transformations and save back to database:
+Apply complex transformations and write the changes back to the same records. Keep
+the index of the frame you are given, which holds their ids:
 
 ```python
 def analyze_and_enrich(df):
@@ -260,13 +261,13 @@ def analyze_and_enrich(df):
 # Transform and save enriched data
 stats = batch_ops.transform_and_save(
     Query(),
-    transform_func=analyze_and_enrich,
+    transformer=analyze_and_enrich,
     config=BatchConfig(chunk_size=200)
 )
 
 print(f"\nTransformation results:")
-print(f"  Records processed: {stats['processed']}")
-print(f"  Records saved: {stats['saved']}")
+print(f"  Records updated: {stats['updated']}")
+print(f"  Records unchanged: {stats['unchanged']}")
 print(f"  Errors: {stats['errors']}")
 
 # Verify enriched data

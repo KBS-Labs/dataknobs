@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 import pytest
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from enum import Enum
 
 from dataknobs_data.pandas.converter import DataFrameConverter, ConversionOptions
@@ -170,7 +170,7 @@ class TestDataFrameConverter:
         record = records[0]
 
         # Check type conversions
-        assert isinstance(record.get_value("datetime"), pd.Timestamp)
+        assert type(record.get_value("datetime")) is datetime
         assert isinstance(record.get_value("date"), date)
         assert isinstance(record.get_value("timedelta"), timedelta)
         assert record.get_value("category") == "A"
@@ -671,17 +671,14 @@ class TestBatchOperations:
         )
 
         assert result["total_rows"] == 5
+        # The record holding 0 was doubled already
+        assert (result["updated"], result["unchanged"]) == (4, 1)
 
-        # Verify transformation was applied
+        # The records themselves were updated
         all_records = self.db.search(Query())
-        # Since we're inserting new records (not updating), we'll have 10 total
-        assert len(all_records) >= 5
-
-        # Check that doubled values exist
-        for record in all_records[-5:]:  # Check last 5 records (newly inserted)
-            if record.get_value("value") is not None:
-                expected_doubled = record.get_value("value") * 2
-                assert record.get_value("doubled") == expected_doubled
+        assert sorted(r.get_value("value") for r in all_records) == [0, 1, 2, 3, 4]
+        for record in all_records:
+            assert record.get_value("doubled") == record.get_value("value") * 2
 
     def test_export_to_csv(self, tmp_path):
         """Test CSV export functionality."""
