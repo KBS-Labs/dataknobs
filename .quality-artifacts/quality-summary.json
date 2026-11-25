@@ -1,35 +1,41 @@
 {
-  "timestamp": "2026-11-25T21:22:30Z",
+  "timestamp": "2026-11-25T22:11:47Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
-  "packages": "bots data fsm llm",
+  "packages": "bots common config data fsm legacy llm structures utils xization",
   "tested_packages": [
     "bots",
+    "common",
+    "config",
     "data",
     "fsm",
-    "llm"
+    "legacy",
+    "llm",
+    "structures",
+    "utils",
+    "xization"
   ],
-  "coverage_percent": 89.6,
+  "coverage_percent": 85.8,
   "package_hashes": {
-    "bots": "572b2da5ee3966138eaa4c4596ba09ad559207302a4ef116059bd02d7497e0dc",
-    "common": "064ea9b5cd6f4e9c0176c9aef70ca3f9c98761a5bd77d4762ef4235960d74471",
-    "config": "cdaf343b445bda115fed832f5409bca69e3b4759607643832c1e3d28ed3277b3",
-    "data": "acc1590afaa862834cc17aa0393a9d46ba7369bc741b563e2e23e34090f7f1b2",
-    "fsm": "87159e2cd290aa47a04960c93e403b4f243010bcd68db63e0840a033c5354b48",
-    "legacy": "b335a8e1278335890d903d28ecb391b3f8f09e439e9055966e9cacfcb4706a82",
-    "llm": "105893e7e257946f5d0e3aa72bac7eaff98a63af32eb1664fbf6e9b43998c5a3",
-    "structures": "a3fe8b06685533e4584b60111289dac9f453c028ff21581cb9aa68a5447e09cf",
-    "utils": "c16151d7cb63e42ce2ad4380d2a26843464329cebb949bbb6947612b0ca84748",
-    "xization": "d23db453e009a95a9ef20bff97aceb90e51acadb3edb9646c0dc29b339909bcb",
+    "bots": "c0a0b2c4122854147508fb8db02038eca422e597589ea090067478a4584add65",
+    "common": "43d7f053725c0565ca2006a6601439b3f2d377af3e70d65f0370c1c3e2fba1bc",
+    "config": "83a579e3abd7b49fe74ed6e0961ae6e453e6f854deb645236ff8703e2c52092f",
+    "data": "d6624b5079aa624dafd0e8d66e4056727147bc263197c2205d8b46dd1ef31dfe",
+    "fsm": "b24633a649f00b23eaf6ab126cf48801288a27d34f25b4e10a19c989c5ca94f3",
+    "legacy": "62c8bb7efa5e96033069ccb6f7e6a9d76c48a96d617983f2c15282d1ad89d32b",
+    "llm": "02c38319ba9a4d3f0e325f6ec96d56f9e10baffb29c43e5372d67b6fe93bf3f1",
+    "structures": "545ea57390dc2b94d696140966730e6841716893d67c1a3b87622b0709ed26ee",
+    "utils": "717e2421eec51c7db8dcd2d0bf9d1c0848fa099dd10f45a6753c6baf349997b8",
+    "xization": "cc1b1380f17894997a87f0c6525a0163ca13235d4de8f621a47208be19be1099",
     "_algorithm_version": 3
   },
   "workspace_hashes": {
     "toolchain": "6b86a06c891306ae9b1bdeed67e6c9c48979eaf984424b34d31b498af4d9bf6b",
     "toolchain_test": "b7160b875b37ec44c7e343c1a539f503555bd5296b7690ddf4308ef39c784b14",
     "toolchain_lint": "6bcbb34df9feb37c7eec4ca866cdcb1f006d710109517161e59a83019d12fbbd",
-    "workspace_tests": "b739bbb23e22056f94e0292f548927b47b366b844169b99a335c062f5782dfdb",
-    "docs": "20a5419e5af26d35461a8920596c060bd370fc502de4813771b1ef5a3c881020"
+    "workspace_tests": "dd1f59212dc858ca17417c70153f871c6ad4cedfd4e853f1978b038037a24d61",
+    "docs": "b4a6f0456d56964d92d9556dc67629ffadabf82a99893c4a0880a5ebe7fa623b"
   },
   "total_seconds": 142,
   "checks": {
@@ -49,41 +55,41 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 5
+      "duration_seconds": 1
     },
     "validation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "validate.sh",
-      "duration_seconds": 20
+      "duration_seconds": 23
     },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "duration_seconds": 59,
-      "workspace_guards_seconds": 32
+      "workspace_guards_seconds": 28
     },
     "integration_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 46
+      "duration_seconds": 45
     },
     "documentation": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 38
+      "duration_seconds": 37
     },
     "documentation_versions": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-update-versions.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "documentation_mirrors": {
       "status": "pass",
