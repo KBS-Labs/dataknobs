@@ -135,7 +135,8 @@ fail have been written. `update_batch` and `delete_batch` return `False` for a
 record that does not exist.
 
 Vector search and `create_vector_index` raise `ValueError` for a rejected request
-or a missing index, and `RuntimeError` when the server does not answer.
+or a missing index, `RuntimeError` when the server does not answer, and the
+client's own error for anything else.
 
 ## Search Features
 

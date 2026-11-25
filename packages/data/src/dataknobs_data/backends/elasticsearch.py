@@ -846,7 +846,6 @@ class SyncElasticsearchDatabase(
             )
         except Exception as e:
             self._handle_elasticsearch_error(e, "vector search")
-            return []
 
         # Process results
         results = []
@@ -930,4 +929,3 @@ class SyncElasticsearchDatabase(
 
         except Exception as e:
             self._handle_elasticsearch_error(e, "create vector index")
-            return False

@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `False`, and `create` of an existing index and `delete` of a missing one are
   still `False`. `search` still returns the response: its `result` is now the
   error, where it was replaced with an empty hit list.
+  `index` refuses a negative `max_retries` with `ValueError`; it sent nothing and
+  answered `{"_id": None, "result": "error"}`.
 - **`SimplifiedElasticsearchIndex` no longer prints every response to stderr.**
 - **The package door imports its submodules lazily (PEP 562).**
   `dataknobs_utils/__init__.py` imported all fifteen *"for easy access"*, and

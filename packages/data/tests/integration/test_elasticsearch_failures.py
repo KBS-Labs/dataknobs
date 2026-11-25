@@ -13,9 +13,16 @@ import inspect
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
+import numpy as np
 import pytest
 from dataknobs_common.testing import requires_real_elasticsearch
-from elasticsearch import ApiError, BadRequestError, Elasticsearch, NotFoundError
+from elasticsearch import (
+    ApiError,
+    BadRequestError,
+    ConflictError,
+    Elasticsearch,
+    NotFoundError,
+)
 
 from dataknobs_data import Filter, Operator, Query, Record
 from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
@@ -84,6 +91,10 @@ BATCHES: dict[str, Callable[[Any], Any]] = {
     "update_batch": lambda db: db.update_batch([("a", _record("a", 2))]),
     "delete_batch": lambda db: db.delete_batch(["a"]),
 }
+VECTOR: dict[str, Callable[[Any], Any]] = {
+    "vector_search": lambda db: db.vector_search(np.ones(3), vector_field="v", k=1),
+    "create_vector_index": lambda db: db.create_vector_index("v", 3),
+}
 
 
 @pytest.mark.parametrize("query", [REJECTED, Query(filters=REJECTED.filters, limit_value=5)])
@@ -141,6 +152,55 @@ async def test_a_batch_delete_from_a_missing_index_raises(
     admin.indices.delete(index=db.index_name)
     with pytest.raises(DatabaseError, match="index_not_found"):
         await settle(db.delete_batch(["a"]))
+
+
+@pytest.mark.parametrize("name", VECTOR)
+async def test_a_vector_operation_on_a_missing_index_raises(
+    db: Database, admin: Elasticsearch, name: str
+) -> None:
+    admin.indices.delete(index=db.index_name)
+    with pytest.raises(ValueError, match="index_not_found"):
+        await settle(VECTOR[name](db))
+
+
+async def test_a_hybrid_search_on_a_missing_index_raises(
+    db: Database, admin: Elasticsearch
+) -> None:
+    """The sync text leg is ``search``, which raises the client's own error."""
+    admin.indices.delete(index=db.index_name)
+    with pytest.raises((ValueError, NotFoundError), match="index_not_found"):
+        await settle(db.hybrid_search("blue", np.ones(3), vector_field="v", k=1))
+
+
+async def test_a_vector_index_blocked_by_the_server_raises(
+    db: Database, admin: Elasticsearch
+) -> None:
+    """A 403 is none of the errors the vector methods wrap."""
+    admin.indices.put_settings(index=db.index_name, settings={"index.blocks.metadata": True})
+    with pytest.raises(ApiError) as caught:
+        await settle(db.create_vector_index("v", 3))
+    assert caught.value.status_code == 403
+    admin.indices.put_settings(index=db.index_name, settings={"index.blocks.metadata": False})
+
+
+async def test_a_vector_search_blocked_by_the_server_raises(
+    db: Database, admin: Elasticsearch
+) -> None:
+    admin.indices.put_settings(index=db.index_name, settings={"index.blocks.read": True})
+    with pytest.raises(ApiError) as caught:
+        await settle(db.vector_search(np.ones(3), vector_field="v", k=1))
+    assert caught.value.status_code == 403
+
+
+async def test_a_clear_that_leaves_a_record_raises(db: Database, admin: Elasticsearch) -> None:
+    """A write the search has not seen yet is a conflict for the delete."""
+    admin.indices.put_settings(index=db.index_name, settings={"index.refresh_interval": "-1"})
+    await settle(db.create(_record("b")))
+    stored = admin.get(index=db.index_name, id="a")["_source"]
+    admin.index(index=db.index_name, id="a", document=stored, refresh=False)
+    with pytest.raises(ConflictError):
+        await settle(db.clear())
+    assert await settle(db.exists("a")) is True
 
 
 @pytest.mark.parametrize("record_id", ["absent", ""])

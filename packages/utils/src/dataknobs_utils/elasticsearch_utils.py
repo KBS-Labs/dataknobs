@@ -789,7 +789,7 @@ class SimplifiedElasticsearchIndex:
             body: Document to index
             doc_id: Optional document ID (will be auto-generated if not provided)
             refresh: Whether to refresh immediately for search visibility
-            max_retries: Maximum retry attempts for 5xx errors
+            max_retries: Maximum retry attempts for 5xx errors; 0 sends once
             initial_delay: Initial backoff delay in seconds (doubles each retry)
             op_type: Optional index op type. Pass ``"create"`` for an atomic
                 insert that fails with a 409 conflict if the document id
@@ -804,7 +804,10 @@ class SimplifiedElasticsearchIndex:
                 that already exists (HTTP 409).
             ElasticsearchRequestError: When the document could not be indexed,
                 after any retries.
+            ValueError: When ``max_retries`` is negative.
         """
+        if max_retries < 0:
+            raise ValueError(f"max_retries must not be negative, got {max_retries}")
         path = f"_doc/{_encode_doc_id(doc_id)}" if doc_id else "_doc"
         params: Dict[str, Any] = {}
         if refresh:

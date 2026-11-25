@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `update_batch`, `delete_batch` | `[False]` | `[False]` |
   | `clear` | `0` | raised |
 
+  Vector search and `create_vector_index` already raised, and are unchanged: a
+  rejected request or a missing index is `ValueError`, no answer from the
+  server is `RuntimeError`, and anything else is the client's error.
+
   A `search` that sorts on a field Elasticsearch cannot sort by is one of
   these: the sync backend returned no records for it.
 - **BREAKING: a failed item in an Elasticsearch batch raises `DatabaseError`**,

@@ -872,7 +872,6 @@ class AsyncElasticsearchDatabase(
             )
         except Exception as e:
             self._handle_elasticsearch_error(e, "vector search")
-            return []
 
         # Process results
         results = []
@@ -952,7 +951,6 @@ class AsyncElasticsearchDatabase(
 
         except Exception as e:
             self._handle_elasticsearch_error(e, "create vector index")
-            return False
 
     async def _supports_native_hybrid(self) -> bool:
         """Check if this Elasticsearch backend supports native hybrid search.
@@ -1182,7 +1180,6 @@ class AsyncElasticsearchDatabase(
             )
         except Exception as e:
             self._handle_elasticsearch_error(e, "text search for hybrid")
-            return []
 
         # Process results
         results: list[tuple[Record, float]] = []

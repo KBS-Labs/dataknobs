@@ -353,9 +353,9 @@ try:
         - ``refresh``: ``True`` (immediate visibility for tests)
 
         Cleanup is best-effort: ``ConnectionError`` / ``ValueError`` /
-        ``ElasticsearchRequestError`` during teardown are logged at WARNING and swallowed so a teardown failure
-        doesn't mask the real test outcome. Other exceptions propagate so
-        unexpected failures surface.
+        ``ElasticsearchRequestError`` during teardown are logged at WARNING and
+        swallowed so a teardown failure doesn't mask the real test outcome.
+        Other exceptions propagate so unexpected failures surface.
 
         Args:
             ensure_elasticsearch_ready: Session fixture ensuring the cluster

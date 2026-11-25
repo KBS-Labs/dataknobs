@@ -92,6 +92,11 @@ def test_a_create_conflict_is_still_its_own_error(index: SimplifiedElasticsearch
         index.index({"n": 2}, doc_id="a", op_type="create")
 
 
+def test_a_negative_retry_count_is_refused(index: SimplifiedElasticsearchIndex) -> None:
+    with pytest.raises(ValueError, match="max_retries"):
+        index.index({"n": 2}, doc_id="a", max_retries=-1)
+
+
 def test_an_index_that_cannot_be_created_raises(index: SimplifiedElasticsearchIndex) -> None:
     refused = SimplifiedElasticsearchIndex(
         index.index_name + "_x",
