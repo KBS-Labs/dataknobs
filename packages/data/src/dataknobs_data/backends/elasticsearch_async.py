@@ -1076,7 +1076,6 @@ class AsyncElasticsearchDatabase(
                 index=self.index_name,
                 body=body,
             )
-            require_complete(response, "hybrid search")
         except Exception as e:
             # Fall back to client-side fusion if native RRF not available
             logger.warning(f"Native RRF not available ({e}), falling back to client-side fusion")
@@ -1099,6 +1098,9 @@ class AsyncElasticsearchDatabase(
                 filter=filter,
                 metric=metric,
             )
+
+        # Outside the try: a shard that failed is not a reason to fall back.
+        require_complete(response, "hybrid search")
 
         # Process results
         results: list[HybridSearchResult] = []

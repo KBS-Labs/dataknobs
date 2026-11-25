@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`elasticsearch_responses`**: `error_type`, `error_reason`,
   `says_document_missing`, `says_index_exists`, `incomplete_reason` and
-  `incomplete_failures`, which read the body of an Elasticsearch response. A missing document and a missing index are both a
-  404, and the body is what tells them apart.
+  `incomplete_failures`, which read the body of an Elasticsearch response. A
+  missing document and a missing index are both a 404, and the body is what
+  tells them apart.
 - **`PostgresDB.query_rows()` and `PostgresDB.stream_rows()`.** `query_rows`
   returns rows as dicts of the driver's values rather than a DataFrame.
   `stream_rows` yields them through a server-side cursor in a read-only

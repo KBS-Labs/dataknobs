@@ -518,6 +518,8 @@ class ElasticsearchIndex:
             ServerResponse | None: Response with results. If successful,
                 resp.extra contains 'hits_df' and/or 'aggs_df' DataFrames.
                 Returns None if no table is available.
+                A search that some shard did not answer succeeds with what the
+                others found, and ``resp.result["_shards"]`` says so.
         """
         if table is None:
             if len(self.tables) > 0:

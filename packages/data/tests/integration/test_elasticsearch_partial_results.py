@@ -9,11 +9,15 @@ between two pages of a read.
 from __future__ import annotations
 
 import inspect
+import json
+import threading
 from collections.abc import AsyncIterator, Callable, Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import numpy as np
 import pytest
+import requests
 from dataknobs_common.testing import requires_real_elasticsearch
 from elasticsearch import Elasticsearch
 
@@ -153,6 +157,91 @@ async def test_a_stream_missing_a_shard_raises(short: Database) -> None:
     """The sync twin streams what ``search`` returns."""
     with pytest.raises(DatabaseError, match="no_shard_available"):
         await streamed(short)
+
+
+@pytest.fixture
+def partial_rrf(es_config: dict[str, Any]) -> Iterator[tuple[dict[str, Any], list[str]]]:
+    """A config reaching Elasticsearch through a proxy, and the searches it passed.
+
+    The proxy answers a native RRF search itself, as a node supporting one would
+    with a shard down; whether the node under test does depends on its version
+    and licence. Every other request is forwarded.
+    """
+    upstream = f"http://{es_config['host']}:{es_config['port']}"
+    searches: list[str] = []
+    answer = {
+        "took": 1,
+        "timed_out": False,
+        "_shards": {
+            "total": 2,
+            "successful": 1,
+            "skipped": 0,
+            "failed": 1,
+            "failures": [{"shard": 1, "reason": {"type": "no_shard_available_action_exception"}}],
+        },
+        "hits": {"hits": []},
+    }
+
+    class Proxy(BaseHTTPRequestHandler):
+        def log_message(self, *args: Any) -> None:
+            pass
+
+        def forward(self) -> None:
+            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            native = b'"retriever"' in body
+            if self.path.split("?")[0].endswith("/_search"):
+                searches.append("native" if native else "other")
+            if native:
+                status, content = 200, json.dumps(answer).encode()
+                content_type = self.headers["Accept"]
+            else:
+                kept = ("Content-Type", "Accept")
+                sent = {name: self.headers[name] for name in kept if name in self.headers}
+                got = requests.request(
+                    self.command, upstream + self.path, data=body, headers=sent, timeout=30
+                )
+                status, content = got.status_code, got.content
+                content_type = got.headers.get("Content-Type", "application/json")
+            self.send_response(status)
+            self.send_header("X-Elastic-Product", "Elasticsearch")
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+    for method in ("GET", "POST", "PUT", "DELETE", "HEAD"):
+        setattr(Proxy, f"do_{method}", Proxy.forward)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield {**es_config, "host": "127.0.0.1", "port": server.server_port}, searches
+    server.shutdown()
+    server.server_close()
+    thread.join()
+
+
+async def test_a_native_hybrid_search_missing_a_shard_raises(
+    partial_rrf: tuple[dict[str, Any], list[str]], admin: Elasticsearch
+) -> None:
+    """It is not a node without native RRF, so the fallback does not run."""
+    config, searches = partial_rrf
+    vector = {"type": "dense_vector", "dims": 3, "similarity": "cosine"}
+    admin.indices.create(
+        index=config["index"],
+        mappings={"properties": {"data": {"properties": {"v": vector}}}},
+    )
+    database = AsyncElasticsearchDatabase(config)
+    await database.connect()
+    try:
+        await database.create(Record(data={"content": "x", "v": [1.0, 0.0, 0.0]}))
+        with pytest.raises(DatabaseError, match="hybrid search is incomplete") as caught:
+            await INCOMPLETE["hybrid_search-native"](database)
+    finally:
+        await database.close()
+    assert caught.value.context["failures"] == [
+        {"shard": 1, "reason": {"type": "no_shard_available_action_exception"}}
+    ]
+    assert searches == ["native"]
 
 
 @pytest.mark.parametrize("short", [AsyncElasticsearchDatabase], indirect=True)
