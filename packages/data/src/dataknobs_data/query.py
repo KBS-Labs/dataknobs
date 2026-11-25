@@ -690,9 +690,10 @@ class Filter:
                 ``BETWEEN`` or ``NOT_BETWEEN`` and the value is not a list or
                 tuple of exactly two bounds (a set has no order to say which
                 bound is which); or if it is ``CONTAINS`` or ``NOT_CONTAINS``
-                and the value is a collection other than a string. ``ValueError`` because it is what this module
-                raises for a bad operator or sort order, so an
-                ``except ValueError`` around query building catches it.
+                and the value is a collection other than a string.
+                ``ValueError`` because it is what this module raises for a bad
+                operator or sort order, so an ``except ValueError`` around
+                query building catches it.
         """
         if self.operator in _MEMBERSHIP_OPERATORS:
             if isinstance(self.value, Mapping):
