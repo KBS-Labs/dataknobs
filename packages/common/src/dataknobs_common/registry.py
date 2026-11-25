@@ -1833,9 +1833,11 @@ class PluginRegistry(Generic[T]):
                 (:meth:`declare_unavailable`), with the reason in the message
                 and in ``context["unavailable"]`` -- worded as ``create``
                 words it. A ``NotFoundError`` and a ``ValueError``.
-            NotFoundError: If key not registered and use_default=False, or
-                wrapping a ``NotFoundError`` the factory raised (see "Errors
-                from a factory").
+            NotFoundError: If key not registered and there is no default or
+                use_default=False -- whatever ``not_found_exception`` and
+                ``not_found_kind`` the registry was given, which shape the
+                ``create`` lane -- or wrapping a ``NotFoundError`` the
+                factory raised (see "Errors from a factory").
             OperationError: If the factory returns an awaitable -- this
                 method cannot await one, so call ``get_async()`` -- if the
                 instance fails the ``validate_type`` guard, or wrapping any
@@ -1922,9 +1924,11 @@ class PluginRegistry(Generic[T]):
                 (:meth:`declare_unavailable`), with the reason in the message
                 and in ``context["unavailable"]`` -- worded as ``create``
                 words it. A ``NotFoundError`` and a ``ValueError``.
-            NotFoundError: If key not registered and use_default=False, or
-                wrapping a ``NotFoundError`` the factory raised (see "Errors
-                from a factory").
+            NotFoundError: If key not registered and there is no default or
+                use_default=False -- whatever ``not_found_exception`` and
+                ``not_found_kind`` the registry was given, which shape the
+                ``create`` lane -- or wrapping a ``NotFoundError`` the
+                factory raised (see "Errors from a factory").
             OperationError: If the instance fails the ``validate_type``
                 guard, or wrapping any other exception the factory raised.
 

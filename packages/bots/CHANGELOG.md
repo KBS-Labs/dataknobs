@@ -70,8 +70,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MemoryDatabaseConfig does not accept 'nonsense_key'...`, so a bot config
   declaring several sources did not say which one refused it. It now reads
   `Failed to create plugin 'database': Source '<name>': MemoryDatabaseConfig
-  does not accept 'nonsense_key'...`, with `source` in `context`, as calling
-  the source factory directly already did.
+  does not accept 'nonsense_key'...`, with `source` in `context`.
+
+- **A source that cannot be built is a `SourceConfigError`, with `source` in
+  its `context`.** An unknown source type, a `vector_kb` source with no
+  knowledge base, a `database` source naming an unknown backend, a setting
+  its backend refuses, and a backend failing in its own words were plain
+  `ValueError`s, naming the source only in their text, or for an unknown
+  type not at all. `SourceConfigError`, exported from
+  `dataknobs_bots.knowledge.sources`, is a `ValidationError` and a
+  `ValueError`; messages are unchanged. Through the API these are now a 422
+  with the message and context, where they were the generic 500.
 
 - **A backend this install cannot build is reported with its reason.**
   `create_memory_from_config`, `create_knowledge_base_from_config` and

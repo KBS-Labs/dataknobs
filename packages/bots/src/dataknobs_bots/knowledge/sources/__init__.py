@@ -20,6 +20,7 @@ from dataknobs_llm.sources import compose_intent_schema, parse_intent
 
 # Bot-specific sources
 from .factory import (
+    SourceConfigError,
     create_source_from_config,
     get_source_backend_factory,
     is_source_backend_registered,
@@ -42,6 +43,7 @@ __all__ = [
     # Bot-specific
     "HeadingTreeConfig",
     "HeadingTreeIndex",
+    "SourceConfigError",
     "VectorKnowledgeSource",
     "create_source_from_config",
     "register_source_backend",

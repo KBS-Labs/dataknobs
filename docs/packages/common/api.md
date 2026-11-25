@@ -858,7 +858,8 @@ Get or create a cached plugin instance. Factories are called with `(key, config)
 **Returns:** Plugin instance
 
 **Raises:**
-- `NotFoundError`: If key not registered and no default — or wrapping a `NotFoundError` the factory raised
+- `PluginUnavailableError`: If the key was declared unavailable, with the reason in the message and in `context["unavailable"]`
+- `NotFoundError`: If key not registered and no default, whatever `not_found_exception` the registry was given — or wrapping a `NotFoundError` the factory raised
 - `OperationError`: If the factory returns an awaitable — `get()` cannot await one. The message names `get_async()`. Nothing is cached in that case. Also if the instance fails `validate_type`, or wrapping any other exception the factory raised
 
 ##### `create(key=None, config=None, **kwargs) -> T`
