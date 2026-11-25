@@ -27,6 +27,14 @@ session and tests are expected to wipe their own object contents (via
 ``db.clear()`` or equivalent). This matches the LocalStack
 data-volume model and keeps reruns fast.
 
+The factory is session-scoped and ensures each bucket once per session
+(per xdist worker): a later test asking for the same bucket makes no
+request. Ensuring costs a new event loop, a new ``aioboto3`` session and
+a ``HEAD`` request, about 40 ms against a warm LocalStack, which every S3
+test used to pay. Isolate tests with a per-test key prefix inside the
+bucket. A test that deletes a bucket should use a name no other test
+asks for, since the session will not recreate it.
+
 Environment variables (resolved via
 :func:`~dataknobs_common.testing.get_localstack_endpoint`):
 
@@ -64,7 +72,7 @@ try:
         """
         return get_localstack_endpoint()
 
-    @pytest.fixture
+    @pytest.fixture(scope="session")
     def make_localstack_s3_bucket(
         localstack_endpoint: str,
     ) -> Callable[[str], Iterator[dict[str, Any]]]:
@@ -91,6 +99,11 @@ try:
         Tests should wipe their own object contents on teardown (e.g.
         ``await db.clear()``).
 
+        Each bucket is ensured once per session: the factory remembers
+        the buckets it has made and does not ask LocalStack again. A
+        bucket whose ensure raised is not remembered, so the next ask
+        tries again.
+
         Args:
             localstack_endpoint: Session-scoped endpoint URL.
 
@@ -99,9 +112,12 @@ try:
             dict suitable for spread into a dataknobs S3 backend
             constructor.
         """
+        ensured: set[str] = set()
 
         def factory(bucket: str) -> Iterator[dict[str, Any]]:
-            asyncio.run(ensure_localstack_s3_bucket(bucket, endpoint=localstack_endpoint))
+            if bucket not in ensured:
+                asyncio.run(ensure_localstack_s3_bucket(bucket, endpoint=localstack_endpoint))
+                ensured.add(bucket)
             yield {
                 "bucket": bucket,
                 "endpoint_url": localstack_endpoint,
