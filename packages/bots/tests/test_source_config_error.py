@@ -116,6 +116,17 @@ class TestSourceIsInContext:
 
         assert caught.value.context == {"source": "docs"}
 
+    @pytest.mark.parametrize("source_type", ["nope", ""])
+    async def test_an_unknown_source_type(self, source_type: str) -> None:
+        config = GroundedSourceConfig(source_type=source_type, name="docs", options={})
+
+        with pytest.raises(ValueError) as caught:
+            await create_source_from_config(config)
+
+        assert str(caught.value).startswith(f"Unknown grounded source type: {source_type!r}. ")
+        assert isinstance(caught.value, SourceConfigError)
+        assert caught.value.context == {"source": "docs"}
+
     def test_it_is_both_a_validation_error_and_a_value_error(self) -> None:
         assert issubclass(SourceConfigError, ValidationError)
         assert issubclass(SourceConfigError, ValueError)

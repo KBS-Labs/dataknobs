@@ -46,10 +46,11 @@ SourceFactory = PluginFactory[GroundedSource]
 class SourceConfigError(ValidationError, ValueError):
     """A grounded source could not be built from its config.
 
-    Raised by the built-in source factories for a source whose own
-    declaration or backend refuses it. The message opens with ``Source
-    '<name>'`` and ``context["source"]`` holds the same name, so a bot config
-    declaring several sources says which one to fix. ``context`` carries no
+    Raised by :func:`create_source_from_config` for a source type no one
+    registered, and by the built-in source factories for a source whose own
+    declaration or backend refuses it. ``context["source"]`` holds the
+    source's name, so a bot config declaring several says which one to fix;
+    a factory's message opens with it too. ``context`` carries no
     text a backend wrote: beyond ``source`` it has what the config class's
     refusal recorded (``unknown``, ``did_you_mean``, ...), or ``cause_type``
     when the backend failed in its own words.
@@ -91,14 +92,13 @@ async def create_source_from_config(
         A fully initialized source ready for use in the grounded pipeline.
 
     Raises:
-        ValueError: If the source type is unknown.
-        SourceConfigError: If a ``vector_kb`` source has no
-            ``knowledge_base``, or a ``database`` source's backend refuses a
-            setting in dataknobs' words (an unknown backend, S3 with no
-            ``bucket``). A backend's ``ValueError`` in its own words arrives
-            as ``Source '<name>': its database could not be opened
-            (<type>)``, with the original on ``__cause__``. ``context`` has
-            ``source``.
+        SourceConfigError: If the source type is unknown, a ``vector_kb``
+            source has no ``knowledge_base``, or a ``database`` source's
+            backend refuses a setting in dataknobs' words (an unknown
+            backend, S3 with no ``bucket``). A backend's ``ValueError`` in
+            its own words arrives as ``Source '<name>': its database could
+            not be opened (<type>)``, with the original on ``__cause__``.
+            ``context`` has ``source``.
         PluginConfigError: If an option is one neither a ``database`` source
             nor its backend takes. The message and ``context["source"]`` name
             the source.
@@ -160,10 +160,11 @@ async def create_source_from_config(
     # otherwise reach the registry with ``key=None`` — and since
     # ``source_backends`` has no ``config_key``, that raises an opaque
     # "key is required" error. Surface the documented unknown-type message.
-    def unknown(_: NotFoundError | None = None) -> ValueError:
-        return ValueError(
+    def unknown(_: NotFoundError | None = None) -> SourceConfigError:
+        return SourceConfigError(
             f"Unknown grounded source type: {config.source_type!r}. "
-            f"Supported types: {', '.join(sorted(source_backends.list_keys()))}"
+            f"Supported types: {', '.join(sorted(source_backends.list_keys()))}",
+            context={"source": config.name},
         )
 
     if not config.source_type:

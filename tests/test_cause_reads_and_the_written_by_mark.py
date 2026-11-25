@@ -225,11 +225,30 @@ MARK_VALUES: dict[str, str] = {
     "_dataknobs_raised_by_a_registry": REGISTRY,
 }
 
-#: The one function that writes each mark.
-MARK_WRITERS: dict[tuple[str, str, str], int] = {
+MARK_CONSTANTS = [name for name in PRIVATE_NAMES if name.isupper()]
+
+#: Every use of a mark's constant and every spelling of its attribute name,
+#: reads included, by module, function and what was written. Counted whole
+#: because a write need not look like one: a constant bound to a local, or a
+#: key into ``__dict__``, sets the mark as surely as ``setattr``.
+MARK_USES: dict[tuple[str, str, str], int] = {
+    # Each constant, defined once.
+    (EXCEPTIONS, "<module>", "_WRITTEN_BY_DATAKNOBS"): 1,
+    (EXCEPTIONS, "<module>", "_dataknobs_written_by_dataknobs"): 1,
+    (EXCEPTIONS, "<module>", "_VALUE_FREE_REFUSAL"): 1,
+    (EXCEPTIONS, "<module>", "_dataknobs_value_free_refusal"): 1,
+    (REGISTRY, "<module>", "_RAISED_BY_A_REGISTRY"): 1,
+    (REGISTRY, "<module>", "_dataknobs_raised_by_a_registry"): 1,
+    # The one function that writes each.
     (EXCEPTIONS, "_written_by_dataknobs", "_WRITTEN_BY_DATAKNOBS"): 1,
     (EXCEPTIONS, "_value_free", "_VALUE_FREE_REFUSAL"): 1,
     (REGISTRY, "_ours", "_RAISED_BY_A_REGISTRY"): 1,
+    # The readers: each mark's own, and the walk that passes a registry's own
+    # miss through unwrapped.
+    (EXCEPTIONS, "_is_written_by_dataknobs", "_WRITTEN_BY_DATAKNOBS"): 1,
+    (EXCEPTIONS, "_value_free_words", "_VALUE_FREE_REFUSAL"): 1,
+    (REGISTRY, "_raised_by_a_registry", "_RAISED_BY_A_REGISTRY"): 1,
+    (REGISTRY, "PluginRegistry._raise_factory_failure", "_RAISED_BY_A_REGISTRY"): 1,
 }
 
 #: Strings that spell a private name without reaching it.
@@ -292,22 +311,37 @@ def _calls(name: str, sources: Iterable[Path]) -> dict[tuple[str, str], int]:
     return dict(found)
 
 
-def _mark_writes(sources: Iterable[Path]) -> dict[tuple[str, str, str], int]:
-    """Every ``setattr`` naming a mark's constant, by file, function and constant."""
-    constants = {name for name in PRIVATE_NAMES if name.isupper()}
+def _mark_uses(sources: Iterable[Path]) -> dict[tuple[str, str, str], int]:
+    """Every mention of a mark's constant or attribute string, by module and function."""
     found: Counter[tuple[str, str, str]] = Counter()
     for module, tree in _modules(sources):
-        writes = [
-            (node, name)
+        uses = [
+            (node, written)
             for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and _named(node.func) in {"setattr", "__setattr__"}
-            for arg in node.args
-            if (name := _named(arg)) in constants
+            if (written := _named(node)) in MARK_CONSTANTS
+            or (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and (written := node.value) in MARK_VALUES
+            )
         ]
-        if writes:
+        if uses:
             owners = _owners(tree)
-            found.update((module, owners[node], name) for node, name in writes)
+            found.update((module, owners[node], str(written)) for node, written in uses)
     return dict(found)
+
+
+def _bound_names(node: ast.AST) -> Iterator[str | None]:
+    """The names a node gives to something, other than through an attribute."""
+    if isinstance(node, ast.Name):
+        yield node.id
+    elif isinstance(node, ast.keyword | ast.arg):
+        yield node.arg
+    elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+        yield node.name
+    elif isinstance(node, ast.alias):
+        yield node.name
+        yield node.asname
 
 
 def _evasions(sources: Iterable[Path]) -> list[str]:
@@ -317,6 +351,11 @@ def _evasions(sources: Iterable[Path]) -> list[str]:
         called = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
         for node in ast.walk(tree):
             where = f"{module}:{getattr(node, 'lineno', 0)}"
+            found.extend(
+                f"{where} binds the mark attribute {name!r}"
+                for name in _bound_names(node)
+                if name in MARK_VALUES
+            )
             if isinstance(node, ast.ImportFrom):
                 for alias in node.names:
                     if alias.name not in PRIVATE_NAMES:
@@ -349,9 +388,9 @@ def test_every_call_that_vouches_is_at_a_reviewed_site(name: str) -> None:
     assert _calls(name, SOURCES) == CENSUSES[name]
 
 
-def test_each_marks_attribute_is_written_only_by_its_setter() -> None:
-    """A direct ``setattr`` would vouch without the snapshot the reader compares."""
-    assert _mark_writes(SOURCES) == MARK_WRITERS
+def test_each_mark_is_used_only_where_it_was_reviewed() -> None:
+    """A write elsewhere would vouch without the snapshot the reader compares."""
+    assert _mark_uses(SOURCES) == MARK_USES
 
 
 def test_no_private_name_is_mentioned_where_a_census_cannot_count_it() -> None:
@@ -437,28 +476,79 @@ def test_importing_an_owned_name_is_reported(tmp_path: Path, name: str) -> None:
 @pytest.mark.parametrize("value", MARK_VALUES)
 @pytest.mark.parametrize(
     "template",
-    ["def f(x):\n    x.{0} = 1\n", "def f(x):\n    setattr(x, '{0}', 1)\n"],
-    ids=["attribute", "string"],
+    [
+        "def f(x):\n    x.{0} = 1\n",
+        "def f(x):\n    setattr(x, '{0}', 1)\n",
+        "class X(Exception):\n    {0} = 1\n",
+        "class X(Exception):\n    {0}: int = 1\n",
+        "def f(x):\n    x.__dict__.update({0}=1)\n",
+        "class X(Exception):\n    def {0}(self):\n        pass\n",
+        "class X(Exception):\n    class {0}:\n        pass\n",
+        "class X(Exception):\n    from os import sep as {0}\n",
+    ],
+    ids=["attribute", "string", "class", "annotated", "keyword", "method", "nested", "import"],
 )
 def test_a_planted_mark_attribute_is_reported(tmp_path: Path, value: str, template: str) -> None:
     assert _evasions(_planted(tmp_path, template.format(value))) != []
 
 
-@pytest.mark.parametrize("constant", [name for name in PRIVATE_NAMES if name.isupper()])
+@pytest.mark.parametrize("constant", MARK_CONSTANTS)
 @pytest.mark.parametrize(
     "template",
     [
         "def f(x):\n    setattr(x, {0}, 1)\n",
         "def f(x):\n    x.__setattr__({0}, 1)\n",
         "def f(x):\n    object.__setattr__(x, {0}, 1)\n",
+        "def f(x):\n    k = {0}\n    setattr(x, k, 1)\n",
+        "def f(x):\n    x.__dict__[{0}] = 1\n",
     ],
-    ids=["setattr", "method", "object"],
+    ids=["setattr", "method", "object", "bound", "dict"],
 )
-def test_a_second_writer_in_a_marks_own_module_is_counted(
+def test_a_second_use_in_a_marks_own_module_is_counted(
     tmp_path: Path, constant: str, template: str
 ) -> None:
     home = PRIVATE_NAMES[constant]
     assert home is not None
     sources = _planted(tmp_path, template.format(constant), module=home)
 
-    assert _mark_writes(sources) == {(home, "f", constant): 1}
+    assert _mark_uses(sources) == {(home, "f", constant): 1}
+
+
+@pytest.mark.parametrize(("value", "home"), MARK_VALUES.items())
+def test_a_second_spelling_in_a_marks_own_module_is_counted(
+    tmp_path: Path, value: str, home: str
+) -> None:
+    text = f"def f(x):\n    x.__dict__['{value}'] = 1\n"
+
+    assert _mark_uses(_planted(tmp_path, text, module=home)) == {(home, "f", value): 1}
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "n = {0}\n",
+        "import functools\nn = functools.partial({0}, 'x')\n",
+        "def f(x):\n    return {0}\n",
+        "from dataknobs_common.other import {0} as n\n",
+    ],
+    ids=["binding", "partial", "returned", "alias"],
+)
+def test_the_private_core_is_only_called_even_in_its_own_module(
+    tmp_path: Path, template: str
+) -> None:
+    sources = _planted(tmp_path, template.format("_naming_refusals"), module=EXCEPTIONS)
+
+    assert _evasions(sources) != []
+
+
+@pytest.mark.parametrize("name", [name for name, _ in OWNED])
+@pytest.mark.parametrize(
+    "template",
+    ["n = {0}\n", "import functools\nn = functools.partial({0}, 'x')\n"],
+    ids=["binding", "partial"],
+)
+def test_an_owned_names_value_use_is_reported_without_an_import(
+    tmp_path: Path, name: str, template: str
+) -> None:
+    """With no import to report first, the mention itself is what is caught."""
+    assert _evasions(_planted(tmp_path, template.format(name))) != []
