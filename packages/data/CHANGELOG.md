@@ -1828,8 +1828,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is its own answer, read from the signal registry's `edge_bounded` metadata;
   a consumer's kind declaring `bounded_by_form_edge` and no answer is bounded
   exactly when the binding declares `form_edge:`; a subclass must define its
-  own; and the refusal names each rung only the remedy that would bound it. A document missing both bounds is
-  told both in one error.
+  own; and the refusal names each rung only the remedy that would bound it. A
+  document missing both bounds is told both in one error.
 
   The fold a surface-form lookup compares by is `str.casefold`, and no engine
   performs it at query time --- so the fold happens before the row is written

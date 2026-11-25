@@ -2939,8 +2939,8 @@ def _refuse_a_scan_over_a_binding_that_cannot_bound_it(
     lead = f"binding {binding!r} is read by "
     raise ValidationError(
         ". ".join(
-            f"{lead if index == 0 else 'It is also read by '}{kinds}, which {bound.does}. "
-            f"{'. '.join(remedies)} -- {bound.cost}"
+            f"{lead if index == 0 else 'It is also read by '}{kinds}, which {bound.does}: "
+            f"{bound.cost}. {'. '.join(remedies)}"
             for index, (bound, kinds, remedies) in enumerate(refusals)
         ),
         context={
@@ -3005,12 +3005,13 @@ _EDGE_BOUND = _ScanBound(
 def _unbounded_rungs(
     config: OntologyConfig, bound: _ScanBound, declared: int | None
 ) -> tuple[_ScanBound, list[str], list[str]] | None:
-    """The declared rung kinds ``bound`` leaves unbounded, and a remedy clause per group.
+    """The declared rung kinds ``bound`` leaves unbounded, and a remedy sentence per group.
 
     Grouped by remedy rather than merged, because rungs of one document can
     need different ones: a kind that publishes no answer has its spec read by
     nothing, so only the binding's key helps it, while a scan with its own
-    tokenizer trusts no binding key and only a cap does.
+    tokenizer trusts no binding key and only a cap does. A single group is all
+    the kinds, which the refusal has already named, so it does not repeat them.
     """
     groups: dict[str, set[str]] = {}
     for spec in _declared_rungs(config):
@@ -3034,6 +3035,9 @@ def _unbounded_rungs(
     if not groups:
         return None
     kinds = sorted(set().union(*groups.values()))
+    if len(groups) == 1:
+        (text,) = groups
+        return bound, kinds, [text[0].upper() + text[1:]]
     return bound, kinds, [f"For {sorted(group)}, {text}" for text, group in groups.items()]
 
 
@@ -3065,7 +3069,12 @@ def _asked_remedy(
             f"one -- a `tokenizer:` or `normalizer:` of its own is what stops the "
             f"shipped scan trusting it"
         )
-    return f"set what the rung's own `{bound.question}` reads as a bound"
+    number_asked = bound.smallest if declared is None else declared
+    return (
+        f"set whatever the `{bound.question}` of the class registered reads as a bound: "
+        f"it accepts neither `{bound.cap_key}: {bound.smallest}` nor "
+        f"`surface_forms.{bound.binding_key}: {number_asked}`"
+    )
 
 
 def _would_bound(
@@ -3076,7 +3085,9 @@ def _would_bound(
     """``ask`` about a spec or a number nobody wrote; a refusal of it is a no.
 
     The cap is this door's guess at a key, so an answer that refuses keys it
-    does not read is saying the guess would not help.
+    does not read is saying the guess would not help. An answer that builds
+    from its spec refuses such a key with a ``TypeError``. The spec as written
+    is asked outside this, so nothing caught here decides whether it loads.
     """
     try:
         return ask(spec, declared)

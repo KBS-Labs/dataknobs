@@ -2509,6 +2509,49 @@ def subclassed_scan() -> Any:
     async_signal_backends.unregister("fixed_scan")
 
 
+async def test_a_subclass_that_blanks_its_answers_is_unbounded_whatever_is_declared() -> None:
+    """Opting out of the question is not a way past the refusal."""
+    from dataknobs_common.entity_resolution import (
+        AsyncScanningSignal,
+        async_signal_backends,
+        declared_signal_metadata,
+    )
+
+    class Blanked(AsyncScanningSignal):
+        window_bounded = None  # type: ignore[assignment]
+        edge_bounded = None  # type: ignore[assignment]
+
+    async_signal_backends.register(
+        "blanked_scan",
+        lambda config: Blanked(config["entities"], tokenizer=lambda text: [(0, len(text))]),
+        metadata=declared_signal_metadata(Blanked, {"flavour": "async", "needs_io": False}),
+    )
+    try:
+        with pytest.raises(ValidationError) as raised:
+            await _loads(
+                _scanning_document(
+                    rung={"kind": "blanked_scan"}, longest_form_tokens=4, form_edge=0
+                )
+            )
+    finally:
+        async_signal_backends.unregister("blanked_scan")
+    assert raised.value.context["window_rungs"] == ["blanked_scan"]
+    assert raised.value.context["edge_rungs"] == ["blanked_scan"]
+
+
+async def test_one_remedy_names_its_rungs_once_after_the_cost() -> None:
+    """Two bounds, one remedy each: the kind is named by the problem, not again."""
+    with pytest.raises(ValidationError) as raised:
+        await _loads(_scanning_document())
+    message = str(raised.value)
+    assert "For [" not in message
+    for cost, remedy in (
+        ("n(n+1)/2 reads", "The binding must declare `surface_forms.longest_form_tokens:`"),
+        ("(r + 1)**2 - 1 reads", "The binding must declare `surface_forms.form_edge:`"),
+    ):
+        assert message.index(cost) < message.index(remedy)
+
+
 @pytest.mark.usefixtures("subclassed_scan")
 @pytest.mark.parametrize(
     "lookup",
@@ -2591,6 +2634,9 @@ async def test_rungs_needing_different_remedies_are_each_told_their_own() -> Non
     with pytest.raises(ValidationError) as raised:
         await _loads(document)
     message = str(raised.value)
+    for cost in ("n(n+1)/2 reads", "(r + 1)**2 - 1 reads"):
+        assert message.count(cost) == 1
+    assert message.index("n(n+1)/2 reads") < message.index("For [")
     for half in ("longest_form_tokens", "form_edge"):
         assert f"For ['consumer_edge_scan'], the binding must declare `surface_forms.{half}:`" in (
             message
@@ -2637,8 +2683,10 @@ async def test_a_kind_whose_answer_reads_no_cap_is_not_offered_one() -> None:
         with pytest.raises(ValidationError) as raised:
             await _loads(_scanning_document(rung={"kind": "own_key_scan"}))
         message = str(raised.value)
-        assert "`window_bounded`" in message
-        assert "max_window" not in message and "longest_form_tokens" not in message
+        assert (
+            "Set whatever the `window_bounded` of the class registered reads as a bound: "
+            "it accepts neither `max_window: 1` nor `surface_forms.longest_form_tokens: 1`"
+        ) in message
         await _loads(_scanning_document(rung={"kind": "own_key_scan", "widest": 4}))
     finally:
         async_signal_backends.unregister("own_key_scan")

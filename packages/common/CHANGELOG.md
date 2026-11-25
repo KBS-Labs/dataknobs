@@ -2440,8 +2440,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumer's rung declaring `bounded_by_longest_form` opts in by defining the
   same classmethod on its own class: the answer is not inherited, because a
   subclass's factory may read the spec differently, so a subclass that wants
-  to be asked defines it and delegates to `super()`. One that does not is
-  published as `False`, and a door reads it as unbounded.
+  to be asked defines it and delegates to `super()`. One that does not, or that
+  sets the name to `None`, is published as `False`, and a door reads it as
+  unbounded.
   `ScanningSignal.edge_bounded(spec, form_edge)` is the same question about
   the second bound, how far a probe widens over punctuation, published as
   `edge_bounded` on the same terms beside a third class fact,
@@ -2763,9 +2764,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `reads_surface_forms`, `bounded_by_longest_form` and
   `bounded_by_form_edge` read off the class rather than restated beside it, and
   the class's `window_bounded` and `edge_bounded` answers published with them.
-  Registering a rung is the extension point, and these keys are read at *load* time by doors that hold a composition and
-  no instances — so a registration that omits one is not refused, it is never
-  asked about, while the rung's own construction-time guard still fires. The
+  Registering a rung is the extension point, and these keys are read at *load*
+  time by doors that hold a composition and no instances — so a registration
+  that omits one is not refused, it is never asked about, while the rung's own construction-time guard still fires. The
   facts are read with a default, so a rung written against the bare
   `MatchSignal` protocol rather than against `DeclaredSignal` can use it too;
   the class attribute is the single spelling in either case.

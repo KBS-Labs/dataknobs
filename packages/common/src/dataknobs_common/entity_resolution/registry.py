@@ -218,7 +218,9 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
     inherits one publishes ``False`` under that key: it runs its parent's
     enumeration, which stops trusting a declared number when the tokenizer or
     the fold is its own, and nothing says whether this factory sets one, so a
-    door reads it as unbounded whatever the source declares. A subclass that
+    door reads it as unbounded whatever the source declares. Setting the name
+    to ``None`` does not withdraw it: the parent's enumeration still runs, so
+    that is published as ``False`` too. A subclass that
     reads its spec as its parent's factory does says so by defining the
     classmethod and delegating to ``super()``.
     Signal metadata is read through ``get_metadata`` and never serialised,
@@ -234,8 +236,8 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
     Returns:
         A new dict: ``base``, plus each fact read off ``rung``, plus
         ``window_bounded`` and ``edge_bounded``: the classmethod where
-        ``rung``'s own body defines it, ``False`` where it only inherits one,
-        and no entry where there is none.
+        ``rung``'s own body defines it, ``False`` where only a base class
+        does, and no entry where neither does.
     """
     metadata = dict(
         base,
@@ -245,8 +247,10 @@ def declared_signal_metadata(rung: type[Any], base: Mapping[str, Any]) -> dict[s
     )
     for question in ("window_bounded", "edge_bounded"):
         answer = getattr(rung, question, None)
-        if callable(answer):
-            metadata[question] = answer if question in vars(rung) else False
+        if callable(answer) and question in vars(rung):
+            metadata[question] = answer
+        elif any(callable(getattr(base_class, question, None)) for base_class in rung.__mro__):
+            metadata[question] = False
     return metadata
 
 

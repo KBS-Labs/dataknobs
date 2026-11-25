@@ -785,7 +785,7 @@ class RecordEntitySource(DynamicCapabilityMixin):
         rather than counted -- or None where it declared none, which a scan
         reads as *extend over the whole run* and answers in full. A document
         declaring a scan over such a binding is refused at load unless the
-        rung caps that run itself.
+        rung's own answer says its spec caps that run.
         """
         return SourceDescription(
             source_id=self._source_id,

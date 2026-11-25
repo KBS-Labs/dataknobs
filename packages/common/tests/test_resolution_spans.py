@@ -2202,6 +2202,20 @@ async def test_an_oversized_query_is_refused_before_the_catalogue_is_read(
     assert _DownSource.reads + _AsyncDownSource.reads == 0
 
 
+@pytest.mark.parametrize("question", ["window_bounded", "edge_bounded"])
+def test_a_class_that_blanks_an_inherited_answer_publishes_false(question: str) -> None:
+    """Setting the answer to None still runs the parent's enumeration.
+
+    Publishing nothing would read as a kind with no answer, which a declared
+    number bounds. A class whose parents answer nothing keeps that reading.
+    """
+    blanked = type("Blanked", (ScanningSignal,), {question: None})
+    below = type("Below", (blanked,), {})
+    assert declared_signal_metadata(blanked, {})[question] is False
+    assert declared_signal_metadata(below, {})[question] is False
+    assert question not in declared_signal_metadata(type("Bare", (), {question: None}), {})
+
+
 @pytest.mark.parametrize(
     ("tokenizer", "checks"),
     [(None, 0), (_own_default_tokens, 1)],
@@ -2211,6 +2225,7 @@ async def test_an_oversized_query_is_refused_before_the_catalogue_is_read(
 async def test_a_scan_checks_a_callers_tokens_once_and_the_defaults_never(
     asynchronous: bool, tokenizer: Any, checks: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The check is a pass over every token: owed to a caller's, and only once."""
     from dataknobs_common.entity_resolution import signals
     from dataknobs_common.text import scan
 

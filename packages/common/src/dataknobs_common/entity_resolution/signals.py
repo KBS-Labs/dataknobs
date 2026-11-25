@@ -2289,9 +2289,10 @@ class AsyncLexicalSignal(AsyncDeclaredSignal):
         cannot see it either.
 
         :func:`_near_forms` is a plain function taking only values, which is
-        what makes it handable to a thread. And :func:`_scorer_for` building a scorer per query is what makes it safe
-        to, since the default one is stateful and would otherwise be shared
-        across whatever else the loop is running.
+        what makes it handable to a thread. And :func:`_scorer_for` building a
+        scorer per query is what makes it safe to, since the default one is
+        stateful and would otherwise be shared across whatever else the loop is
+        running.
 
         **A caller's tokenizer has a hop of its own**, before the catalogue is
         read, because the cap it is counted against exists to spare that read.
