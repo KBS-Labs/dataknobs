@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import numpy as np
 
@@ -188,12 +188,17 @@ class ElasticsearchErrorHandler:
     """Mixin for consistent error handling."""
 
     @staticmethod
-    def _handle_elasticsearch_error(error: Exception, operation: str) -> None:
-        """Handle Elasticsearch errors consistently.
+    def _handle_elasticsearch_error(error: Exception, operation: str) -> NoReturn:
+        """Raise the error an operation failed with.
 
         Args:
             error: The exception that occurred
             operation: Description of the operation that failed
+
+        Raises:
+            ValueError: For a rejected request, or something that is missing.
+            RuntimeError: When the server did not answer.
+            Exception: ``error`` itself, for anything else.
         """
         from elasticsearch import (
             ConnectionError,

@@ -56,7 +56,7 @@ DEFERRED = {
     # shape to check, and a typo cannot get here. Reaching for
     # `dataknobs_common.imports` would also import `dataknobs_common` at this
     # door, which is the cost the lazy door exists to remove.
-    "utils/src/dataknobs_utils/__init__.py:100",
+    "utils/src/dataknobs_utils/__init__.py:102",
 }
 
 

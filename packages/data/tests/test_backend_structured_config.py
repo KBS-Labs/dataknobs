@@ -637,7 +637,7 @@ class TestPostgresFactory:
 # ---------------------------------------------------------------------------
 #
 # The two ES backends use different connection mechanisms (sync:
-# ``SimplifiedElasticsearchIndex`` over a single host/port; async: a pooled
+# an ``Elasticsearch`` client over a single host/port; async: a pooled
 # ``AsyncElasticsearch`` with full auth/TLS options), so — unlike Postgres —
 # they keep sibling config dataclasses under a shared base rather than one
 # unified config. Construction only; no ES server is contacted.

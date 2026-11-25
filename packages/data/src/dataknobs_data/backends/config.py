@@ -567,8 +567,8 @@ class ElasticsearchDatabaseConfigBase(VectorBackendConfig):
 
     The two Elasticsearch backends have diverged on connection management
     (and that drift is preserved here rather than papered over): the sync
-    backend talks to a single ``host``/``port`` through
-    ``SimplifiedElasticsearchIndex`` and supports custom ``mappings`` /
+    backend talks to a single ``host``/``port`` through its own
+    ``Elasticsearch`` client and supports custom ``mappings`` /
     ``settings`` and a default vector field; the async backend connects
     through a pooled ``AsyncElasticsearch`` client with full auth/TLS
     options (``hosts``, ``api_key``, ``basic_auth``, ``verify_certs``, …).
@@ -622,8 +622,7 @@ class ElasticsearchDatabaseConfigBase(VectorBackendConfig):
 class SyncElasticsearchDatabaseConfig(ElasticsearchDatabaseConfigBase):
     """Configuration for ``SyncElasticsearchDatabase``.
 
-    The sync backend connects to a single ``host``/``port`` and builds a
-    ``SimplifiedElasticsearchIndex``. ``vector_dimensions`` /
+    The sync backend connects to a single ``host``/``port``. ``vector_dimensions`` /
     ``default_vector_field`` seed a default dense-vector field at connect
     time when vector support is enabled but no fields have been observed
     yet; ``mappings`` / ``settings`` override the derived index config.

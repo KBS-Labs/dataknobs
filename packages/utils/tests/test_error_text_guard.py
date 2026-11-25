@@ -1,8 +1,8 @@
 """No unbounded third-party text in this package's error messages.
 
 This package raises none of the shared exceptions today — its own
-``ElasticsearchConflictError`` carries a document id and nothing else, and the
-rest is ``ValueError`` and ``NotImplementedError``. So the scan is green on
+``ElasticsearchConflictError`` carries a document id and nothing else,
+``ElasticsearchRequestError`` the reason Elasticsearch gave, and the rest is ``ValueError`` and ``NotImplementedError``. So the scan is green on
 arrival, and that is the point rather than an argument against it: what it
 guards is the *next* raise site, in a package whose whole job is talking to
 things that produce text of their own.
@@ -15,9 +15,8 @@ HTTP client's names a URL with its credentials in the query string, and an
 site-packages. An ``except Exception`` whose text reaches a caller hands that
 along, and a caller of this package is often the API layer of another one.
 
-``ElasticsearchConflictError`` is named alongside the shared set because it is
-the one error type here a consumer catches by name, so it is the one most
-likely to grow a message.
+Both are named alongside the shared set because they are the error types here a
+consumer catches by name, so they are the ones most likely to grow a message.
 """
 
 from __future__ import annotations
@@ -31,7 +30,7 @@ from dataknobs_common.testing import (
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 
-_GUARDED = GUARDED_ERROR_NAMES | {"ElasticsearchConflictError"}
+_GUARDED = GUARDED_ERROR_NAMES | {"ElasticsearchConflictError", "ElasticsearchRequestError"}
 
 
 def test_no_broad_except_feeds_a_rendered_error_message():

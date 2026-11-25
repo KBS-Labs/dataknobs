@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`elasticsearch_responses`**: `error_type`, `error_reason`,
+  `says_document_missing` and `says_index_exists`, which read the body of an
+  Elasticsearch response. A missing document and a missing index are both a
+  404, and the body is what tells them apart.
 - **`PostgresDB.query_rows()` and `PostgresDB.stream_rows()`.** `query_rows`
   returns rows as dicts of the driver's values rather than a DataFrame.
   `stream_rows` yields them through a server-side cursor in a read-only
@@ -20,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: a request `SimplifiedElasticsearchIndex` sends and Elasticsearch
+  refuses raises `ElasticsearchRequestError`** (new; carries `status` and
+  `body`). `count` and `delete_by_query` answered 0, `get` `None`, `index`
+  `{"_id": None, "result": "error"}`, and `exists`, `create`, `update`,
+  `delete` and `refresh` `False`. A missing document is still `None` or
+  `False`, and `create` of an existing index and `delete` of a missing one are
+  still `False`. `search` still returns the response: its `result` is now the
+  error, where it was replaced with an empty hit list.
+  `index` refuses a negative `max_retries` with `ValueError`; it sent nothing and
+  answered `{"_id": None, "result": "error"}`.
+- **`SimplifiedElasticsearchIndex` no longer prints every response to stderr.**
 - **The package door imports its submodules lazily (PEP 562).**
   `dataknobs_utils/__init__.py` imported all fifteen *"for easy access"*, and
   the package declares no optional extras, so a consumer reaching **one**

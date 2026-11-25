@@ -43,6 +43,7 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers and IDEs only
     # ``dataknobs_utils.json_utils`` from this block, and ``TYPE_CHECKING``
     # is never true at run time, so the deferral is unaffected.
     from dataknobs_utils import (
+        elasticsearch_responses,
         elasticsearch_utils,
         emoji_utils,
         file_utils,
@@ -63,6 +64,7 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers and IDEs only
 __version__ = "2.0.2"
 
 __all__ = [
+    "elasticsearch_responses",
     "elasticsearch_utils",
     "emoji_utils",
     "file_utils",

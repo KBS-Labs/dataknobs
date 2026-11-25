@@ -111,9 +111,32 @@ stats = db.aggregate(aggregation)
 # Efficient bulk indexing
 records = [Record(data) for data in dataset]
 
-# Bulk index with refresh
-db.create_batch(records, refresh="wait_for")
+# Indexed in requests of up to 500 records
+db.create_batch(records)
 ```
+
+## Failures
+
+A missing record is an answer: `read` and `get_version` return `None`, and
+`exists`, `update` and `delete` return `False`. Every other failure raises, on
+both the sync and async backends:
+
+| Failure | Raises |
+|---|---|
+| A request Elasticsearch refuses (a rejected query, a closed, blocked or missing index) | the client's own `elasticsearch.ApiError` subclass, such as `BadRequestError` |
+| No answer from the server | the client's `elasticsearch.TransportError` subclass, such as `ConnectionError` |
+| `create` of an id that exists | `DuplicateRecordError` |
+| A stale `expected_version` | `ConcurrencyError` |
+| An item of a batch that fails | `DatabaseError`; `context["failures"]` lists each item's `id`, `status`, `type` and `reason` |
+| A `create_batch` whose only failures are ids that exist | `DuplicateRecordError` |
+
+A batch is not atomic: when one raises for its items, the items that did not
+fail have been written. `update_batch` and `delete_batch` return `False` for a
+record that does not exist.
+
+Vector search and `create_vector_index` raise `ValueError` for a rejected request
+or a missing index, `RuntimeError` when the server does not answer, and the
+client's own error for anything else.
 
 ## Search Features
 
