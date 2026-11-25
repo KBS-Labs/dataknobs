@@ -743,3 +743,31 @@ def test_a_sort_reaches_each_fields_full_value() -> None:
         ("data.age", "asc"),
         ("id", "asc"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("kind", "bound", "relates"),
+    [
+        ("date", True, False),
+        ("date", 5, True),
+        ("date_nanos", 5, True),
+        ("date_nanos", False, False),
+        ("ip", 5, False),
+        ("ip", NOON, False),
+        ("ip", "10.0.0.1", True),
+        ("long", [1], True),
+        ("boolean", [True], True),
+        ("version", True, True),
+    ],
+)
+def test_a_type_says_which_bounds_it_can_hold(kind: str, bound: Any, relates: bool) -> None:
+    """A date holds epoch milliseconds, and any field can hold a list."""
+    assert _learned(x=kind).relates("x", bound) is relates
+
+
+@pytest.mark.parametrize("kind", ["date", "ip"])
+def test_a_negated_pattern_on_a_field_no_pattern_reaches(kind: str) -> None:
+    """Its values are strings, which a pattern cannot be tried against."""
+    assert build_filter_es_query(Filter("x", Operator.NOT_LIKE, "a%"), _learned(x=kind)) == {
+        "exists": {"field": "data.x"}
+    }

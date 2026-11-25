@@ -1398,20 +1398,23 @@ pre-filters agree:
   missing value, and is asked about again by the next query. A pattern on
   a number, date or boolean field matches nothing.
 - **A bound of another kind matches nothing on a number or boolean field**, in
-  equality, membership and range alike; nor does a number or boolean on `id`. On
+  equality, membership and range alike; nor does a number or boolean on `id`, a
+  boolean on a date field, or anything but a string on an `ip` field. On
   a string field, unlike other backends, a bound that is not a string is compared
-  as text, because the index holds `5` and `"5"` alike.
+  as text, because the index holds `5` and `"5"` alike. A number on a date field
+  is read as epoch milliseconds, whether the document holds a number or a string.
 - **A negated operator** (`NEQ`, `NOT_IN`, `NOT_LIKE`, `NOT_BETWEEN`) matches only
   a document that has a value, as on every backend. `NOT_LIKE` matches no number
-  or boolean.
+  or boolean, and every value of a date or `ip` field, which `LIKE` cannot match.
 - **A list is compared element by element**, unlike other backends: a field holding `["a", "b"]` equals
-  `"a"`, and is not matched by `NEQ "a"`.
+  `"a"`, and is not matched by `NEQ "a"`. Elasticsearch refuses `EQ` or `NEQ` with
+  a list as the value.
 - **A string compared with a date field is read as a date** by equality and range
   alike, and Elasticsearch refuses one that is not a date. An `ip` field reads
   its operand the same way.
 - **A `text` field with no keyword sub-field** (a mapping made elsewhere) has no
-  full value to reach: equality and patterns match nothing, a range compares its
-  analyzed words, and Elasticsearch refuses to sort by it.
+  full value to reach: equality and patterns match nothing, so `NEQ`, `NOT_IN` and
+  `NOT_LIKE` match every value; a range compares its analyzed words, and Elasticsearch refuses to sort by it.
 - **`REGEX`** matches the **full field value** (case-sensitive), like the
   in-memory and SQL backends — not a single analyzed token. Elasticsearch
   `regexp` is anchored and uses Lucene RegExp syntax (no `^`/`$` anchors, no

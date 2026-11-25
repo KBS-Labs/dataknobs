@@ -32,7 +32,10 @@ Field-path rules:
   field that holds no strings matches nothing.
 * A text field with no keyword sub-field (a custom mapping) has no full value to
   reach: an equality or pattern on it matches nothing, a range compares its
-  analyzed terms, and Elasticsearch refuses to sort by it.
+  analyzed terms, and Elasticsearch refuses to sort by it. Nothing being
+  matched, the negated forms match every value. So does ``NOT_LIKE`` on any
+  other field that is reached directly and holds neither strings nor numbers
+  nor booleans, such as a date.
 
 Semantics:
 
@@ -54,11 +57,13 @@ Semantics:
 * ``STARTS_WITH`` is a case-sensitive ``prefix`` query.
 * A bound relates only to values of its own kind, as ``Filter.matches`` has it.
   The mapping says so for a number or boolean field, and the storage key is
-  always a string: a bound of another kind matches nothing there. ``None`` and
+  always a string: a bound of another kind matches nothing there. Nor does a
+  boolean on a date field, or anything but a string on an ``ip`` field. ``None`` and
   NaN match nothing anywhere, and a ``None`` member of a list is dropped. A
   bound that is not a string is still compared as text with a string field,
-  whose index holds ``5`` and ``"5"`` alike. A list is compared element by
-  element.
+  whose index holds ``5`` and ``"5"`` alike, and a number with a date field as
+  epoch milliseconds. A list is compared element by
+  element, and equality with a list is refused by Elasticsearch.
 * A negated operator (``NEQ``/``NOT_IN``/``NOT_LIKE``/``NOT_BETWEEN``) matches a
   document that **has a value** the operator it negates does not match: ``exists``
   with a ``must_not``, because a bare ``must_not`` also keeps a document without
@@ -109,12 +114,8 @@ _EXISTENCE_OPS = frozenset({Operator.EXISTS, Operator.NOT_EXISTS})
 _ANALYZED_TYPES = frozenset({"text", "match_only_text"})
 #: Elasticsearch types that hold a string's full value.
 _EXACT_STRING_TYPES = frozenset({"keyword", "constant_keyword", "wildcard", "flattened"})
-#: The kind of value (:func:`~dataknobs_data.query.value_kind`) an Elasticsearch
-#: type holds, for the types that hold one kind alone. It reads a bound of
-#: another kind as a spelling of one (``"3"`` as the number) or refuses it. Any
-#: other type is left to read the bound itself: a date takes a string or a time,
-#: and a string field may hold what was written as a number.
-_TYPE_KINDS = {
+#: The Elasticsearch types that hold one kind of value alone, and it.
+_SCALAR_TYPES = {
     **dict.fromkeys(
         (
             "byte",
@@ -130,6 +131,17 @@ _TYPE_KINDS = {
         "number",
     ),
     "boolean": "boolean",
+}
+#: The kinds of bound (:func:`~dataknobs_data.query.value_kind`) that can relate
+#: to a value of an Elasticsearch type. It reads a bound of another kind as a
+#: spelling of its own (``"3"`` as the number) or refuses it. A date takes a
+#: number, because it can hold one: epoch milliseconds. A type not named here is
+#: left to read the bound itself; a string field may hold what was written as a
+#: number.
+_BOUND_KINDS: dict[str, frozenset[str]] = {
+    **{name: frozenset({kind}) for name, kind in _SCALAR_TYPES.items()},
+    **dict.fromkeys(("date", "date_nanos"), frozenset({"string", "timestamp", "number"})),
+    "ip": frozenset({"string"}),
 }
 
 
@@ -201,8 +213,9 @@ class FieldTypes:
         """Whether a bound can relate to any value a field holds.
 
         False for ``None`` and NaN, which relate to nothing, and for a bound of
-        another kind than the one kind the field's type holds. True for a field
-        that is not mapped, which has no value to relate to.
+        a kind the field's type cannot hold. True for a field that is not
+        mapped, which has no value to relate to, and for a list or mapping,
+        which Elasticsearch refuses: a field of any type can hold a list.
         """
         kind = value_kind(bound)
         if kind == "never":
@@ -210,8 +223,10 @@ class FieldTypes:
         if is_storage_key_field(name):
             # Always a string. A time is compared as the text it is written as.
             return kind not in ("number", "boolean")
-        held = {_TYPE_KINDS.get(t) for t in self._types.get(name, ())}
-        return not held or None in held or kind in held
+        types = self._types.get(name)
+        if kind is None or types is None:
+            return True
+        return any(t not in _BOUND_KINDS or kind in _BOUND_KINDS[t] for t in types)
 
     def holds_only_words(self, name: str) -> bool:
         """Whether a field is text whose full value nothing holds.
@@ -224,7 +239,7 @@ class FieldTypes:
     def holds_no_strings(self, name: str) -> bool:
         """Whether a field holds only numbers and booleans."""
         types = self._types.get(name)
-        return types is not None and types <= _TYPE_KINDS.keys()
+        return types is not None and types <= _SCALAR_TYPES.keys()
 
 
 def condition_fields(condition: Condition | None) -> set[str]:

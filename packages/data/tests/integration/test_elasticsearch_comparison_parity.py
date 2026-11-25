@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 from dataknobs_common.testing import requires_real_elasticsearch
+from elasticsearch import BadRequestError
 
 from dataknobs_data import Filter, Operator, Query, Record
 from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
@@ -182,3 +183,75 @@ def test_the_expectations_are_not_all_alike() -> None:
     assert _expected(Filter("n", Operator.NOT_LIKE, "5")) == []
     assert _expected(Filter("s", Operator.NOT_IN, [])) == ["a", "five", "long", "z"]
     assert _expected(Filter("o.k", Operator.NEQ, "x")) == ["z"]
+
+
+#: Types a custom mapping can give a field, which say what it cannot hold. A date
+#: field can hold a number (epoch milliseconds), so a number is not among them.
+TYPED: dict[str, dict[str, Any]] = {
+    "t": {"day": "2024-01-01T10:00:00", "ip": "10.0.0.1"},
+    "epoch": {"day": 1704103200000},
+    "miss": {"other": 1},
+}
+CANNOT_HOLD: dict[str, list[Any]] = {"day": [True, False], "ip": [True, 5, 0.5, NOON]}
+
+
+async def test_a_bound_a_date_or_ip_field_cannot_hold_relates_to_nothing(
+    config: dict[str, Any],
+) -> None:
+    mapped = {"day": {"type": "date"}, "ip": {"type": "ip"}}
+    config["mappings"] = {"properties": {"data": {"properties": mapped}}}
+    sync_db = SyncElasticsearchDatabase(config)
+    await asyncio.to_thread(sync_db.connect)
+    async_db = AsyncElasticsearchDatabase(config)
+    await async_db.connect()
+    specs = [
+        spec
+        for field, bounds in CANNOT_HOLD.items()
+        for bound in bounds
+        for spec in (
+            *(Filter(field, op, bound) for op in SCALAR_OPS),
+            *(Filter(field, op, [bound]) for op in MEMBERSHIP_OPS),
+            *(Filter(field, op, [bound, bound]) for op in RANGE_OPS),
+        )
+    ]
+    wrong: dict[str, Any] = {}
+    try:
+        for row_id, data in TYPED.items():
+            await asyncio.to_thread(sync_db.create, Record(data, storage_id=row_id))
+        for spec in specs:
+            query = Query(filters=[spec])
+            want = sorted(i for i, row in TYPED.items() if spec.matches(row.get(spec.field)))
+            for name in ("sync", "async"):
+                got: Any
+                try:
+                    if name == "sync":
+                        found = await asyncio.to_thread(sync_db.search, query)
+                    else:
+                        found = await async_db.search(query)
+                    got = sorted(str(r.storage_id) for r in found)
+                except Exception as exc:  # a raise is an answer, and never the matcher's
+                    got = f"raises {type(exc).__name__}"
+                if got != want:
+                    wrong[f"{name} {spec.field} {spec.operator.name} {spec.value!r}"] = (got, want)
+        kept = await async_db.search(Query(filters=[Filter("day", Operator.GT, 0)]))
+        assert "epoch" in {r.storage_id for r in kept}
+    finally:
+        await async_db.close()
+        await asyncio.to_thread(sync_db.close)
+    assert wrong == {}
+
+
+@pytest.mark.parametrize("operator", [Operator.EQ, Operator.NEQ])
+@pytest.mark.parametrize("field", ["n", "s"])
+def test_equality_with_a_list_is_refused_rather_than_missed(
+    config: dict[str, Any], field: str, operator: Operator
+) -> None:
+    """A number field can hold ``[1]``, so answering nothing would lose it."""
+    db = SyncElasticsearchDatabase(config)
+    db.connect()
+    try:
+        db.create(Record({"n": [1], "s": ["a"]}, storage_id="a"))
+        with pytest.raises(BadRequestError):
+            db.search(Query(filters=[Filter(field, operator, [1] if field == "n" else ["a"])]))
+    finally:
+        db.close()
