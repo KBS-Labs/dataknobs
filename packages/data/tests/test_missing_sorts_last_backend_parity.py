@@ -87,28 +87,9 @@ def backend(request: pytest.FixtureRequest) -> Iterator[tuple[str, dict[str, Any
             )
 
 
-def _known_answer(kind: str, flavour: str, sort: SortSpec) -> str | None:
-    """A backend's answer where a defect outside this test's subject decides it."""
-    if kind == "elasticsearch" and flavour == "async" and sort.field == "t":
-        # The async backend sorts a text field without its keyword
-        # sub-field, and Elasticsearch refuses the request.
-        return "raises BadRequestError"
-    if kind == "elasticsearch" and flavour == "sync" and sort.field == "n":
-        # The sync backend sorts a field on its keyword sub-field unless its
-        # name is on a fixed list of numeric names, and a number field has
-        # none, so Elasticsearch refuses the request.
-        return "raises BadRequestError"
-    return None
-
-
-def _disagreements(kind: str, flavour: str, ordered: list[tuple[SortSpec, Answer]]) -> dict:
+def _disagreements(ordered: list[tuple[SortSpec, Answer]]) -> dict:
     wrong: dict[str, object] = {}
     for sort, got in ordered:
-        known = _known_answer(kind, flavour, sort)
-        if known is not None:
-            if got != known:
-                wrong[f"sort {sort.field} {sort.order.value}"] = {"got": got, "want": known}
-            continue
         present = PRESENT_ASCENDING[:: -1 if sort.order == SortOrder.DESC else 1]
         # The records with no value come last; their order among themselves
         # is not asked.
@@ -144,7 +125,7 @@ def test_a_record_with_no_value_sorts_last_sync(backend: tuple[str, dict[str, An
         if kind == "s3":
             db.clear()
         db.close()
-    assert _disagreements(kind, "sync", ordered) == {}
+    assert _disagreements(ordered) == {}
 
 
 async def test_a_record_with_no_value_sorts_last_async(
@@ -167,4 +148,4 @@ async def test_a_record_with_no_value_sorts_last_async(
         if kind == "s3":
             await db.clear()
         await db.close()
-    assert _disagreements(kind, "async", ordered) == {}
+    assert _disagreements(ordered) == {}

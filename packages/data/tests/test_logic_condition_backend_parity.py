@@ -38,7 +38,7 @@ from dataknobs_common.testing import (
 )
 
 from dataknobs_data import AsyncDatabase, Record, SyncDatabase
-from dataknobs_data.backends.elasticsearch_query import build_complex_es_query
+from dataknobs_data.backends.elasticsearch_query import FieldTypes, build_complex_es_query
 from dataknobs_data.backends.sql_base import SQLQueryBuilder
 from dataknobs_data.query import Filter, Operator
 from dataknobs_data.query_logic import (
@@ -286,4 +286,4 @@ class TestAConditionNoTranslatorKnowsIsRefused:
 
     def test_elasticsearch(self, condition: Condition) -> None:
         with pytest.raises(TypeError, match="_Unrenderable"):
-            build_complex_es_query(condition)
+            build_complex_es_query(condition, FieldTypes())

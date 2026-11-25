@@ -15,6 +15,7 @@ from ..records import Record
 
 if TYPE_CHECKING:
     from ..query import Query
+    from .elasticsearch_query import FieldTypes
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +75,67 @@ class ElasticsearchBaseConfig:
         return host, port, index, extra_config
 
 
+#: The longest string a data field's keyword sub-field indexes. Lucene refuses a
+#: term past 32766 bytes, and the document with it; this many characters fit
+#: whatever they are. A longer one is stored and text-searched, not compared.
+KEYWORD_IGNORE_ABOVE = 8191
+
+
+def _merge_mapping(base: Any, override: Any) -> Any:
+    """``base`` with ``override`` laid over it, key by key.
+
+    A field definition naming another ``type`` replaces the base's, whose other
+    parameters belong to the type it names.
+    """
+    if not (isinstance(base, dict) and isinstance(override, dict)):
+        return override
+    if "type" in override and override["type"] != base.get("type", override["type"]):
+        return override
+    return {
+        **base,
+        **{k: _merge_mapping(base[k], v) if k in base else v for k, v in override.items()},
+    }
+
+
 class ElasticsearchIndexManager:
     """Mixin for Elasticsearch index management."""
+
+    @classmethod
+    def index_definition(
+        cls,
+        mappings: dict[str, Any] | None,
+        settings: dict[str, Any] | None,
+        vector_fields: dict[str, int] | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The mappings and settings a new index is created with.
+
+        Args:
+            mappings: Configured mappings, laid over the declared ones. Configured
+                ``dynamic_templates`` are tried first.
+            settings: Configured settings, in place of the default ones.
+            vector_fields: Vector field names to dimensions.
+
+        Returns:
+            The mappings and the settings.
+        """
+        declared = cls.get_index_mappings(vector_fields)
+        if mappings:
+            templates = [
+                *mappings.get("dynamic_templates", []),
+                *declared["dynamic_templates"],
+            ]
+            declared = {**_merge_mapping(declared, mappings), "dynamic_templates": templates}
+        return declared, settings or cls.get_knn_index_settings()
 
     @staticmethod
     def get_index_mappings(vector_fields: dict[str, int] | None = None) -> dict:
         """Get index mappings with vector field support.
+
+        A string in a record's data is text, for searching its words, with a
+        ``keyword`` sub-field holding its full value for comparing and sorting.
+        ``date_detection`` is off, so a string stays one whatever the first
+        document holds: two strings compare as text, as on every backend. A field
+        wanted as a time is mapped as ``date`` in the configured mappings.
 
         Args:
             vector_fields: Dict mapping vector field names to dimensions
@@ -87,21 +143,39 @@ class ElasticsearchIndexManager:
         Returns:
             Elasticsearch mappings dictionary
         """
-        mappings = {
+        mappings: dict[str, Any] = {
+            "date_detection": False,
+            "dynamic_templates": [
+                {
+                    "data_strings": {
+                        "path_match": "data.*",
+                        "match_mapping_type": "string",
+                        "mapping": {
+                            "type": "text",
+                            "fields": {
+                                "keyword": {
+                                    "type": "keyword",
+                                    "ignore_above": KEYWORD_IGNORE_ABOVE,
+                                }
+                            },
+                        },
+                    }
+                }
+            ],
             "properties": {
                 "id": {"type": "keyword"},
                 "data": {"type": "object", "properties": {}},
                 "metadata": {"type": "object", "enabled": True},
                 "created_at": {"type": "date"},
                 "updated_at": {"type": "date"},
-            }
+            },
         }
 
         # Add vector field mappings if specified
         if vector_fields:
             for field_name, dimensions in vector_fields.items():
                 # Use dense_vector type for vector fields nested under data
-                data_props = mappings["properties"]["data"]["properties"]  # type: ignore[index]
+                data_props = mappings["properties"]["data"]["properties"]
                 data_props[field_name] = {
                     "type": "dense_vector",
                     "dims": dimensions,
@@ -394,17 +468,17 @@ class ElasticsearchQueryBuilder:
     """Mixin for building Elasticsearch queries."""
 
     @staticmethod
-    def _build_filter_query(filter_query: Query | None) -> dict[str, Any] | None:
+    def _build_filter_query(filter_query: Query | None, types: FieldTypes) -> dict[str, Any] | None:
         """Build an Elasticsearch pre-filter clause from a Query.
 
         Vector and hybrid search pre-filter through the same shared translator
         as the plain search paths, so the pre-filter honors the full operator
         set and resolves ``id`` to the record's storage key. Equality is exact
-        (``term`` on the ``.keyword`` sub-field), not analyzed. Returns ``None``
+        (``term`` on the field's full value), not analyzed. Returns ``None``
         when there is nothing to filter.
         """
         from .elasticsearch_query import build_bool_query
 
         if not filter_query or not filter_query.filters:
             return None
-        return build_bool_query(filter_query.filters)
+        return build_bool_query(filter_query.filters, types)

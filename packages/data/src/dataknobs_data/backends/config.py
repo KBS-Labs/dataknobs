@@ -568,12 +568,11 @@ class ElasticsearchDatabaseConfigBase(VectorBackendConfig):
     The two Elasticsearch backends have diverged on connection management
     (and that drift is preserved here rather than papered over): the sync
     backend talks to a single ``host``/``port`` through its own
-    ``Elasticsearch`` client and supports custom ``mappings`` /
-    ``settings`` and a default vector field; the async backend connects
+    ``Elasticsearch`` client and supports a default vector field; the async
+    backend connects
     through a pooled ``AsyncElasticsearch`` client with full auth/TLS
     options (``hosts``, ``api_key``, ``basic_auth``, ``verify_certs``, …).
-    Only ``index`` and ``refresh`` are genuinely shared; everything else
-    lives on the sibling subclasses so each backend's documented surface
+    What is declared here is shared; everything else lives on the sibling subclasses so each backend's documented surface
     is exactly its config dataclass.
 
     Attributes:
@@ -586,12 +585,18 @@ class ElasticsearchDatabaseConfigBase(VectorBackendConfig):
             from Elasticsearch's default.
         search_page_size: Hits per request when a search pages with
             ``search_after``. At most ``max_result_window``.
+        mappings: Index mappings a new index is created with, laid over the
+            declared ones: a key here wins, and the rest are kept.
+        settings: Index settings a new index is created with, in place of the
+            default ones.
     """
 
     index: str = "records"
     refresh: bool = True
     max_result_window: int = 10_000
     search_page_size: int = 1_000
+    mappings: dict[str, Any] | None = None
+    settings: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -625,23 +630,19 @@ class SyncElasticsearchDatabaseConfig(ElasticsearchDatabaseConfigBase):
     The sync backend connects to a single ``host``/``port``. ``vector_dimensions`` /
     ``default_vector_field`` seed a default dense-vector field at connect
     time when vector support is enabled but no fields have been observed
-    yet; ``mappings`` / ``settings`` override the derived index config.
+    yet.
 
     Attributes:
         host: Elasticsearch host.
         port: Elasticsearch port.
         vector_dimensions: Dimensions for the default vector field.
         default_vector_field: Name of the default vector field.
-        mappings: Custom index mappings (overrides the derived mappings).
-        settings: Custom index settings (overrides the derived settings).
     """
 
     host: str = "localhost"
     port: int = 9200
     vector_dimensions: int = 1536
     default_vector_field: str = "embedding"
-    mappings: dict[str, Any] | None = None
-    settings: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

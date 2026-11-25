@@ -481,9 +481,9 @@ memory (memory, file, S3) answer a membership filter the same way: nothing is
 in an empty list, and a `None` member matches nothing. `NOT_IN` matches only
 records whose field has a value, as `NEQ` does, so `NOT_IN []` selects every
 record that has one. Elasticsearch differs in two ways: its `NOT_IN` also
-matches a document that lacks the field, as each of its negations does, and it
-chooses a string field's exact-match (`.keyword`) path from the list's first
-member only.
+matches a document that lacks the field, as each of its negations does, and on
+a field that is not a string it reads the whole list as strings when the first
+member is one, which matches nothing.
 
 A comparison (`EQ`, `NEQ`, `GT`, `GTE`, `LT`, `LTE`, `BETWEEN`, `NOT_BETWEEN`,
 `IN`, `NOT_IN`) relates a field's value only to a bound of the same kind, as
@@ -596,12 +596,9 @@ sorts after every record that has one, ascending and descending, on every
 backend. SQL renders `NULLS LAST` on each sort key, and Elasticsearch is sent
 `missing: _last`.
 
-Elasticsearch sorts by code point and compares `id` that way, but two
-defects remain there. A range with a string bound on a data field compares
-the field's analyzed, lowercased tokens. And a sort picks a field's
-`.keyword` path by guessing rather than from the mapping: the sync backend
-raises on a numeric field whose name it does not recognise, and the async
-backend raises on a text field.
+Elasticsearch compares and sorts text by code point too, through a field's
+keyword sub-field; [its own section](#elasticsearch-backend) says where that
+depends on the index's mapping.
 
 ### Querying by identifier and key prefix
 
@@ -1395,6 +1392,17 @@ await db.connect()
 one shared translator, so the sync backend, async backend, and vector/hybrid
 pre-filters agree:
 
+- **A field is reached by how the index maps it.** The backend asks Elasticsearch
+  (the field capabilities API, which needs only the `read` privilege) about each
+  field a query filters or sorts by, and remembers the answer until `close()`. A
+  field mapped as `text` is compared and sorted through its keyword sub-field,
+  whatever that is called; a keyword, number, date or boolean field is used
+  directly. A field the index does not map yet matches nothing, sorts as a
+  missing value, and is asked about again by the next query. A string equality or
+  a pattern on a number, date or boolean field matches nothing.
+- **A `text` field with no keyword sub-field** (a mapping made elsewhere) has no
+  full value to reach: equality and patterns match nothing, a range compares its
+  analyzed words, and Elasticsearch refuses to sort by it.
 - **`REGEX`** matches the **full field value** (case-sensitive), like the
   in-memory and SQL backends — not a single analyzed token. Elasticsearch
   `regexp` is anchored and uses Lucene RegExp syntax (no `^`/`$` anchors, no
@@ -1412,6 +1420,30 @@ pre-filters agree:
   `id`-queryable; `read(id)` is unaffected.
 - An operator the translator cannot express raises `ValueError` rather than
   silently matching every document.
+
+**The index it creates.** Both backends create a missing index with the same
+mapping. A string in a record's data is `text` with a `keyword` sub-field of up
+to 8191 characters; a longer string is stored and text-searched, but no
+comparison matches it and it sorts as a missing value. `date_detection` is off,
+so a string is compared as text whatever the first document held. A `datetime`
+bound is therefore compared as its ISO 8601 text, which orders with other values
+of that form; map a field as `date` to have it compared as time:
+
+```python
+db = AsyncElasticsearchDatabase({
+    "hosts": ["http://localhost:9200"],
+    "index": "records",
+    "mappings": {"properties": {"data": {"properties": {"due": {"type": "date"}}}}},
+    "settings": {"number_of_shards": 3},
+})
+```
+
+`mappings` is laid over the declared mapping: a key it names wins and the rest
+are kept, and its `dynamic_templates` are tried first. `settings` replaces the
+default settings. Neither changes an index that already exists. One created by an
+earlier version keeps its 256-character `keyword` sub-fields, past which a string
+is not compared, and any field it detected as a date. Reindex into a new index to
+change either.
 
 ## Testing Utilities
 
