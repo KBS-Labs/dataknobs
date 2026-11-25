@@ -76,6 +76,16 @@ def test_refuses_what_lucene_cannot_match(pattern: str, why: str) -> None:
         python_regex_to_lucene(pattern)
 
 
+@pytest.mark.parametrize(
+    "pattern",
+    ["(" * 450 + "a" + ")" * 450, "(" * 2000 + "a" + ")" * 2000],
+    ids=["by the translator", "by the parser"],
+)
+def test_refuses_what_is_nested_too_deeply_to_read(pattern: str) -> None:
+    with pytest.raises(ValueError, match=r"cannot match.*nested too deeply"):
+        python_regex_to_lucene(pattern)
+
+
 @pytest.mark.parametrize("pattern", [None, 5, b"a", re.compile("a")])
 def test_refuses_what_is_not_a_string(pattern: Any) -> None:
     with pytest.raises(ValueError, match="must be a string"):

@@ -11,7 +11,8 @@ what it leaves unanchored is padded with ``.*``, and every character is escaped.
 Lucene's answer is whether the value belongs to a set of strings, with nothing
 said of where in it. That leaves out look-around, word boundaries, back-references,
 atomic groups and possessive repeats, and an anchor anywhere but an end of the
-pattern. Inline flags are refused too. A pattern using one raises ``ValueError``.
+pattern. Inline flags that change matching are refused too. A pattern using one
+raises ``ValueError``.
 """
 
 from __future__ import annotations
@@ -90,7 +91,7 @@ def python_regex_to_lucene(pattern: str) -> str:
 
     Raises:
         ValueError: ``pattern`` is not a string, is not a regular expression,
-            or uses what Lucene cannot match.
+            uses what Lucene cannot match, or is nested too deeply to read.
     """
     if not isinstance(pattern, str):
         raise ValueError(f"REGEX pattern must be a string, got: {pattern!r}")
@@ -101,6 +102,10 @@ def python_regex_to_lucene(pattern: str) -> str:
         return _sequence(parsed, _Edge.OPEN, _Edge.OPEN)
     except (re.error, OverflowError, _UnmatchableError) as e:
         raise ValueError(f"Elasticsearch cannot match the pattern {pattern!r}: {e}") from e
+    except RecursionError as e:
+        raise ValueError(
+            f"Elasticsearch cannot match the pattern {pattern!r}: it is nested too deeply"
+        ) from e
 
 
 def _sequence(nodes: Iterable[_Node], left: _Edge, right: _Edge) -> str:

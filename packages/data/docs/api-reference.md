@@ -1426,11 +1426,15 @@ pre-filters agree:
   The pattern is translated to Lucene's syntax
   (`python_regex_to_lucene`, in `backends.elasticsearch_regex`). One that
   cannot be raises `ValueError`: look-around, `\b`, back-references, atomic
-  groups, possessive repeats, inline flags, an anchor that is not at an end of
-  the pattern (as in `a^b`), and one that is not a regular expression.
-  Elasticsearch refuses a translated pattern longer than `index.max_regex_length`
-  (1000), and a pattern that does not start with `^` is tried against every
-  distinct value of the field.
+  groups, possessive repeats, inline flags that change matching, an anchor that
+  is not at an end of the pattern (as in `a^b`), one nested too deeply to read,
+  and one that is not a regular expression.
+  Elasticsearch itself refuses, with the client's error, a translated pattern
+  longer than `index.max_regex_length` (1000) or costlier than its 10,000
+  `max_determinized_states`. Translating lengthens a pattern (`\s` becomes 21
+  characters), and finding one anywhere costs more than matching a whole value:
+  `x{314}` is the longest such repeat it accepts, against `^x{10000}\Z`. A pattern
+  that does not start with `^` is tried against every distinct value of the field.
 - **`LIKE`/`NOT_LIKE`** treat only `%` and `_` as wildcards and match
   case-insensitively, folding ASCII case only; a literal `*`, `?`, or `\` in
   the pattern is escaped to match verbatim. The case-insensitive form requires

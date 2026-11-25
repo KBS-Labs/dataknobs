@@ -66,8 +66,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `(?:ab)` | matched nothing | finds `ab` |
   | `"`, `\t` | the client's error | the characters themselves |
   | `.` | matched a newline | does not |
-  | look-around, `\b`, back-references, inline flags | matched nothing, or the client's error | `ValueError` |
+  | look-around, `\b`, back-references, inline flags that change matching | matched nothing, or the client's error | `ValueError` |
   | not a regular expression | the client's error | `ValueError` |
+  | a long repeat, as `x{1000}` | matched the whole value | the client's error |
 
   Wrap a pattern in `^(?:...)\Z` to match the whole value as before. `\d` and
   `\w` are ASCII.
