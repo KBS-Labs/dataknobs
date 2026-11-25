@@ -79,15 +79,18 @@ OPEN: frozenset[str] = frozenset(
 #: Types the builder cannot construct, so the contract is unmeasured for them.
 #:
 #: A hole in the sweep rather than a verdict, declared so it cannot grow
-#: quietly. Both reject the generic witness in ``__post_init__`` for the same
-#: reason: they validate a value out of a vocabulary the annotation does not
-#: carry, so the field is a plain ``str`` and only certain strings are
-#: accepted. The index source takes ``fields``, and ``"x"`` is not one of the
-#: attributes an entity carries text in.
+#: quietly. The index source and the resolver reject the generic witness in
+#: ``__post_init__`` for the same reason: they validate a value out of a
+#: vocabulary the annotation does not carry, so the field is a plain ``str`` and
+#: only certain strings are accepted. The index source takes ``fields``, and
+#: ``"x"`` is not one of the attributes an entity carries text in. The named
+#: seam holds a ``PluginRegistry``, a concrete class the sweep has no witness
+#: for.
 #:
-#: Unmeasured is not unanswered, and the two answer differently. The index
-#: source is ``frozen=True, eq=False``: it hashes by identity, which cannot
-#: raise whatever the fields hold, so the sweep's reach costs nothing there.
+#: Unmeasured is not unanswered, and they answer differently. The index source
+#: and the named seam are ``frozen=True, eq=False``: each hashes by identity,
+#: which cannot raise whatever the fields hold, so the sweep's reach costs
+#: nothing there.
 #: The resolver is frozen with equality on and its three fields are each a
 #: ``str``, so it hashes today by what it happens to hold --- which is the
 #: reading the sweep exists to take rather than one to leave declared here.
@@ -95,6 +98,7 @@ UNCONSTRUCTIBLE: frozenset[str] = frozenset(
     {
         "ontology.index_source.EntitySourceIndexSource",
         "resolver.TemporalPartitionResolver",
+        "text._named.NamedSeam",
     }
 )
 

@@ -41,9 +41,11 @@ from dataknobs_common.registry import PluginRegistry, _shown_failure
 __all__ = ["NamedSeam", "built_from_config"]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class NamedSeam:
     """One registry of named factories, and the words its refusals use.
+
+    Compared and hashed by identity: a seam is declared once per registry.
 
     Attributes:
         registry: The factories, by name.
