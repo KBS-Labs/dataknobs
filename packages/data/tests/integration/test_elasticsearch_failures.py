@@ -35,7 +35,7 @@ pytestmark = [pytest.mark.integration, requires_real_elasticsearch]
 Database = SyncElasticsearchDatabase | AsyncElasticsearchDatabase
 
 #: ``terms`` takes no null, so Elasticsearch answers this one with a 400.
-REJECTED = Query(filters=[Filter("colour", Operator.NOT_IN, [None, "blue"])])
+REJECTED = Query(filters=[Filter("id", Operator.REGEX, "(")])
 
 
 async def settle(value: Any) -> Any:

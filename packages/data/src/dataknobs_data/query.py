@@ -620,13 +620,11 @@ class Filter:
     is neither a string nor a mapping --- and anything else is refused here,
     when the filter is built. A string used to mean substring match in memory
     and single-character match in SQL; a mapping is its keys in memory and in
-    SQL, and a terms *lookup* in Elasticsearch. The SQL backends and the
-    backends that filter in memory then answer as :meth:`matches` does: nothing
-    is in an empty list, a ``None`` member matches nothing, and ``NOT_IN``
-    selects only records whose field has a value, as ``NEQ`` does.
-    Elasticsearch does not yet: its ``NOT_IN`` also selects a document that
-    lacks the field, and it chooses a string field's exact-match path from
-    the first member only.
+    SQL, and a terms *lookup* in Elasticsearch. Every backend then answers as
+    :meth:`matches` does: nothing is in an empty list, a ``None`` member matches
+    nothing, and ``NOT_IN`` selects only records whose field has a value, as
+    ``NEQ`` does. (Elasticsearch compares a list element by element, and a
+    string field with any bound as text.)
 
     **Range.** ``BETWEEN`` and ``NOT_BETWEEN`` take exactly two bounds, as a
     list or tuple, and anything else is refused here too.
