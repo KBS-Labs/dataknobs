@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-11-25T02:53:29Z",
+  "timestamp": "2026-11-25T04:55:01Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.13.9 (Homebrew 2026-11-17 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "elasticsearch-negations-need-a-value",
-  "git_commit": "4e13f490c8d6ed9988e211b76c27978a34e35d8e",
+  "git_branch": "elasticsearch-reports-missing-shards",
+  "git_commit": "0be84b7bcc76b41c3759996f4d290f13286779ec",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
