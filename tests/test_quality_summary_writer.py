@@ -710,3 +710,78 @@ def test_the_gate_takes_its_coverage_from_this_reader() -> None:
     assert re.search(
         r'COVERAGE_PERCENT=\$\(uv run python "[^"]*quality-summary\.py" coverage', source
     )
+
+
+# --------------------------------------------------------------------------
+# per-suite times
+# --------------------------------------------------------------------------
+
+
+def test_each_passing_suite_s_time_is_read_by_package(tmp_path: Path) -> None:
+    (tmp_path / "unit-test-seconds-data.txt").write_text("44\n")
+    (tmp_path / "unit-test-seconds-bots.txt").write_text("19\n")
+    (tmp_path / "integration-test-seconds-data.txt").write_text("30\n")
+    (tmp_path / "unit-test-output-data.txt").write_text("not a time\n")
+
+    assert writer.suite_seconds(str(tmp_path), "unit-test-seconds-") == {"bots": 19, "data": 44}
+    assert writer.suite_seconds(str(tmp_path), "integration-test-seconds-") == {"data": 30}
+
+
+def test_a_run_whose_suites_all_failed_records_no_times(tmp_path: Path) -> None:
+    """``{}`` is a measurement: suites ran and none left a time."""
+    assert writer.suite_seconds(str(tmp_path), "unit-test-seconds-") == {}
+    assert writer.suite_seconds(str(tmp_path / "absent"), "unit-test-seconds-") == {}
+
+
+def test_an_unreadable_time_is_an_error_rather_than_a_missing_suite(tmp_path: Path) -> None:
+    """The gate wrote it, so it is the writer that is wrong."""
+    (tmp_path / "unit-test-seconds-data.txt").write_text("4.5\n")
+    with pytest.raises(SystemExit, match=r"unit-test-seconds-data\.txt: expected whole seconds"):
+        writer.suite_seconds(str(tmp_path), "unit-test-seconds-")
+
+
+def test_suite_seconds_reach_the_document(tmp_path: Path) -> None:
+    records = tmp_path / "records.jsonl"
+    _record(
+        records,
+        "unit_tests",
+        0,
+        "--skipped",
+        "false",
+        "--duration",
+        "64",
+        "--field",
+        'suite_seconds={"bots": 19, "data": 44}',
+    )
+    entry = _build(tmp_path, records)["checks"]["unit_tests"]
+    assert entry["suite_seconds"] == {"bots": 19, "data": 44}
+
+
+def test_the_gate_clears_an_earlier_run_s_times_before_any_check_runs() -> None:
+    """A time left by an earlier run would be recorded as this run's."""
+    source = GATE.read_text(encoding="utf-8")
+    clear = source.find(
+        '\nrm -f "$OUTPUT_DIR"/unit-test-seconds-*.txt "$OUTPUT_DIR"/integration-test-seconds-*.txt\n'
+    )
+    assert -1 < clear < source.index("\nrecord_check() {")
+
+
+def test_the_gate_records_both_stages_suite_times_from_this_reader() -> None:
+    source = GATE.read_text(encoding="utf-8")
+    for stage, prefix in (("UNIT", "unit"), ("INTEGRATION", "integration")):
+        assert re.search(
+            rf'{stage}_SUITE_SECONDS=\$\(uv run python "[^"]*quality-summary\.py" seconds'
+            rf'\s*\\\s*--dir "\$OUTPUT_DIR" --prefix {prefix}-test-seconds-\)',
+            source,
+        ), stage
+        assert f'--field "suite_seconds=${stage}_SUITE_SECONDS"' in source, stage
+
+
+def test_only_an_integration_suite_that_passed_records_its_time() -> None:
+    """As for the unit suites: one that failed may have stopped early."""
+    source = GATE.read_text(encoding="utf-8")
+    failed = source.index('print_error "Integration tests failed for $pkg')
+    written = source.index('> "$OUTPUT_DIR/integration-test-seconds-$pkg.txt"')
+    passed = source.index('print_success "Integration tests passed for $pkg')
+    assert failed < written < passed
+    assert source.count("integration-test-seconds-$pkg.txt") == 1

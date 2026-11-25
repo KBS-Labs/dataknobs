@@ -8,6 +8,7 @@ whether the gate passed can see any of them.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -144,14 +145,41 @@ def _sized_suites(root: Path, *sizes: tuple[str, int, int]) -> None:
         (tests / "integration" / "test_service.py").write_text("#" * integration)
 
 
+def _git(root: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        check=True,
+        capture_output=True,
+        timeout=30,
+    )
+
+
+def _repo(root: Path) -> Path:
+    _git(root, "init", "-q")
+    return root
+
+
+def _commit_summary(root: Path, suite_seconds: object, check: str = "unit_tests") -> None:
+    """Commit a quality summary whose ``check`` carries ``suite_seconds``."""
+    entry: dict[str, object] = {"status": "pass", "duration_seconds": 1}
+    if suite_seconds is not None:
+        entry["suite_seconds"] = suite_seconds
+    summary = root / ".quality-artifacts" / "quality-summary.json"
+    summary.parent.mkdir(exist_ok=True)
+    summary.write_text(json.dumps({"checks": {check: entry}}))
+    _git(root, "add", "-f", str(summary))
+    _git(root, "commit", "-q", "-m", "ran quality checks")
+
+
 def _ordered(root: Path, *packages: str) -> list[str]:
-    result = _bash('longest_suite_first "$@"', str(root), str(root / "out"), *packages)
+    result = _bash('longest_suite_first "$@"', str(root), *packages)
     assert result.returncode == 0, result.stderr
     return result.stdout.split()
 
 
 def test_packages_never_timed_are_ordered_by_the_size_of_their_unit_suite(tmp_path: Path) -> None:
     """Integration tests run elsewhere, so they must not count towards the order."""
+    _repo(tmp_path)
     _sized_suites(tmp_path, ("small", 10, 9000), ("large", 500, 0), ("mid", 90, 0))
     (tmp_path / "packages" / "untested").mkdir()
 
@@ -161,24 +189,61 @@ def test_packages_never_timed_are_ordered_by_the_size_of_their_unit_suite(tmp_pa
 
 def test_packages_are_ordered_by_how_long_each_last_took(tmp_path: Path) -> None:
     """A suite with more code than another can still be the quicker of the two."""
+    _repo(tmp_path)
     _sized_suites(tmp_path, ("wordy", 500, 0), ("slow", 90, 0), ("quick", 10, 0))
-    out = tmp_path / "out"
-    out.mkdir()
-    for name, seconds in (("wordy", 18), ("slow", 44), ("quick", 9)):
-        (out / f"unit-test-seconds-{name}.txt").write_text(f"{seconds}\n")
+    _commit_summary(tmp_path, {"wordy": 18, "slow": 44, "quick": 9})
 
     assert _ordered(tmp_path, "quick", "wordy", "slow") == ["slow", "wordy", "quick"]
 
 
+def test_a_new_checkout_orders_by_the_committed_times(tmp_path: Path) -> None:
+    """The times travel with the branch, not with the directory that ran the gate.
+
+    Every worktree starts with no gitignored artifacts. When the times lived in
+    those, a new checkout's first run fell back to ordering by code size and put
+    a shorter suite ahead of the longest.
+    """
+    _repo(tmp_path)
+    _sized_suites(tmp_path, ("bots", 900, 0), ("data", 100, 0))
+    _commit_summary(tmp_path, {"bots": 19, "data": 44})
+    assert not (tmp_path / ".quality-artifacts" / "unit-test-seconds-data.txt").exists()
+
+    assert _ordered(tmp_path, "bots", "data") == ["data", "bots"]
+
+
+def test_the_most_recent_time_recorded_for_a_package_wins(tmp_path: Path) -> None:
+    """A run testing some packages leaves the others' last times standing."""
+    _repo(tmp_path)
+    _sized_suites(tmp_path, ("a", 10, 0), ("b", 10, 0), ("c", 10, 0))
+    _commit_summary(tmp_path, {"a": 50, "b": 10, "c": 30})
+    _commit_summary(tmp_path, {"a": 5})
+    _commit_summary(tmp_path, None)
+
+    assert _ordered(tmp_path, "a", "b", "c") == ["c", "b", "a"]
+
+
 def test_a_package_without_a_usable_time_goes_first(tmp_path: Path) -> None:
     """It may be the longest, and the longest must not be left to run alone."""
+    _repo(tmp_path)
     _sized_suites(tmp_path, ("timed", 900, 0), ("unread", 5, 0), ("new", 10, 0))
-    out = tmp_path / "out"
-    out.mkdir()
-    (out / "unit-test-seconds-timed.txt").write_text("44\n")
-    (out / "unit-test-seconds-unread.txt").write_text("not a number\n")
+    _commit_summary(tmp_path, {"timed": 44, "unread": "not a number"})
 
     assert _ordered(tmp_path, "timed", "unread", "new") == ["new", "unread", "timed"]
+
+
+def test_integration_times_do_not_order_the_unit_pool(tmp_path: Path) -> None:
+    _repo(tmp_path)
+    _sized_suites(tmp_path, ("a", 900, 0), ("b", 10, 0))
+    _commit_summary(tmp_path, {"b": 99}, check="integration_tests")
+
+    assert _ordered(tmp_path, "a", "b") == ["a", "b"]
+
+
+def test_ordering_outside_a_repository_fails_rather_than_guessing(tmp_path: Path) -> None:
+    """No history is a fact about a repository; no repository is an error."""
+    _sized_suites(tmp_path, ("a", 10, 0))
+    result = _bash('longest_suite_first "$@"', str(tmp_path), "a")
+    assert result.returncode != 0
 
 
 @pytest.mark.parametrize(("exit_code", "recorded"), [(0, True), (1, False)])

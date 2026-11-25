@@ -7,6 +7,10 @@
 # code a test can run. Works under `set -u`, which validate.sh sets, and under
 # bash 3.2 (stock macOS), which has neither `wait -n` nor EPOCHREALTIME.
 
+# This file's directory, for the programs beside it. Resolved when sourced,
+# since the callers source it from different working directories.
+_GATE_PROGRESS_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Whole seconds as a reader would say them: 42s, 7m26s, 1h02m05s.
 # bin/quality-summary.py has the same function for the banner's rows;
 # tests/test_gate_progress.py holds the two to one answer.
@@ -71,30 +75,30 @@ run_pool() {
     return "$status"
 }
 
-# longest_suite_first <root> <output dir> <package>...
+# longest_suite_first <root> <package>...
 #
-# The packages, one per line, by how long each one's unit suite last took
-# (unit-test-seconds-<package>.txt in the output directory): a long suite
-# started last runs alone at the end.
+# The packages, one per line, by how long each one's unit suite last took: a
+# long suite started last runs alone at the end.
 #
-# One with no such record goes ahead of those that have one, since it may be the
-# longest, and by how much unit test code it has. That is only a stand-in: the
-# package with the most code is not the one that takes longest.
+# The times are the unit_tests suite_seconds in the committed history of
+# quality-summary.json (bin/quality-summary.py last-seconds), so they travel
+# with the branch. They used to be gitignored files beside the run, which a new
+# checkout does not have, and every worktree is a new checkout.
+#
+# One with no recorded time goes ahead of those that have one, since it may be
+# the longest, and by how much unit test code it has. That is only a stand-in:
+# the package with the most code is not the one that takes longest.
 longest_suite_first() {
-    local root="$1" out="$2" pkg seconds size
-    shift 2
+    local root="$1" pkg seconds size times
+    shift
+    times=$(uv run python "$_GATE_PROGRESS_BIN/quality-summary.py" last-seconds \
+        --repo "$root" --check unit_tests "$@") || return 1
     for pkg in "$@"; do
-        seconds=""
-        if [ -f "$out/unit-test-seconds-$pkg.txt" ]; then
-            read -r seconds < "$out/unit-test-seconds-$pkg.txt" || true
+        seconds=$(printf '%s\n' "$times" | awk -v p="$pkg" '$1 == p { print $2 }')
+        if [ -n "$seconds" ]; then
+            printf '1 %d %s\n' "$((10#$seconds))" "$pkg"
+            continue
         fi
-        case "$seconds" in
-            '' | *[!0-9]*) ;;
-            *)
-                printf '1 %d %s\n' "$((10#$seconds))" "$pkg"
-                continue
-                ;;
-        esac
         size=0
         if [ -d "$root/packages/$pkg/tests" ]; then
             size=$(find "$root/packages/$pkg/tests" -name '*.py' \

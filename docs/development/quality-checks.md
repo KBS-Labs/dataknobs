@@ -278,9 +278,27 @@ workspace guards under `tests/`; those are folded into the unit-test status
 rather than reported as their own check, so without that field their cost is
 invisible.
 
+`unit_tests` and `integration_tests` also carry `suite_seconds`, each package's
+own time, for the suites that passed. A suite that failed may have stopped early,
+so it records none, and a dev run, which runs no suite on its own, records
+`null`. Because the summary is committed, its history is a per-suite time series:
+
+```bash
+for c in $(git log -n10 --format=%h -- .quality-artifacts/quality-summary.json); do
+  git show "$c:.quality-artifacts/quality-summary.json" | uv run python -c "
+import json, sys; d = json.load(sys.stdin)['checks']
+print('$c', d['unit_tests'].get('suite_seconds'), d['integration_tests'].get('suite_seconds'))"
+done
+```
+
 In PR and `--all` runs, the workspace guards, the documentation checks and the package
 unit suites share one pool that runs three jobs at a time; `--full` runs them one
-at a time. Each duration is the time that check itself took, except that
+at a time. The pool starts the suites that took longest first, by each package's
+most recent unit `suite_seconds` in that history
+(`bin/quality-summary.py last-seconds`). Reading it from history rather than from a
+file beside the run means a new checkout, such as every worktree, orders its first
+run as the branch's last run would have. A package with no recorded time goes
+first, by the size of its unit tests. Each duration is the time that check itself took, except that
 `unit_tests` spans the whole pool. Rows therefore overlap, and their sum
 can exceed `total_seconds`.
 

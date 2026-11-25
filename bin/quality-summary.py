@@ -15,7 +15,7 @@ documentation checks on every run that did not perform them. The duration
 fields escaped only by the accident of defaulting to ``null``: the absence of a
 measurement rather than a passing one.
 
-Four commands, and the split between the first three is the fix:
+Six commands, and the split between the first three is the fix:
 
 ``record``
     Append one check's outcome, called from the site that ran it (or from the
@@ -38,6 +38,18 @@ Four commands, and the split between the first three is the fix:
     Print the line coverage a coverage.py XML report holds, for ``build`` to
     record, or ``null`` when the report measured nothing.
 
+``seconds``
+    Print, as one JSON object, the per-suite times this run's suites left in
+    ``<prefix><package>.txt`` files, for a check's ``suite_seconds`` field. Only
+    a suite that passed leaves one.
+
+``last-seconds``
+    Print ``<package> <seconds>`` lines: each package's most recent
+    ``suite_seconds`` in the committed history of the summary. The unit pool
+    starts the longest suites first by these. They are read from history rather
+    than from a file beside the run because a new checkout has none of those,
+    and a worktree is always a new checkout.
+
 Records are JSON Lines, one object per check, written to a file under the run's
 output directory. It is a file rather than an in-shell accumulation so that the
 outcome is durable at the moment the check produces it, and readable afterwards
@@ -57,7 +69,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 
@@ -276,6 +290,105 @@ def coverage_percent(path: str) -> float | None:
 def cmd_coverage(args: argparse.Namespace) -> int:
     """Print the line coverage as JSON: a number, or ``null``."""
     print(json.dumps(coverage_percent(args.xml)))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# seconds / last-seconds
+# --------------------------------------------------------------------------
+
+#: Where the committed summary lives, relative to the repository root.
+SUMMARY_PATH = ".quality-artifacts/quality-summary.json"
+
+#: How many commits of the summary's history ``last-seconds`` reads at most. A
+#: package untested for longer than this is ordered as if never timed, which
+#: costs at most one run's ordering.
+HISTORY_DEPTH = 50
+
+
+def suite_seconds(directory: str, prefix: str) -> dict[str, int]:
+    """The ``<prefix><package>.txt`` times in ``directory``, by package.
+
+    Each file holds the whole seconds one suite took. One holding anything else
+    is an error rather than a skipped entry: the gate wrote it, so an unreadable
+    one means the writer is wrong, and dropping it would record that suite as
+    never having run.
+    """
+    times: dict[str, int] = {}
+    root = Path(directory)
+    if not root.is_dir():
+        return times
+    for path in sorted(root.glob(f"{prefix}*.txt")):
+        package = path.name[len(prefix) : -len(".txt")]
+        text = path.read_text(encoding="utf-8").strip()
+        if not text.isdigit():
+            raise SystemExit(f"{path}: expected whole seconds, got {text!r}")
+        times[package] = int(text)
+    return times
+
+
+def cmd_seconds(args: argparse.Namespace) -> int:
+    """Print the run's per-suite times as one JSON object."""
+    print(json.dumps(suite_seconds(args.dir, args.prefix), sort_keys=True))
+    return 0
+
+
+def _git(repo: str, *argv: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", repo, *argv], capture_output=True, text=True, check=False, timeout=60
+    )
+
+
+def _usable_seconds(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def last_seconds(
+    repo: str, check: str, packages: list[str], depth: int = HISTORY_DEPTH
+) -> dict[str, int]:
+    """Each package's most recent ``suite_seconds`` under ``check``, from history.
+
+    A repository with no commits, or none touching the summary, has no times,
+    which is an answer. A directory that is not a repository is not one: the
+    gate always runs in a checkout, so that is a misconfiguration, and ordering
+    by size there would hide it.
+
+    A summary that will not parse, or a value that is not whole seconds, is
+    passed over, so that one bad commit costs an ordering rather than a run.
+    """
+    if _git(repo, "rev-parse", "--git-dir").returncode != 0:
+        raise SystemExit(f"{repo}: not a git repository, so no suite times can be read")
+    if _git(repo, "rev-parse", "--verify", "-q", "HEAD").returncode != 0:
+        return {}
+    log = _git(repo, "log", f"-n{depth}", "--format=%H", "--", SUMMARY_PATH)
+    if log.returncode != 0:
+        raise SystemExit(f"{repo}: git log failed: {log.stderr.strip()}")
+
+    wanted = set(packages)
+    found: dict[str, int] = {}
+    for sha in log.stdout.split():
+        shown = _git(repo, "show", f"{sha}:{SUMMARY_PATH}")
+        if shown.returncode != 0:
+            continue
+        try:
+            entry = json.loads(shown.stdout)["checks"][check]
+        except (ValueError, KeyError, TypeError):
+            continue
+        times = entry.get("suite_seconds") if isinstance(entry, dict) else None
+        if not isinstance(times, dict):
+            continue
+        for package, seconds in times.items():
+            if package in wanted and package not in found and _usable_seconds(seconds):
+                found[package] = seconds
+        if wanted <= found.keys():
+            break
+    return found
+
+
+def cmd_last_seconds(args: argparse.Namespace) -> int:
+    """Print ``<package> <seconds>`` for each package with a recorded time."""
+    for package, seconds in sorted(last_seconds(args.repo, args.check, args.packages).items()):
+        print(f"{package} {seconds}")
     return 0
 
 
@@ -535,6 +648,17 @@ def build_parser() -> argparse.ArgumentParser:
     coverer = commands.add_parser("coverage", help="print a report's line coverage")
     coverer.add_argument("--xml", required=True, help="a coverage.py XML report")
     coverer.set_defaults(run=cmd_coverage)
+
+    seconder = commands.add_parser("seconds", help="print this run's per-suite times")
+    seconder.add_argument("--dir", required=True, help="the run's output directory")
+    seconder.add_argument("--prefix", required=True, help="e.g. unit-test-seconds-")
+    seconder.set_defaults(run=cmd_seconds)
+
+    last = commands.add_parser("last-seconds", help="print each package's last recorded time")
+    last.add_argument("--repo", required=True, help="the repository root")
+    last.add_argument("--check", required=True, help="e.g. unit_tests")
+    last.add_argument("packages", nargs="*")
+    last.set_defaults(run=cmd_last_seconds)
 
     renderer = commands.add_parser("render", help="print the console status lines")
     renderer.add_argument("--summary", required=True)
