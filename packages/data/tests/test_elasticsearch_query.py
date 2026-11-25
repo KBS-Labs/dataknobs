@@ -679,6 +679,18 @@ def test_a_pattern_on_a_date_in_one_index_and_a_number_in_another_raises() -> No
     _raises(Filter("x", Operator.LIKE, "p"), _typed("date", "long"))
 
 
+@pytest.mark.parametrize("other", ["date", "ip", "long", "boolean"])
+@pytest.mark.parametrize("op", PATTERN_OPERATORS)
+def test_one_index_of_an_alias_that_takes_no_pattern_is_enough(op: Operator, other: str) -> None:
+    """Elasticsearch refuses the pattern in that index, and so the whole search."""
+    _raises(Filter("x", op, "p"), _typed("keyword", other))
+
+
+def test_an_alias_whose_every_index_takes_patterns_is_answered() -> None:
+    clause = build_filter_es_query(Filter("x", Operator.REGEX, "p"), _typed("keyword", "wildcard"))
+    assert clause == {"regexp": {"data.x": "p"}}
+
+
 @pytest.mark.parametrize("kind", WORDS)
 def test_what_matches_nothing_whatever_the_field_holds_does_not_raise(kind: str) -> None:
     types = _typed(kind)

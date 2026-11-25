@@ -56,9 +56,12 @@ from .elasticsearch_query import (
     FieldTypes,
     build_query,
     build_sort,
+    build_text_query,
+    build_text_search,
     client_search_kwargs,
     plan_search,
     query_fields,
+    text_search_results,
 )
 
 if TYPE_CHECKING:
@@ -1034,20 +1037,13 @@ class AsyncElasticsearchDatabase(
             )
 
         # Use config.text_fields if provided, otherwise use parameter
-        search_text_fields = config.text_fields or text_fields or ["content", "title", "text"]
+        search_text_fields = config.text_fields or text_fields
 
         # Build filter query if provided
         filter_query = await self._pre_filter(filter)
 
         # Build text search query with multi_match
-        text_query: dict[str, Any] = {
-            "multi_match": {
-                "query": query_text,
-                "fields": [f"data.{f}" for f in search_text_fields],
-                "type": "best_fields",
-                "operator": "or",
-            }
-        }
+        text_query = build_text_query(query_text, search_text_fields)
 
         # Build RRF query combining both searches
         body: dict[str, Any] = {
@@ -1158,55 +1154,12 @@ class AsyncElasticsearchDatabase(
         """
         self._check_connection()
 
-        search_fields = text_fields or ["content", "title", "text"]
-
-        # Build multi_match query
-        query: dict[str, Any] = {
-            "multi_match": {
-                "query": query_text,
-                "fields": [f"data.{f}" for f in search_fields],
-                "type": "best_fields",
-                "operator": "or",
-            }
-        }
-
-        # Build filter if provided
-        filter_query = await self._pre_filter(filter)
-
-        body: dict[str, Any] = {
-            "query": query
-            if not filter_query
-            else {
-                "bool": {
-                    "must": query,
-                    "filter": filter_query,
-                }
-            },
-            "size": k,
-        }
+        body = build_text_search(query_text, text_fields, k, await self._pre_filter(filter))
 
         try:
-            response = await self._require_client().search(
-                index=self.index_name,
-                body=body,
-            )
+            response = await self._require_client().search(index=self.index_name, **body)
             require_complete(response, "text search for hybrid")
         except Exception as e:
             self._handle_elasticsearch_error(e, "text search for hybrid")
 
-        # Process results
-        results: list[tuple[Record, float]] = []
-        hits = response.get("hits", {}).get("hits", [])
-        max_score = response.get("hits", {}).get("max_score", 1.0) or 1.0
-
-        for hit in hits:
-            record = self._doc_to_record(hit)
-            if record:
-                if not record.has_storage_id():
-                    record.storage_id = hit["_id"]
-
-                # Normalize BM25 score to 0-1 range
-                score = hit.get("_score", 0.0) / max_score if max_score > 0 else 0.0
-                results.append((record, score))
-
-        return results
+        return text_search_results(response["hits"], self._doc_to_record)

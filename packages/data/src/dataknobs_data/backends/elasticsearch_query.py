@@ -29,15 +29,16 @@ Field-path rules:
   reached through its keyword sub-field by every operator but existence, and by
   a sort, so a comparison is against the **full, un-analyzed** value. Any other
   field (keyword, number, date, boolean) is reached directly. A pattern on a
-  field that holds no strings (a number, boolean, object or vector) matches
-  nothing, negated or not.
+  field that holds no strings (a number, boolean, object, nested or vector)
+  matches nothing, negated or not.
 * What the index cannot answer raises ``ValueError``, negated or not: any
   comparison or pattern on a text field with no keyword sub-field (a custom
   mapping), which has no full value to reach, and a pattern on a field that is
   not matched as text, such as a date or an ``ip``. Elasticsearch itself refuses
   to sort by the former. Under an alias, one index that maps the field this
-  way is enough, except where another gives it a keyword sub-field, which is
-  then used.
+  way is enough, except where another gives it a keyword sub-field. That is
+  then used for all of them, and an index without it has nothing there: no
+  record of its own matches, and every one with a value matches the negation.
 
 Semantics:
 
@@ -93,6 +94,7 @@ if TYPE_CHECKING:
 
     from ..query import Filter, Query, SortSpec
     from ..query_logic import ComplexQuery, Condition
+    from ..records import Record
 
 
 #: Each negated operator, and the one whose matches it leaves out.
@@ -207,13 +209,13 @@ class FieldTypes:
         return self._exact.get(name, f"data.{name}")
 
     def takes_patterns(self, name: str) -> bool:
-        """Whether :meth:`value_path` can be matched against a pattern.
+        """Whether :meth:`value_path` can be matched against a pattern, in every index.
 
         True for a field that is not mapped, which no document has a value for.
         """
         if is_storage_key_field(name) or name in self._exact or name not in self._types:
             return True
-        return bool(self._types[name] & _PATTERN_TYPES)
+        return self._types[name] <= _PATTERN_TYPES
 
     def relates(self, name: str, bound: Any) -> bool:
         """Whether a bound can relate to any value a field holds.
@@ -304,6 +306,45 @@ def build_sort(sort_specs: Sequence[SortSpec], types: FieldTypes) -> list[dict[s
         }
         for spec in sort_specs
     ]
+
+
+def build_text_query(query_text: str, text_fields: Sequence[str] | None) -> dict[str, Any]:
+    """The clause a hybrid search's text half matches: any word, in any field."""
+    return {
+        "multi_match": {
+            "query": query_text,
+            "fields": [f"data.{f}" for f in text_fields or ("content", "title", "text")],
+            "type": "best_fields",
+            "operator": "or",
+        }
+    }
+
+
+def build_text_search(
+    query_text: str,
+    text_fields: Sequence[str] | None,
+    k: int,
+    filter_query: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """The request a hybrid search's text half sends on its own."""
+    query = build_text_query(query_text, text_fields)
+    if filter_query:
+        query = {"bool": {"must": query, "filter": filter_query}}
+    return {"query": query, "size": k}
+
+
+def text_search_results(
+    found: Mapping[str, Any], to_record: Callable[[dict[str, Any]], Record]
+) -> list[tuple[Record, float]]:
+    """A text search's records (its response's ``hits``), each scored against the best of them."""
+    best = found["max_score"] or 1.0
+    results = []
+    for hit in found["hits"]:
+        record = to_record(hit)
+        if not record.has_storage_id():
+            record.storage_id = hit["_id"]
+        results.append((record, hit["_score"] / best))
+    return results
 
 
 def _field_path(filter_obj: Filter, types: FieldTypes) -> str:

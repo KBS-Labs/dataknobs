@@ -535,9 +535,9 @@ class TestAnOverrideAcceptsWhatTheBaseDeclares:
     """
 
     def test_the_sweep_found_overrides(self) -> None:
-        """Fourteen: the backends with native index and hybrid support.
+        """Fifteen: the backends with native index and hybrid support.
 
-        It was eleven while ``SyncPostgresDatabase`` took the mixin's
+        There were three fewer while ``SyncPostgresDatabase`` took the mixin's
         ``create_vector_index``, ``drop_vector_index`` and
         ``get_vector_index_stats`` --- which return ``True``, ``True`` and an
         empty dict, so it reported that it had built an index and built
@@ -556,7 +556,7 @@ class TestAnOverrideAcceptsWhatTheBaseDeclares:
         is what keeps the next method added to the mixin covered without an
         edit here.
         """
-        assert len(_override_cases()) == 26, sorted(
+        assert len(_override_cases()) == 27, sorted(
             (cls.__name__, method) for cls, method in _override_cases()
         )
 

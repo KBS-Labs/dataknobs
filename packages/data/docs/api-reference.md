@@ -1396,7 +1396,7 @@ pre-filters agree:
   whatever that is called; a keyword, number, date or boolean field is used
   directly. A field the index does not map yet matches nothing, sorts as a
   missing value, and is asked about again by the next query. A pattern on
-  a number, boolean, object or vector field matches nothing, negated or not.
+  a number, boolean, object, nested or vector field matches nothing, negated or not.
 - **A bound of another kind matches nothing on a number or boolean field**, in
   equality, membership and range alike; nor does a number or boolean on `id`, a
   boolean on a date field, or anything but a string on an `ip` field. On
@@ -1418,8 +1418,9 @@ pre-filters agree:
   A pattern raises on a date, an `ip` and any other field Elasticsearch does not
   match as text. `EXISTS` and `NOT_EXISTS` are always answered. Under an alias,
   one index that maps the field this way is enough to raise, except where another
-  maps a keyword sub-field: the sub-field is then used, and the index without it
-  matches as if it held no value there.
+  maps a keyword sub-field. That is then used for all of them, and an index
+  without it has nothing there: none of its records match, and every one that has
+  a value matches the negation.
 - **`REGEX`** matches the **full field value** (case-sensitive), like the
   in-memory and SQL backends — not a single analyzed token. Elasticsearch
   `regexp` is anchored and uses Lucene RegExp syntax (no `^`/`$` anchors, no

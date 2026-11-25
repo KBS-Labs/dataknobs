@@ -155,8 +155,7 @@ async def test_a_stream_missing_a_shard_raises(short: Database) -> None:
         await streamed(short)
 
 
-@pytest.mark.parametrize("short", [AsyncElasticsearchDatabase], indirect=True)
-async def test_a_text_search_missing_a_shard_raises(short: AsyncElasticsearchDatabase) -> None:
+async def test_a_text_search_missing_a_shard_raises(short: Database) -> None:
     """The text half of a hybrid search, whose vector half would raise for it."""
     with pytest.raises(DatabaseError, match="no_shard_available"):
         await short._text_search_for_hybrid("x", ["s"], k=2)

@@ -166,9 +166,8 @@ async def test_a_vector_operation_on_a_missing_index_raises(
 async def test_a_hybrid_search_on_a_missing_index_raises(
     db: Database, admin: Elasticsearch
 ) -> None:
-    """The sync text leg is ``search``, which raises the client's own error."""
     admin.indices.delete(index=db.index_name)
-    with pytest.raises((ValueError, NotFoundError), match="index_not_found"):
+    with pytest.raises(ValueError, match="index_not_found"):
         await settle(db.hybrid_search("blue", np.ones(3), vector_field="v", k=1))
 
 
