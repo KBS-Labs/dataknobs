@@ -242,7 +242,7 @@ def _sorted(answer: Answer) -> Answer:
 
 
 def test_every_backend_compares_and_sorts_numbers_exactly_sync(
-    backend: tuple[str, dict[str, Any]],
+    backend: tuple[str, dict[str, Any]], filters_to_ask: Any
 ) -> None:
     """Comparison and sort agree with the oracle on every backend.
 
@@ -261,7 +261,7 @@ def test_every_backend_compares_and_sorts_numbers_exactly_sync(
     try:
         for row_id, value in ROWS:
             db.create(Record({"n": value}, storage_id=row_id))
-        filtered = [(f, _sorted(run(Query(filters=[f])))) for f in FILTERS]
+        filtered = [(f, _sorted(run(Query(filters=[f])))) for f in filters_to_ask(kind, FILTERS)]
         ordered = [(s, run(Query(sort_specs=[s]))) for s in SORTS]
     finally:
         if kind == "s3":
@@ -271,7 +271,7 @@ def test_every_backend_compares_and_sorts_numbers_exactly_sync(
 
 
 async def test_every_backend_compares_and_sorts_numbers_exactly_async(
-    backend: tuple[str, dict[str, Any]],
+    backend: tuple[str, dict[str, Any]], filters_to_ask: Any
 ) -> None:
     kind, config = backend
     db = await AsyncDatabase.from_backend(kind, config=config)
@@ -285,7 +285,9 @@ async def test_every_backend_compares_and_sorts_numbers_exactly_async(
     try:
         for row_id, value in ROWS:
             await db.create(Record({"n": value}, storage_id=row_id))
-        filtered = [(f, _sorted(await run(Query(filters=[f])))) for f in FILTERS]
+        filtered = [
+            (f, _sorted(await run(Query(filters=[f])))) for f in filters_to_ask(kind, FILTERS)
+        ]
         ordered = [(s, await run(Query(sort_specs=[s]))) for s in SORTS]
     finally:
         if kind == "s3":

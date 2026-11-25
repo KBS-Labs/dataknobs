@@ -481,7 +481,7 @@ def run_stream_write(
     and hands them in, so the loop itself is backend- and policy-agnostic.
     """
     result = StreamResult()
-    start_time = time.time()
+    start_time = time.monotonic()
     quitting = False
     batch_index = 0
 
@@ -514,7 +514,7 @@ def run_stream_write(
             skip_on_duplicate=skip_on_duplicate,
         )
 
-    result.duration = time.time() - start_time
+    result.duration = time.monotonic() - start_time
     return result
 
 
@@ -528,7 +528,7 @@ async def async_run_stream_write(
 ) -> StreamResult:
     """Async counterpart of :func:`run_stream_write`."""
     result = StreamResult()
-    start_time = time.time()
+    start_time = time.monotonic()
     quitting = False
     batch_index = 0
 
@@ -561,7 +561,7 @@ async def async_run_stream_write(
             skip_on_duplicate=skip_on_duplicate,
         )
 
-    result.duration = time.time() - start_time
+    result.duration = time.monotonic() - start_time
     return result
 
 

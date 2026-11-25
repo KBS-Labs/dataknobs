@@ -1291,6 +1291,9 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                 report_failed_suite "$OUTPUT_DIR/unit-test-output-$pkg.txt" "$FAILED_SUITES_FILE"
                 return "$test_exit"
             else
+                # Read by longest_suite_first in the next run. Not for one that
+                # failed, which may have stopped early.
+                elapsed_since "$suite_start" > "$OUTPUT_DIR/unit-test-seconds-$pkg.txt"
                 print_success "Unit tests passed for $pkg ($(format_elapsed "$(elapsed_since "$suite_start")"))"
                 return 0
             fi
@@ -1397,7 +1400,7 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         fi
 
         # The guards start first, being the widest job; then the documentation
-        # checks, then the packages largest first, so the longest suite is not
+        # checks, then the packages longest first, so the longest suite is not
         # left to run alone at the end. An order only:
         # PACKAGES_TO_TEST stays as it was for the integration loop and the
         # recorded tested_packages.
@@ -1406,7 +1409,7 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         # and still report success.
         # Deliberate word splitting — a space-separated set of package names.
         # shellcheck disable=SC2086
-        UNIT_ORDER=$(largest_suite_first "$PROJECT_ROOT" $PACKAGES_TO_TEST)
+        UNIT_ORDER=$(longest_suite_first "$PROJECT_ROOT" "$OUTPUT_DIR" $PACKAGES_TO_TEST)
         if [ "$(echo "$UNIT_ORDER" | wc -w)" -ne "$(echo "$PACKAGES_TO_TEST" | wc -w)" ]; then
             print_error "Could not order the unit suites: '$PACKAGES_TO_TEST' became '$UNIT_ORDER'"
             exit 1

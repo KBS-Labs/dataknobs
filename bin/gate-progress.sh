@@ -71,22 +71,37 @@ run_pool() {
     return "$status"
 }
 
-# largest_suite_first <root> <package>...
+# longest_suite_first <root> <output dir> <package>...
 #
-# The packages, one per line, by how much unit test code each has. A stand-in
-# for how long each takes: a long suite started last runs alone at the end.
-# Measured rather than listed, so a package that grows moves by itself.
-largest_suite_first() {
-    local root="$1" pkg size
-    shift
+# The packages, one per line, by how long each one's unit suite last took
+# (unit-test-seconds-<package>.txt in the output directory): a long suite
+# started last runs alone at the end.
+#
+# One with no such record goes ahead of those that have one, since it may be the
+# longest, and by how much unit test code it has. That is only a stand-in: the
+# package with the most code is not the one that takes longest.
+longest_suite_first() {
+    local root="$1" out="$2" pkg seconds size
+    shift 2
     for pkg in "$@"; do
+        seconds=""
+        if [ -f "$out/unit-test-seconds-$pkg.txt" ]; then
+            read -r seconds < "$out/unit-test-seconds-$pkg.txt" || true
+        fi
+        case "$seconds" in
+            '' | *[!0-9]*) ;;
+            *)
+                printf '1 %d %s\n' "$((10#$seconds))" "$pkg"
+                continue
+                ;;
+        esac
         size=0
         if [ -d "$root/packages/$pkg/tests" ]; then
             size=$(find "$root/packages/$pkg/tests" -name '*.py' \
                 -not -path '*/integration/*' -exec cat {} + | wc -c)
         fi
-        printf '%d %s\n' "$size" "$pkg"
-    done | sort -k1,1rn -k2 | cut -d' ' -f2
+        printf '0 %d %s\n' "$size" "$pkg"
+    done | sort -k1,1n -k2,2rn -k3 | cut -d' ' -f3
 }
 
 # clear_coverage DIR
