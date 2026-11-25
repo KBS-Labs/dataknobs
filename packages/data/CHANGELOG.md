@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: an Elasticsearch `update` replaces the stored record**, as on the
+  other backends, on both twins. `update`, `update_batch` and an `upsert` with an
+  `expected_version` merged into it, so a field, nested key or metadata key the
+  new record lacked was still stored, searched and returned. Code that passed
+  only the changed fields reads the record and updates that. The update is a
+  Painless script, so a cluster whose `script.allowed_types` or
+  `script.allowed_contexts` excludes inline update scripts refuses it. One that
+  changes nothing still advances the version token.
 - **BREAKING: an Elasticsearch filter or sort reaches a field by how the index
   maps it**, on both twins, instead of by guessing.
 

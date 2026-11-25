@@ -36,6 +36,7 @@ from .elasticsearch_mixins import (
     es_version_token,
     parse_es_version_token,
     vector_tracking_metadata,
+    replacing_script,
 )
 from .elasticsearch_query import (
     PIT_KEEP_ALIVE,
@@ -313,7 +314,7 @@ class SyncElasticsearchDatabase(
         return es_version_token(seq_no, primary_term)
 
     def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
-        """Update an existing record; ``False`` when it does not exist.
+        """Replace an existing record; ``False`` when it does not exist.
 
         When ``expected_version`` is provided the update carries ES's
         ``if_seq_no``/``if_primary_term`` guards so the compare-and-set is
@@ -323,8 +324,7 @@ class SyncElasticsearchDatabase(
         client = self._require_client()
         if not id:
             return False
-        # The target id is stamped so a partial update keeps the top-level id
-        # field consistent with ``_id``.
+        # The target id is stamped so the top-level id field mirrors ``_id``.
         doc = self._record_to_doc(record, id)
 
         from elasticsearch import ConflictError, NotFoundError
@@ -337,7 +337,7 @@ class SyncElasticsearchDatabase(
             client.update(
                 index=self.index_name,
                 id=id,
-                doc=doc,
+                script=replacing_script(doc),
                 refresh=self.refresh,
                 if_seq_no=seq_no,
                 if_primary_term=primary_term,
@@ -545,7 +545,7 @@ class SyncElasticsearchDatabase(
         return self._bulk(actions, "delete_batch")
 
     def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
-        """Update multiple records using the bulk API.
+        """Replace multiple records using the bulk API.
 
         Args:
             updates: List of (id, record) tuples to update
@@ -562,7 +562,7 @@ class SyncElasticsearchDatabase(
                 "_op_type": "update",
                 "_index": self.index_name,
                 "_id": record_id,
-                "doc": self._record_to_doc(record, record_id),
+                "script": replacing_script(self._record_to_doc(record, record_id)),
             }
             for record_id, record in updates
         ]

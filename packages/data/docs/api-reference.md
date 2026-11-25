@@ -1385,6 +1385,11 @@ db = factory.create(
 await db.connect()
 ```
 
+**Updates.** `update`, `update_batch` and an `upsert` with an `expected_version`
+replace the stored record, as on every backend. They do so with an inline Painless
+script, so a cluster whose `script.allowed_types` or `script.allowed_contexts`
+excludes inline update scripts refuses them.
+
 **Query semantics.** The Elasticsearch backend translates every `Filter` through
 one shared translator, so the sync backend, async backend, and vector/hybrid
 pre-filters agree:
