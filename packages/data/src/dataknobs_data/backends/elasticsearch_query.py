@@ -39,6 +39,11 @@ Field-path rules:
   way is enough, except where another gives it a keyword sub-field. That is
   then used for all of them, and an index without it has nothing there: no
   record of its own matches, and every one with a value matches the negation.
+* A ``*`` in a name is part of the name, and no other field answers for it.
+  ``exists`` reads one as a pattern, so asking whether such a field has a value
+  (``EXISTS``, ``NOT_EXISTS`` and the negated operators) raises ``ValueError``
+  when the index maps both a field of that exact name and another that matches.
+  If it maps none of that name, no record has a value.
 
 Semantics:
 
@@ -78,6 +83,7 @@ Semantics:
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from ..query import (
@@ -160,16 +166,20 @@ class FieldTypes:
     :meth:`request_fields`, and hands the response to :meth:`learn`. A field the
     index does not map yet is not remembered, so it is asked about again: a later
     write may map it. A mapped field's type never changes within an index, so it
-    is kept for as long as this object is.
+    is kept for as long as this object is. A name with a ``*`` is asked about
+    every time, since a later write may map another field it matches.
     """
 
     def __init__(self) -> None:
         self._types: dict[str, frozenset[str]] = {}
         self._exact: dict[str, str] = {}
+        self._matches_others: dict[str, bool] = {}
 
     def unknown(self, names: Iterable[str]) -> list[str]:
         """The data fields among ``names`` whose mapping is not known."""
-        return sorted({n for n in names if not is_storage_key_field(n) and n not in self._types})
+        return sorted(
+            {n for n in names if not is_storage_key_field(n) and ("*" in n or n not in self._types)}
+        )
 
     @staticmethod
     def request_fields(names: Iterable[str]) -> list[str]:
@@ -190,6 +200,13 @@ class FieldTypes:
             if not types:
                 continue
             self._types[name] = types
+            if "*" in name:
+                self._matches_others[name] = any(
+                    _is_field_pattern_match(path, other)
+                    and other != path
+                    and not other.startswith(f"{path}.")
+                    for other in capabilities
+                )
             if types & _ANALYZED_TYPES:
                 exact = sorted(
                     sub
@@ -206,6 +223,14 @@ class FieldTypes:
             # A top-level keyword mirroring ``_id``, which cannot itself be sorted.
             return "id"
         return self._exact.get(name, f"data.{name}")
+
+    def is_mapped(self, name: str) -> bool:
+        """Whether the index maps a field of exactly this name."""
+        return is_storage_key_field(name) or name in self._types
+
+    def matches_others(self, name: str) -> bool:
+        """Whether a mapped name with a ``*`` is also a pattern another field matches."""
+        return self._matches_others.get(name, False)
 
     def takes_patterns(self, name: str) -> bool:
         """Whether :meth:`value_path` can be matched against a pattern, in every index.
@@ -367,6 +392,26 @@ def _presence_path(name: str) -> str:
     return name if is_storage_key_field(name) else f"data.{name}"
 
 
+def _is_field_pattern_match(pattern: str, path: str) -> bool:
+    """Whether Elasticsearch reads a name with a ``*`` as matching ``path``."""
+    return re.fullmatch(".*".join(map(re.escape, pattern.split("*"))), path, re.DOTALL) is not None
+
+
+def _presence_clause(filter_obj: Filter, types: FieldTypes) -> dict[str, Any] | None:
+    """The clause for a field having a value; ``None`` if no document has one."""
+    name = filter_obj.field
+    if "*" in name:
+        # ``exists`` would answer for every field the name matches.
+        if not types.is_mapped(name):
+            return None
+        if types.matches_others(name):
+            raise ValueError(
+                f"Elasticsearch cannot answer {filter_obj.operator.name} on {name!r}: it reads "
+                "the '*' as any characters, and another field of the index matches that."
+            )
+    return {"exists": {"field": _presence_path(name)}}
+
+
 def _sql_wildcard_to_es(pattern: str) -> str:
     """Translate a SQL ``LIKE`` pattern to Elasticsearch ``wildcard`` syntax.
 
@@ -396,7 +441,8 @@ def build_filter_es_query(filter_obj: Filter, types: FieldTypes) -> dict[str, An
     """
     op = filter_obj.operator
     if op == Operator.NOT_EXISTS:
-        return {"bool": {"must_not": {"exists": {"field": _field_path(filter_obj, types)}}}}
+        present = _presence_clause(filter_obj, types)
+        return {"match_all": {}} if present is None else {"bool": {"must_not": present}}
     if op not in _NEGATED:
         clause = _positive_clause(op, filter_obj, types)
         return {"match_none": {}} if clause is None else clause
@@ -405,7 +451,9 @@ def build_filter_es_query(filter_obj: Filter, types: FieldTypes) -> dict[str, An
     if op == Operator.NOT_LIKE and types.holds_no_strings(filter_obj.field):
         # A pattern asks for a string, negated or not.
         return {"match_none": {}}
-    present = {"exists": {"field": _presence_path(filter_obj.field)}}
+    present = _presence_clause(filter_obj, types)
+    if present is None:
+        return {"match_none": {}}
     if negated is None:
         return present
     return {"bool": {"filter": present, "must_not": negated}}
@@ -418,7 +466,7 @@ def _positive_clause(op: Operator, filter_obj: Filter, types: FieldTypes) -> dic
     value = filter_obj.value
 
     if op == Operator.EXISTS:
-        return {"exists": {"field": path}}
+        return _presence_clause(filter_obj, types)
     if op in _PATTERN_OPS:
         clause = _pattern_clause(op, path, value)
         if types.holds_no_strings(name):

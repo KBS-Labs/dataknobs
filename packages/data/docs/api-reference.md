@@ -1416,11 +1416,16 @@ pre-filters agree:
   sub-field (a mapping made elsewhere) has no full value to reach, so every
   comparison and pattern on it raises, and Elasticsearch refuses to sort by it.
   A pattern raises on a date, an `ip` and any other field Elasticsearch does not
-  match as text. `EXISTS` and `NOT_EXISTS` are always answered. Under an alias,
+  match as text. `EXISTS` and `NOT_EXISTS` are answered on all of these. Under an alias,
   one index that maps the field this way is enough to raise, except where another
   maps a keyword sub-field. That is then used for all of them, and an index
   without it has nothing there: none of its records match, and every one that has
   a value matches the negation.
+- **A `*` in a field name** is part of the name, as on every backend. Elasticsearch's
+  `exists` reads it as any characters, so `EXISTS`, `NOT_EXISTS` and the negated
+  operators raise `ValueError` when the index maps both a field of that exact name
+  (`p*`) and another that matches (`price`). If it maps no field of that name, no
+  record has a value. Such a name is asked about by every query.
 - **`REGEX`** finds a Python pattern anywhere in the **full field value**
   (case-sensitive), as `re.search` does, except that `\d` and `\w` are ASCII.
   The pattern is translated to Lucene's syntax

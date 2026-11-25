@@ -520,6 +520,70 @@ def test_existence_asks_the_field_itself(op: Operator) -> None:
     assert _field_path(Filter("f", op), TYPES) == "data.f"
 
 
+# --- a ``*`` in a name -----------------------------------------------------
+
+
+NEGATIVES = [
+    (Operator.NEQ, "s"),
+    (Operator.NOT_IN, ["s"]),
+    (Operator.NOT_LIKE, "s%"),
+    (Operator.NOT_BETWEEN, ["a", "b"]),
+]
+ASKS_FOR_A_VALUE = [(Operator.EXISTS, None), (Operator.NOT_EXISTS, None), *NEGATIVES]
+
+
+def _starred(*others: str) -> FieldTypes:
+    types = FieldTypes()
+    paths = ["data", "data.p*", "data.p*.keyword", *others]
+    types.learn(["p*"], {path: {"text" if path == "data.p*" else "keyword": {}} for path in paths})
+    return types
+
+
+def test_a_starred_name_that_is_no_field_has_no_value() -> None:
+    for op, value in [(Operator.EXISTS, None), *NEGATIVES]:
+        assert build_filter_es_query(Filter("p*", op, value), TYPES) == {"match_none": {}}
+    spec = Filter("p*", Operator.NOT_EXISTS)
+    assert build_filter_es_query(spec, TYPES) == {"match_all": {}}
+
+
+@pytest.mark.parametrize("other", ["data.q", "data.Price", "data", "id", "x.data.price"])
+@pytest.mark.parametrize(("op", "value"), ASKS_FOR_A_VALUE)
+def test_a_starred_field_no_other_matches_is_answered(op: Operator, value: Any, other: str) -> None:
+    clause = build_filter_es_query(Filter("p*", op, value), _starred(other))
+    assert "{'exists': {'field': 'data.p*'}}" in str(clause)
+
+
+@pytest.mark.parametrize("other", ["data.p", "data.price", "data.p.k", "data.p\n", "data.p*x"])
+@pytest.mark.parametrize(("op", "value"), ASKS_FOR_A_VALUE)
+def test_a_starred_field_another_matches_is_refused(op: Operator, value: Any, other: str) -> None:
+    with pytest.raises(ValueError, match=rf"{op.name} on 'p\*'"):
+        build_filter_es_query(Filter("p*", op, value), _starred(other))
+
+
+@pytest.mark.parametrize(
+    ("name", "other", "matches"),
+    [
+        ("a*b", "data.axxb", True),
+        ("a*b", "data.axb.c", False),
+        ("a*b*c", "data.abc", True),
+        ("o.*", "data.o.k", True),
+        ("o.*", "data.oxk", False),
+        ("*", "data.anything.at.all", True),
+    ],
+)
+def test_which_fields_a_starred_name_matches(name: str, other: str, matches: bool) -> None:
+    types = FieldTypes()
+    types.learn([name], {f"data.{name}": {"keyword": {}}, other: {"keyword": {}}})
+    assert types.matches_others(name) is matches
+
+
+def test_a_starred_name_is_asked_about_every_time() -> None:
+    types = _starred("data.price")
+    assert types.unknown(["p*"]) == ["p*"]
+    types.learn(["p*"], {"data.p*": {"text": {}}})
+    assert not types.matches_others("p*")
+
+
 @pytest.mark.parametrize("kind", ["long", "double", "boolean", "object", "nested", "dense_vector"])
 class TestAFieldThatHoldsNoStrings:
     @pytest.mark.parametrize(

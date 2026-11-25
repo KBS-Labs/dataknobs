@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | `BETWEEN` a number and a string | compared as text, or raised | matches nothing |
 
   Use `NOT_EXISTS` in an `OR` to keep the records without the field.
+- **BREAKING: a `*` in a field name is part of the name in an Elasticsearch
+  filter**, as on the other backends. `EXISTS`, `NOT_EXISTS` and the negated
+  operators were answered for every field the name matched: `d*` `EXISTS` found
+  a record with a `day`. They raise `ValueError` when the index maps a field of
+  that exact name and another it matches; with no field of that name, no record
+  has a value. List the fields to test for any of several.
 - **BREAKING: an Elasticsearch filter the index cannot answer raises
   `ValueError`**, negated or not: any comparison or pattern on a `text` field
   with no keyword sub-field, and a pattern on a field that is not matched as
