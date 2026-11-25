@@ -190,9 +190,11 @@ therefore at least two requests, and needs the object to be readable:
   restore, such as GLACIER, the write raises botocore's `InvalidObjectState`.
   Restore it, or delete it and create it again.
 - **The caller needs `s3:GetObject`** as well as `s3:PutObject`, and
-  `kms:Decrypt` under SSE-KMS. `AsyncS3Database.upsert` reads before every
-  write, a new id's included; without `s3:ListBucket`, S3 answers a read of a
-  missing key with 403, which is raised.
+  `kms:Decrypt` under SSE-KMS.
+- **An `update` or `upsert` needs `s3:ListBucket` to find that an id is not
+  stored.** Both databases look for the object before they write, with a GET,
+  or a HEAD in `SyncS3Database.upsert`. Without that permission S3 answers for
+  a missing key with 403, which is raised.
 
 ### Searching and Filtering
 ```python

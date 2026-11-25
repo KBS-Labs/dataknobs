@@ -68,10 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   database stored.** The S3 backends stamp ISO 8601 text, so a `BankRecord`
   over one carried text in `updated_at`, and on the sync one in `created_at`,
   both declared `float`. They are converted on read, by `MemoryBank`,
-  `AsyncMemoryBank` and `BankRecord.from_dict`, so a bank holding both forms
-  sorts and keeps working: `SyncS3Database` now stores the bank's own float
-  beside the text in records already written. Text that is not an ISO 8601 time
-  raises `ValueError`.
+  `AsyncMemoryBank` and `BankRecord.from_dict`, so a bank whose records differ
+  in form still sorts. One over `SyncS3Database` does: a record written by an
+  earlier release holds text in `created_at`, a new one holds the bank's float,
+  and `updated_at` is text in both. Text that is not an ISO 8601 time raises
+  `ValueError`.
 - **A bank's `on_update` hook receives the record's `source_node_id`**, where
   it received an empty string. `BankRecord.source_node_id` is typed
   `str | None`, as `undo_to_checkpoint` already documented it.

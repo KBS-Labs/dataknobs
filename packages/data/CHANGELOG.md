@@ -199,8 +199,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`SyncS3Database.create` keeps a `created_at` in the record's metadata**, as
   `AsyncS3Database` does, where it replaced it with the time of the write. A
   `date` or `datetime` there is stored as ISO text on both; any other value is
-  stored as given, and one JSON cannot hold raises `TypeError`. A record read and created
-  again under a new id keeps the old time; drop the key to have it stamped.
+  stored as given, and one JSON cannot hold raises `TypeError`. A record
+  read and created again under a new id keeps the old time; drop the key to
+  have it stamped.
 - **BREAKING: an S3 read that fails raises.** `SyncS3Database.search` and
   `stream_read` logged and left out any record they could not fetch, decode or
   filter, and `AsyncS3Database.read`, `exists` and `delete` answered `None` or
