@@ -361,6 +361,11 @@ FAILED_SUITES_FILE="$OUTPUT_DIR/failed-suites.txt"
 # committed, so nothing here is evidence an aborted run would lose.
 clear_coverage "$OUTPUT_DIR"
 
+# Each suite that passes leaves its time in one of these, for the summary's
+# suite_seconds. One left by an earlier run would be recorded as this run's,
+# for a suite this run did not run or that failed.
+rm -f "$OUTPUT_DIR"/unit-test-seconds-*.txt "$OUTPUT_DIR"/integration-test-seconds-*.txt
+
 # record_check <name> <exit_code> [--tool T] [--skipped true|false]
 #              --duration <seconds|null> [--field key=<json>]
 #
@@ -1291,8 +1296,9 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                 report_failed_suite "$OUTPUT_DIR/unit-test-output-$pkg.txt" "$FAILED_SUITES_FILE"
                 return "$test_exit"
             else
-                # Read by longest_suite_first in the next run. Not for one that
-                # failed, which may have stopped early.
+                # Recorded as this suite's time in the summary's suite_seconds,
+                # which longest_suite_first reads back from the committed
+                # history. Not for one that failed, which may have stopped early.
                 elapsed_since "$suite_start" > "$OUTPUT_DIR/unit-test-seconds-$pkg.txt"
                 print_success "Unit tests passed for $pkg ($(format_elapsed "$(elapsed_since "$suite_start")"))"
                 return 0
@@ -1409,7 +1415,10 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         # and still report success.
         # Deliberate word splitting — a space-separated set of package names.
         # shellcheck disable=SC2086
-        UNIT_ORDER=$(longest_suite_first "$PROJECT_ROOT" "$OUTPUT_DIR" $PACKAGES_TO_TEST)
+        UNIT_ORDER=$(longest_suite_first "$PROJECT_ROOT" $PACKAGES_TO_TEST) || {
+            print_error "Could not read the suite times to order the unit suites (see above)"
+            exit 1
+        }
         if [ "$(echo "$UNIT_ORDER" | wc -w)" -ne "$(echo "$PACKAGES_TO_TEST" | wc -w)" ]; then
             print_error "Could not order the unit suites: '$PACKAGES_TO_TEST' became '$UNIT_ORDER'"
             exit 1
@@ -1465,6 +1474,8 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                     print_error "Integration tests failed for $pkg ($(format_elapsed "$(elapsed_since "$_suite_start")"))"
                     report_failed_suite "$OUTPUT_DIR/integration-test-output-$pkg.txt" "$FAILED_SUITES_FILE"
                 else
+                    # The summary's integration suite_seconds, as for the unit suites.
+                    elapsed_since "$_suite_start" > "$OUTPUT_DIR/integration-test-seconds-$pkg.txt"
                     print_success "Integration tests passed for $pkg ($(format_elapsed "$(elapsed_since "$_suite_start")"))"
                 fi
 
@@ -1649,11 +1660,25 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         INTEGRATION_TEST_STATUS=$TEST_STATUS
     fi
 
+    # Each suite that passed, by its own time: the committed record the pool
+    # orders the next run by, and the history that says which suite a change
+    # made slower. Dev mode runs no suite on its own, so it measured none, and
+    # null says so where {} would claim every suite failed.
+    UNIT_SUITE_SECONDS=null
+    INTEGRATION_SUITE_SECONDS=null
+    if [ "$PR_MODE" = "yes" ]; then
+        UNIT_SUITE_SECONDS=$(uv run python "$SCRIPT_DIR/quality-summary.py" seconds \
+            --dir "$OUTPUT_DIR" --prefix unit-test-seconds-)
+        INTEGRATION_SUITE_SECONDS=$(uv run python "$SCRIPT_DIR/quality-summary.py" seconds \
+            --dir "$OUTPUT_DIR" --prefix integration-test-seconds-)
+    fi
     record_check unit_tests "$UNIT_TEST_STATUS" \
         --skipped "$UNIT_SKIPPED" --duration "$UNIT_TEST_SECONDS" \
-        --field "workspace_guards_seconds=$WORKSPACE_GUARD_SECONDS"
+        --field "workspace_guards_seconds=$WORKSPACE_GUARD_SECONDS" \
+        --field "suite_seconds=$UNIT_SUITE_SECONDS"
     record_check integration_tests "$INTEGRATION_TEST_STATUS" \
-        --skipped "$INTEGRATION_SKIPPED" --duration "$INTEGRATION_TEST_SECONDS"
+        --skipped "$INTEGRATION_SKIPPED" --duration "$INTEGRATION_TEST_SECONDS" \
+        --field "suite_seconds=$INTEGRATION_SUITE_SECONDS"
 
     # Create test results XML files for CI systems (an artifact, so gate only)
     if [ "$EMIT_ARTIFACTS" = "yes" ]; then
@@ -1672,9 +1697,9 @@ else
     # re-asserted so the two cannot come to disagree.
     record_check unit_tests 0 \
         --skipped "$UNIT_SKIPPED" --duration null \
-        --field "workspace_guards_seconds=null"
+        --field "workspace_guards_seconds=null" --field "suite_seconds=null"
     record_check integration_tests 0 \
-        --skipped "$INTEGRATION_SKIPPED" --duration null
+        --skipped "$INTEGRATION_SKIPPED" --duration null --field "suite_seconds=null"
     if [ "$DOCS_CHECKS_DUE" = "yes" ]; then
         run_docs_checks
     fi

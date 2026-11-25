@@ -9,6 +9,7 @@ contract are exercised end to end.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 import pytest
@@ -299,7 +300,14 @@ def test_localstack_endpoint_fixture_resolves(localstack_endpoint: str) -> None:
 def test_make_localstack_s3_bucket_yields_config(
     monkeypatch: Any, make_localstack_s3_bucket: Any
 ) -> None:
-    """Factory ensures the bucket and yields a backend-shaped config dict."""
+    """Factory ensures the bucket and yields a backend-shaped config dict.
+
+    The factory is session-scoped and remembers what it ensured, so the name is
+    one no other test asks for: a shared name could already be remembered (no
+    call recorded here), and the fake ensure below would leave it remembered
+    for later tests that need the real bucket.
+    """
+    bucket = f"dk-yields-config-{uuid.uuid4().hex[:10]}"
     # Patch the helper to a no-op so we don't actually try to reach LocalStack.
     calls: list[tuple[str, str | None]] = []
 
@@ -311,16 +319,16 @@ def test_make_localstack_s3_bucket_yields_config(
         _fake_ensure,
     )
 
-    gen = make_localstack_s3_bucket("test-bucket")
+    gen = make_localstack_s3_bucket(bucket)
     config = next(gen)
     try:
-        assert config["bucket"] == "test-bucket"
+        assert config["bucket"] == bucket
         assert config["endpoint_url"].startswith("http")
         assert config["region"] == "us-east-1"
         assert config["aws_access_key_id"] == "test"
         assert config["aws_secret_access_key"] == "test"
         assert len(calls) == 1
-        assert calls[0][0] == "test-bucket"
+        assert calls[0][0] == bucket
         assert calls[0][1] == config["endpoint_url"]
     finally:
         # Drain the generator so its finally clause (none today, but

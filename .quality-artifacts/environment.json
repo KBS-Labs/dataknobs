@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-11-25T22:11:47Z",
+  "timestamp": "2026-11-25T23:12:28Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.13.10 (Homebrew 2026-11-24 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "error-text-guard-derived-names",
-  "git_commit": "008acec18379507fd37d371f7869c3521ff3df75",
+  "git_branch": "cheaper-s3-setup-and-committed-suite-times",
+  "git_commit": "d94ddd92bc3729d4249dd21b9d21514f4910dbe6",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

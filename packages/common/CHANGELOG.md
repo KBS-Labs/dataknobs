@@ -2488,6 +2488,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`make_localstack_s3_bucket` ensures each bucket once per session.** It is
+  now session-scoped and remembers the buckets it has made, so a later test
+  asking for the same bucket makes no request. Each ask used to cost about
+  40 ms against a warm LocalStack: a new event loop, an `aioboto3` session and
+  a `HEAD`. A bucket whose ensure raised is not remembered. A test that deletes
+  a bucket should use a name no other test asks for, since the session will
+  not recreate it.
+
 - **`PluginRegistry.get` and `get_async` refuse a key declared unavailable,
   even with a `default_factory`.** They reported such a key as `"Plugin
   '<key>' not registered and no default available"`, and on a registry with

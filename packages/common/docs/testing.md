@@ -236,6 +236,14 @@ keeps the bucket name caller-controlled and works for both sync and
 async test bodies (the `asyncio.run` wrapping happens in the fixture
 setup phase, outside any per-test event loop).
 
+The factory is session-scoped and ensures each bucket **once per session**
+(per xdist worker). A later test asking for the same bucket makes no request,
+which saves a new event loop, an `aioboto3` session and a `HEAD` on every S3
+test. A bucket whose ensure raised is not remembered, so the next ask tries
+again. Keep tests apart with a per-test key prefix inside a shared bucket. A
+test that deletes its bucket should use a name no other test asks for, since
+the session will not recreate a bucket it has already ensured.
+
 For a one-off, non-fixture flow, call the underlying async helper
 directly:
 
