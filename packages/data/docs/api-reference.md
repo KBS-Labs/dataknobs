@@ -1432,6 +1432,10 @@ pre-filters agree:
   `id`-queryable; `read(id)` is unaffected.
 - An operator the translator cannot express raises `ValueError` rather than
   silently matching every document.
+- **A read that some shard did not answer raises `DatabaseError`**, as does one
+  that timed out, rather than returning what the other shards found. Its
+  `context["failures"]` lists the failures Elasticsearch gave. `stream_read` on
+  the async backend may have yielded records before it raises.
 
 **The index it creates.** Both backends create a missing index with the same
 mapping. A string in a record's data is `text` with a `keyword` sub-field of up

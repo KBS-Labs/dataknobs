@@ -72,6 +72,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   A `search` that sorts on a field Elasticsearch cannot sort by is one of
   these: the sync backend returned no records for it.
+- **BREAKING: an Elasticsearch search that some shard did not answer raises
+  `DatabaseError`**, on both twins. Elasticsearch answers one with a 200 holding
+  what the other shards found, which was returned as the whole answer. Covers
+  `search`, `count`, `stream_read`, vector and hybrid search, a shard lost
+  between two pages of a read, a search that timed out, and a field lookup over
+  an alias some index of which is down. `context["failures"]` lists the failures
+  Elasticsearch gave. A stream may have yielded records before it raises.
 - **BREAKING: a failed item in an Elasticsearch batch raises `DatabaseError`**,
   whose `context["failures"]` names every one, after the rest of the batch has
   been written. `create_batch` and `upsert_batch` left the id out of their

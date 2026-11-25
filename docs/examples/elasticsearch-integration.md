@@ -589,6 +589,9 @@ A missing document is an answer (`get` returns `None`; `exists`, `update` and
 `.succeeded` is False and whose `.result` is the error. Every other failure
 raises `ElasticsearchRequestError`, which carries `.status` and `.body`.
 
+Elasticsearch also answers when only some shards did. `count` raises then; a
+`search` succeeds, and `.result["_shards"]["failed"]` says so.
+
 ## Best Practices
 
 1. **Use appropriate mappings**: Define mappings before indexing -- pass them

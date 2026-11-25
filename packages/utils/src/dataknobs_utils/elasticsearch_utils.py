@@ -22,6 +22,7 @@ from dataknobs_utils import requests_utils
 from dataknobs_utils.elasticsearch_responses import (
     error_reason,
     error_type,
+    incomplete_reason,
     says_document_missing,
     says_index_exists,
 )
@@ -45,7 +46,7 @@ class ElasticsearchConflictError(Exception):
 
 
 class ElasticsearchRequestError(Exception):
-    """Raised when Elasticsearch refuses or never answers a request.
+    """Raised when Elasticsearch refuses, never answers, or only partly answers a request.
 
     Attributes:
         status: HTTP status, or ``None`` when there was no response.
@@ -58,7 +59,8 @@ class ElasticsearchRequestError(Exception):
         detail = (
             "no response"
             if self.status is None
-            else f"{self.status} {error_type(self.body)}: {error_reason(self.body)}"
+            else incomplete_reason(self.body)
+            or f"{self.status} {error_type(self.body)}: {error_reason(self.body)}"
         )
         super().__init__(f"Elasticsearch {method} {path} failed ({detail})")
 
@@ -516,6 +518,8 @@ class ElasticsearchIndex:
             ServerResponse | None: Response with results. If successful,
                 resp.extra contains 'hits_df' and/or 'aggs_df' DataFrames.
                 Returns None if no table is available.
+                A search that some shard did not answer succeeds with what the
+                others found, and ``resp.result["_shards"]`` says so.
         """
         if table is None:
             if len(self.tables) > 0:
@@ -934,7 +938,8 @@ class SimplifiedElasticsearchIndex:
 
         Returns:
             ServerResponse object. When the search failed, ``succeeded`` is
-            False and ``result`` is the error Elasticsearch returned.
+            False and ``result`` is the error Elasticsearch returned. A search
+            some shard did not answer succeeds, and its ``_shards`` says so.
         """
         return self._request("post", "_search", body or {})
 
@@ -946,10 +951,13 @@ class SimplifiedElasticsearchIndex:
 
         Returns:
             Number of documents
+
+        Raises:
+            ElasticsearchRequestError: The count failed, or left a shard out.
         """
         response = self._request("post", "_count", body or {})
 
-        if response.succeeded and response.json:
+        if response.succeeded and response.json and not incomplete_reason(response.json):
             count: int = response.json.get("count", 0)
             return count
         raise self._failure("post", "_count", response)

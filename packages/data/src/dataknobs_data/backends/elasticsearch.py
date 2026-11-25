@@ -20,7 +20,12 @@ from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.mixins import resolve_metric
 from ..vector.types import DistanceMetric, VectorSearchResult
 from .config import SyncElasticsearchDatabaseConfig
-from .elasticsearch_errors import bulk_outcomes, is_existing_index, is_missing_document
+from .elasticsearch_errors import (
+    bulk_outcomes,
+    is_existing_index,
+    is_missing_document,
+    require_complete,
+)
 from .elasticsearch_mixins import (
     ElasticsearchBaseConfig,
     ElasticsearchErrorHandler,
@@ -571,6 +576,8 @@ class SyncElasticsearchDatabase(
             response = self._require_client().field_caps(
                 index=self.index_name, fields=FieldTypes.request_fields(unknown)
             )
+            # Learned for good, so never from part of an alias.
+            require_complete(response, "field lookup")
             self._known_types.learn(unknown, response["fields"])
         return self._known_types
 
@@ -609,6 +616,7 @@ class SyncElasticsearchDatabase(
     def _search_hits(self, body: dict[str, Any]) -> tuple[list[dict[str, Any]], str | None]:
         """Send one planned search request; return its hits and point-in-time id."""
         response = self._require_client().search(**client_search_kwargs(body, self.index_name))
+        require_complete(response, "search")
         return list(response["hits"]["hits"]), response.get("pit_id")
 
     def _open_pit(self) -> str:
@@ -639,12 +647,12 @@ class SyncElasticsearchDatabase(
         es_query = build_query(query, self._field_types(query))
         client = self._require_client()
         response = client.count(index=self.index_name, query=es_query)
-        return int(response["count"])
+        return int(require_complete(response, "count")["count"])
 
     def _count_all(self) -> int:
         """Count all records in the database."""
         response = self._require_client().count(index=self.index_name)
-        return int(response["count"])
+        return int(require_complete(response, "count")["count"])
 
     def clear(self) -> int:
         """Clear all records from the database."""
@@ -812,6 +820,7 @@ class SyncElasticsearchDatabase(
                 # twin's copy escaped only because its client is not typed.
                 source=True,
             )
+            require_complete(response, "vector search")
         except Exception as e:
             self._handle_elasticsearch_error(e, "vector search")
 

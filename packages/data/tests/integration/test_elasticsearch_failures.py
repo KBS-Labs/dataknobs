@@ -34,7 +34,7 @@ pytestmark = [pytest.mark.integration, requires_real_elasticsearch]
 
 Database = SyncElasticsearchDatabase | AsyncElasticsearchDatabase
 
-#: ``terms`` takes no null, so Elasticsearch answers this one with a 400.
+#: Not a regular expression, so Elasticsearch answers this one with a 400.
 REJECTED = Query(filters=[Filter("id", Operator.REGEX, "(")])
 
 

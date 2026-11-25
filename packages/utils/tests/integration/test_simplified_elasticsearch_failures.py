@@ -10,6 +10,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
+import requests
 from dataknobs_common.testing import requires_real_elasticsearch
 
 from dataknobs_utils.elasticsearch_utils import (
@@ -121,3 +122,34 @@ def test_nothing_is_printed(
     index.search()
     index.exists()
     assert capsys.readouterr() == ("", "")
+
+
+@pytest.fixture
+def short(make_elasticsearch_test_index: Any) -> Iterator[SimplifiedElasticsearchIndex]:
+    """An index with one of its two shards unavailable."""
+    for config in make_elasticsearch_test_index("test_simplified_short_"):
+        base = f"http://{config['host']}:{config['port']}/{config['index']}"
+        settings = {
+            "number_of_shards": 2,
+            "number_of_replicas": 0,
+            "index.routing.allocation.total_shards_per_node": 1,
+        }
+        created = requests.put(
+            f"{base}?wait_for_active_shards=0", json={"settings": settings}, timeout=10
+        )
+        created.raise_for_status()
+        health = base.replace(config["index"], f"_cluster/health/{config['index']}")
+        requests.get(f"{health}?wait_for_active_shards=1&timeout=5s", timeout=10)
+        wrapper = SimplifiedElasticsearchIndex(config["index"], config["host"], config["port"])
+        yield wrapper
+
+
+def test_a_count_missing_a_shard_raises(short: SimplifiedElasticsearchIndex) -> None:
+    with pytest.raises(ElasticsearchRequestError, match=r"1 of 2 shards.*no_shard_available"):
+        short.count()
+
+
+def test_a_search_missing_a_shard_says_so(short: SimplifiedElasticsearchIndex) -> None:
+    response = short.search()
+    assert response.succeeded
+    assert response.result["_shards"]["failed"] == 1
