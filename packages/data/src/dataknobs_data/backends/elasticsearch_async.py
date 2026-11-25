@@ -32,6 +32,7 @@ from ..vector.mixins import AsyncVectorOperationsMixin
 from ..vector.mixins import resolve_metric
 from ..vector.types import DistanceMetric, VectorSearchResult
 from .config import AsyncElasticsearchDatabaseConfig
+from .elasticsearch_errors import bulk_outcomes, is_existing_index, is_missing_document
 from .elasticsearch_mixins import (
     ElasticsearchBaseConfig,
     ElasticsearchErrorHandler,
@@ -64,7 +65,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Global pool manager for Elasticsearch clients
-_client_manager = ConnectionPoolManager()
+_client_manager: ConnectionPoolManager[Any] = ConnectionPoolManager()
 
 
 class AsyncElasticsearchDatabase(
@@ -187,42 +188,53 @@ class AsyncElasticsearchDatabase(
         """Initialize is handled in connect."""
         pass
 
-    async def _ensure_index(self) -> None:
-        """Ensure the index exists with proper mappings."""
-        if not self._client:
-            raise RuntimeError("Database not connected. Call connect() first.")
+    async def _index_exists(self) -> bool:
+        """Whether this database's index is already there."""
+        return bool(await self._require_client().indices.exists(index=self.index_name))
 
-        # Check if index exists
-        if not await self._client.indices.exists(index=self.index_name):
-            # Get mappings with vector field support
-            mappings = self.get_index_mappings(self.vector_fields)
+    async def _create_index(self, mappings: dict[str, Any], settings: dict[str, Any]) -> bool:
+        """Create the index; ``False`` when another process created it first."""
+        from elasticsearch import BadRequestError
 
-            # Get settings optimized for KNN if we have vector fields
-            settings = (
-                self.get_knn_index_settings()
-                if self.vector_fields
-                else {
-                    "number_of_shards": 1,
-                    "number_of_replicas": 0,
-                }
-            )
-
-            await self._client.indices.create(
+        try:
+            await self._require_client().indices.create(
                 index=self.index_name, mappings=mappings, settings=settings
             )
+        except BadRequestError as e:
+            if is_existing_index(e):
+                return False
+            raise
+        return True
 
-            if self.vector_fields:
-                self.vector_enabled = True
-                logger.info(f"Created index '{self.index_name}' with vector support")
+    async def _ensure_index(self) -> None:
+        """Ensure the index exists with proper mappings."""
+        if await self._index_exists():
+            return
+
+        # Get mappings with vector field support
+        mappings = self.get_index_mappings(self.vector_fields)
+
+        # Get settings optimized for KNN if we have vector fields
+        settings = (
+            self.get_knn_index_settings()
+            if self.vector_fields
+            else {
+                "number_of_shards": 1,
+                "number_of_replicas": 0,
+            }
+        )
+
+        if await self._create_index(mappings, settings) and self.vector_fields:
+            self.vector_enabled = True
+            logger.info(f"Created index '{self.index_name}' with vector support")
 
     def _check_connection(self) -> None:
         """Check if database is connected."""
-        if not self._connected or not self._client:
-            raise RuntimeError("Database not connected. Call connect() first.")
+        self._require_client()
 
     def _require_client(self) -> AsyncElasticsearch:
         """The connected client, or the same error :meth:`_check_connection` raises."""
-        if not self._connected or self._client is None:
+        if self._client is None:
             raise RuntimeError("Database not connected. Call connect() first.")
         return self._client
 
@@ -288,7 +300,7 @@ class AsyncElasticsearchDatabase(
         from elasticsearch import ConflictError
 
         try:
-            response = await self._client.index(
+            response = await self._require_client().index(
                 index=self.index_name,
                 id=record_id,
                 document=doc,
@@ -298,138 +310,116 @@ class AsyncElasticsearchDatabase(
         except ConflictError as e:
             raise DuplicateRecordError(record_id) from e
 
-        return response["_id"]
+        return str(response["_id"])
 
-    @staticmethod
-    def _extract_bulk_index_ids(response: Any, ids: list[str] | None = None) -> list[str]:
-        """Return the ids of successfully-indexed items from a bulk response.
+    async def _bulk(self, actions: list[dict[str, Any]], operation: str) -> list[bool]:
+        """Run bulk actions and report each one; see :func:`bulk_outcomes`.
 
-        Reconciles ``response['items']`` per operation so a partial bulk
-        failure is not reported as success: an item carrying an ``error`` (or
-        a ``status`` >= 400) is dropped. The async sibling of the sync
-        backend's ``_execute_bulk_index`` reconciliation — the two use
-        different ES client APIs (raw ``client.bulk`` here vs the ``helpers``
-        module there) so the response shapes differ, but the per-item
-        drop-the-failures contract is identical.
-
-        Both ``create_batch`` and ``upsert_batch`` pass the client-minted,
-        input-order ``ids`` list (explicit-``_id`` writes), so only the failed
-        positions are dropped. The ``ids=None`` branch — reading each successful
-        item's ``_id`` out of the response — is retained for a caller relying on
-        server-assigned ids.
+        Sent in requests of up to 500 actions. A request that fails as a whole
+        raises, and the ones before it have been applied.
         """
-        result: list[str] = []
-        for pos, item in enumerate(response.get("items", [])):
-            op = item.get("index") or item.get("create") or {}
-            # An ``error`` key is ES's canonical per-item failure signal; the
-            # status check is a secondary guard (a successful item always
-            # carries status 200/201, so a missing status defaults to success).
-            if "error" in op or op.get("status", 200) >= 400:
-                # Failed operation — do not report its id as written.
-                continue
-            if ids is not None:
-                if pos < len(ids):
-                    result.append(ids[pos])
-            else:
-                _id = op.get("_id")
-                if _id is not None:
-                    result.append(_id)
-        return result
+        from elasticsearch import helpers
 
-    @staticmethod
-    def _raise_on_bulk_conflict(response: Any) -> None:
-        """Raise ``DuplicateRecordError`` on the first 409 in a bulk response.
-
-        The bulk ``create`` op fails closed on a colliding id (409), matching a
-        single-record ``create()``. The Elasticsearch bulk API is per-item
-        (non-atomic), so non-colliding records may already be indexed when the
-        conflict is raised — exactly like a ``create()`` loop.
-        """
-        for item in response.get("items", []):
-            op = item.get("create") or item.get("index") or {}
-            if op.get("status") == 409:
-                raise DuplicateRecordError(op.get("_id"))
+        client = self._require_client()
+        items = [
+            item
+            async for _, item in helpers.async_streaming_bulk(
+                client, actions, refresh=self.refresh, raise_on_error=False
+            )
+        ]
+        return bulk_outcomes(items, operation)
 
     async def create_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
-        """Create multiple records in batch, failing closed on a colliding id.
+        """Create multiple records using the bulk API, failing closed on a colliding id.
 
-        Uses the bulk ``create`` op keyed on ``record.id`` (honoring a
-        caller-supplied id, minting a uuid only when absent). Like ``create()``,
-        a colliding id raises ``DuplicateRecordError`` (bulk 409); other per-item
-        errors are reconciled via :meth:`_extract_bulk_index_ids`, so a record
-        that fails to index is not reported as created.
+        Uses the bulk ``create`` op, honoring a caller-supplied ``record.id``
+        and minting one only when absent. The bulk API is per-item
+        (non-atomic), so the other records in the batch have been indexed when
+        either error is raised.
 
         ``_tx`` is accepted for interface parity with the transactional backends
-        and ignored — Elasticsearch exposes no native transaction to join.
+        and ignored: Elasticsearch has no transaction to join.
+
+        Args:
+            records: List of records to create
+
+        Returns:
+            The created record ids, in input order
 
         Raises:
             DuplicateRecordError: a record collides with an existing id, or two
                 records in the batch share an id.
+            DatabaseError: any other record could not be indexed.
         """
-        self._check_connection()
-
-        if not records:
-            return []
-
-        ids: list[str] = []
-        operations: list[dict] = []
+        ids = [record.id or self._generate_id() for record in records]
         seen: set[str] = set()
-        for record in records:
-            record_id = record.id or self._generate_id()
+        for record_id in ids:
             if record_id in seen:
                 raise DuplicateRecordError(record_id)
             seen.add(record_id)
-            ids.append(record_id)
-            doc = self._record_to_doc(record, record_id)
-            operations.append({"create": {"_index": self.index_name, "_id": record_id}})
-            operations.append(doc)
-
-        response = await self._client.bulk(operations=operations, refresh=self.refresh)
-        self._raise_on_bulk_conflict(response)
-        return self._extract_bulk_index_ids(response, ids)
+        await self._bulk_index("create", ids, records)
+        return ids
 
     async def upsert_batch(self, records: list[Record], *, _tx: Any = None) -> list[str]:
-        """Insert-or-overwrite multiple records in batch using the bulk API.
+        """Insert-or-overwrite multiple records using the bulk API.
 
-        Uses the bulk ``index`` op keyed on ``record.id`` (upsert-by-id),
-        honoring a caller-supplied ``record.id`` (minting a uuid only when
-        absent); a colliding id is overwritten (never raised). Returns the ids
-        that were written, in input order. Like ``create_batch``, this supplies
-        ``_id`` explicitly so the write is addressable and idempotent; the two
-        differ only in op type (``index`` overwrites, ``create`` fails closed).
-        Per-item errors are reconciled via
-        :meth:`_extract_bulk_index_ids`, so an id whose write failed is dropped
-        rather than reported as written. ``_tx`` is accepted for interface parity
-        and ignored (see :meth:`create_batch`).
+        Uses the bulk ``index`` op, honoring a caller-supplied ``record.id``
+        and minting one only when absent; a colliding id is overwritten. The
+        bulk API is per-item (non-atomic), so the other records in the batch
+        have been indexed when the error is raised.
+
+        ``_tx`` is accepted for interface parity with the transactional backends
+        and ignored: Elasticsearch has no transaction to join.
+
+        Returns:
+            The written record ids, in input order
+
+        Raises:
+            DatabaseError: a record could not be indexed.
         """
-        self._check_connection()
+        ids = [record.id or self._generate_id() for record in records]
+        await self._bulk_index("index", ids, records)
+        return ids
 
-        if not records:
-            return []
+    async def _bulk_index(self, op_type: str, ids: list[str], records: list[Record]) -> None:
+        """Index records under ids with the given bulk op."""
+        actions = [
+            {
+                "_op_type": op_type,
+                "_index": self.index_name,
+                "_id": record_id,
+                "_source": self._record_to_doc(record, record_id),
+            }
+            for record_id, record in zip(ids, records, strict=True)
+        ]
+        await self._bulk(actions, "create_batch" if op_type == "create" else "upsert_batch")
 
-        ids: list[str] = []
-        operations: list[dict] = []
-        for record in records:
-            record_id = record.id or self._generate_id()
-            ids.append(record_id)
-            doc = self._record_to_doc(record, record_id)
-            operations.append({"index": {"_index": self.index_name, "_id": record_id}})
-            operations.append(doc)
+    async def _get_document(self, id: str, *, source: bool = True) -> dict[str, Any] | None:
+        """GET one document, or ``None`` when it does not exist.
 
-        response = await self._client.bulk(operations=operations, refresh=self.refresh)
-        return self._extract_bulk_index_ids(response, ids)
+        Every other failure raises, a missing index included.
+        """
+        client = self._require_client()
+        if not id:
+            # Not an id Elasticsearch can hold, so nothing is stored under it.
+            return None
 
-    async def read(self, id: str) -> Record | None:
-        """Read a record by ID."""
-        self._check_connection()
+        from elasticsearch import NotFoundError
 
         try:
-            response = await self._client.get(index=self.index_name, id=id)
-            return self._doc_to_record(response)
-        except Exception as e:
-            # Log the error for debugging
-            logger.debug(f"Error reading document {id}: {e}")
+            response = await client.get(index=self.index_name, id=id, source=source)
+        except NotFoundError as e:
+            if is_missing_document(e):
+                return None
+            raise
+        return dict(response)
+
+    async def read(self, id: str) -> Record | None:
+        """Read a record by ID; ``None`` when it does not exist."""
+        document = await self._get_document(id)
+        if document is None:
             return None
+        return self._doc_to_record(document)
 
     async def get_version(self, id: str) -> str | None:
         """Return the document's ``_seq_no``/``_primary_term`` version token.
@@ -439,112 +429,106 @@ class AsyncElasticsearchDatabase(
         native version — ABA-safe, unlike the base content-hash default this
         overrides. The two values are combined into one opaque token.
         """
-        self._check_connection()
-        from elasticsearch import NotFoundError
-
-        try:
-            response = await self._client.get(index=self.index_name, id=id)
-        except NotFoundError:
+        document = await self._get_document(id, source=False)
+        if document is None:
             return None
-        seq_no = response.get("_seq_no")
-        primary_term = response.get("_primary_term")
+        seq_no = document.get("_seq_no")
+        primary_term = document.get("_primary_term")
         if seq_no is None or primary_term is None:
             return None
         return es_version_token(seq_no, primary_term)
 
     async def update(self, id: str, record: Record, *, expected_version: str | None = None) -> bool:
-        """Update an existing record.
+        """Update an existing record; ``False`` when it does not exist.
 
         When ``expected_version`` is provided the update carries ES's
         ``if_seq_no``/``if_primary_term`` guards so the compare-and-set is
         enforced server-side; a stale token raises ``ConcurrencyError``. When
-        ``None`` the update is unconditional, byte-identical to prior behavior.
+        ``None`` the update is unconditional. Every other failure raises.
         """
-        self._check_connection()
-        # Target id stamped so a partial update heals/keeps the top-level id
+        client = self._require_client()
+        if not id:
+            return False
+        # The target id is stamped so a partial update keeps the top-level id
         # field consistent with ``_id``.
         doc = self._record_to_doc(record, id)
 
+        from elasticsearch import ConflictError, NotFoundError
+
+        seq_no: int | None = None
+        primary_term: int | None = None
         if expected_version is not None:
-            from elasticsearch import ConflictError, NotFoundError
-
             seq_no, primary_term = parse_es_version_token(expected_version)
-            try:
-                await self._client.update(
-                    index=self.index_name,
-                    id=id,
-                    doc=doc,
-                    refresh=self.refresh,
-                    if_seq_no=seq_no,
-                    if_primary_term=primary_term,
-                )
-                return True
-            except NotFoundError:
-                # The document was absent all along. A conditional update never
-                # inserts, so return False (uniform with the sync ES backend
-                # and every other backend) rather than surfacing ES's raw 404.
-                # A document deleted *after* a real seq_no conflict surfaces as
-                # ConflictError below, not here.
-                return False
-            except ConflictError as e:
-                # The token is stale (concurrent modification). If the doc has
-                # since been deleted, treat it as gone (-> False); otherwise
-                # raise the standard conflict.
-                current = await self.get_version(id)
-                if current is None:
-                    return False
-                raise version_conflict_error(id, expected_version, current) from e
-
         try:
-            await self._client.update(index=self.index_name, id=id, doc=doc, refresh=self.refresh)
-            return True
-        except Exception:
-            return False
+            await client.update(
+                index=self.index_name,
+                id=id,
+                doc=doc,
+                refresh=self.refresh,
+                if_seq_no=seq_no,
+                if_primary_term=primary_term,
+            )
+        except NotFoundError as e:
+            if is_missing_document(e):
+                return False
+            raise
+        except ConflictError as e:
+            if expected_version is None:
+                raise
+            # Either the token is stale, or the document has gone since.
+            current = await self.get_version(id)
+            if current is None:
+                return False
+            raise version_conflict_error(id, expected_version, current) from e
+        return True
 
     async def delete(self, id: str, *, expected_version: str | None = None) -> bool:
-        """Delete a record by ID.
+        """Delete a record by ID; ``False`` when it does not exist.
 
         When ``expected_version`` is provided the delete carries ES's
         ``if_seq_no``/``if_primary_term`` guards so the compare-and-set is
-        enforced server-side; a stale token raises ``ConcurrencyError`` and a
-        missing document returns ``False``. When ``None`` the delete is
-        unconditional, byte-identical to prior behavior.
+        enforced server-side; a stale token raises ``ConcurrencyError``. When
+        ``None`` the delete is unconditional. Every other failure raises.
         """
-        self._check_connection()
-
-        if expected_version is not None:
-            from elasticsearch import ConflictError, NotFoundError
-
-            seq_no, primary_term = parse_es_version_token(expected_version)
-            try:
-                await self._client.delete(
-                    index=self.index_name,
-                    id=id,
-                    refresh=self.refresh,
-                    if_seq_no=seq_no,
-                    if_primary_term=primary_term,
-                )
-                return True
-            except NotFoundError:
-                # A conditional delete never conflicts on an absent id.
-                return False
-            except ConflictError as e:
-                current = await self.get_version(id)
-                if current is None:
-                    return False
-                raise version_conflict_error(id, expected_version, current) from e
-
-        try:
-            await self._client.delete(index=self.index_name, id=id, refresh=self.refresh)
-            return True
-        except Exception:
+        client = self._require_client()
+        if not id:
             return False
 
-    async def exists(self, id: str) -> bool:
-        """Check if a record exists."""
-        self._check_connection()
+        from elasticsearch import ConflictError, NotFoundError
 
-        return await self._client.exists(index=self.index_name, id=id)
+        seq_no: int | None = None
+        primary_term: int | None = None
+        if expected_version is not None:
+            seq_no, primary_term = parse_es_version_token(expected_version)
+        try:
+            await client.delete(
+                index=self.index_name,
+                id=id,
+                refresh=self.refresh,
+                if_seq_no=seq_no,
+                if_primary_term=primary_term,
+            )
+        except NotFoundError as e:
+            if is_missing_document(e):
+                return False
+            raise
+        except ConflictError as e:
+            if expected_version is None:
+                raise
+            # Either the token is stale, or the document has gone since.
+            current = await self.get_version(id)
+            if current is None:
+                return False
+            raise version_conflict_error(id, expected_version, current) from e
+        return True
+
+    async def exists(self, id: str) -> bool:
+        """Check if a record exists.
+
+        A GET without the source rather than a HEAD, whose 404 has no body to
+        tell a missing record from a missing index.
+        """
+        return await self._get_document(id, source=False) is not None
 
     async def upsert(
         self,
@@ -581,67 +565,54 @@ class AsyncElasticsearchDatabase(
             raise version_conflict_error(id, expected_version, None)
 
         doc = self._record_to_doc(record, id)
-
-        await self._client.index(index=self.index_name, id=id, document=doc, refresh=self.refresh)
-
+        await self._require_client().index(
+            index=self.index_name, id=id, document=doc, refresh=self.refresh
+        )
         return id
 
     async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
-        """Update multiple records efficiently using the bulk API.
-
-        Uses AsyncElasticsearch's bulk API for efficient batch updates.
+        """Update multiple records using the bulk API.
 
         Args:
             updates: List of (id, record) tuples to update
 
         Returns:
-            List of success flags for each update
+            ``True`` per record updated, ``False`` per record that does not exist
+
+        Raises:
+            DatabaseError: an update failed for any other reason. The bulk API
+                is per-item, so the others have been applied.
         """
-        if not updates:
-            return []
+        actions = [
+            {
+                "_op_type": "update",
+                "_index": self.index_name,
+                "_id": record_id,
+                "doc": self._record_to_doc(record, record_id),
+            }
+            for record_id, record in updates
+        ]
+        return await self._bulk(actions, "update_batch")
 
-        self._check_connection()
+    async def delete_batch(self, ids: list[str], *, _tx: Any = None) -> list[bool]:
+        """Delete multiple records using the bulk API.
 
-        # Build bulk operations for AsyncElasticsearch
-        operations: list[dict[str, Any]] = []
-        for record_id, record in updates:
-            # Add update operation
-            operations.append({"update": {"_index": self.index_name, "_id": record_id}})
-            # Add document data
-            doc = self._record_to_doc(record, record_id)
-            operations.append(
-                {
-                    "doc": doc,
-                    "doc_as_upsert": False,  # Don't create if doesn't exist
-                }
-            )
+        ``_tx`` is accepted for interface parity and ignored.
 
-        try:
-            # Execute bulk update using AsyncElasticsearch
-            response = await self._client.bulk(operations=operations, refresh=self.refresh)
+        Args:
+            ids: List of record IDs to delete
 
-            # Process the response to determine which updates succeeded
-            results = []
-            if response.get("items"):
-                for item in response["items"]:
-                    if "update" in item:
-                        update_result = item["update"]
-                        # Check if update was successful (status 200) or not found (404)
-                        results.append(update_result.get("status") == 200)
-                    else:
-                        results.append(False)
-            else:
-                # If no items in response, mark all as failed
-                results = [False] * len(updates)
+        Returns:
+            ``True`` per record deleted, ``False`` per record that does not exist
 
-            return results
-
-        except Exception as e:
-            # If bulk operation fails, mark all as failed
-            import logging
-
-            logging.error(f"Bulk update failed: {e}")
-            return [False] * len(updates)
+        Raises:
+            DatabaseError: a delete failed for any other reason. The bulk API
+                is per-item, so the others have been applied.
+        """
+        actions = [
+            {"_op_type": "delete", "_index": self.index_name, "_id": record_id} for record_id in ids
+        ]
+        return await self._bulk(actions, "delete_batch")
 
     async def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching the query."""
@@ -730,30 +701,24 @@ class AsyncElasticsearchDatabase(
         # operator set and cannot drift from the sync backend.
         es_query = build_bool_query(query.filters)
 
-        self._check_connection()
-        response = await self._client.count(index=self.index_name, query=es_query)
-        return response["count"]
+        client = self._require_client()
+        response = await client.count(index=self.index_name, query=es_query)
+        return int(response["count"])
 
     async def _count_all(self) -> int:
         """Count all records in the database."""
-        self._check_connection()
-
-        response = await self._client.count(index=self.index_name)
-        return response["count"]
+        response = await self._require_client().count(index=self.index_name)
+        return int(response["count"])
 
     async def clear(self) -> int:
         """Clear all records from the database."""
-        self._check_connection()
-
-        # Get count before deletion
+        client = self._require_client()
         count = await self._count_all()
 
-        # Delete by query - delete all documents
-        response = await self._client.delete_by_query(
+        response = await client.delete_by_query(
             index=self.index_name, query={"match_all": {}}, refresh=self.refresh
         )
-
-        return response.get("deleted", count)
+        return int(response.get("deleted", count))
 
     async def stream_read(
         self, query: Query | None = None, config: StreamConfig | None = None
@@ -767,7 +732,7 @@ class AsyncElasticsearchDatabase(
         es_query = build_bool_query(query.filters) if query and query.filters else {"match_all": {}}
 
         # Initial search with scroll
-        response = await self._client.search(
+        response = await self._require_client().search(
             index=self.index_name, query=es_query, scroll="2m", size=config.batch_size
         )
 
@@ -783,11 +748,11 @@ class AsyncElasticsearchDatabase(
                     yield record
 
                 # Get next batch
-                response = await self._client.scroll(scroll_id=scroll_id, scroll="2m")
+                response = await self._require_client().scroll(scroll_id=scroll_id, scroll="2m")
                 hits = response["hits"]["hits"]
         finally:
             # Clear scroll
-            await self._client.clear_scroll(scroll_id=scroll_id)
+            await self._require_client().clear_scroll(scroll_id=scroll_id)
 
     async def stream_write(
         self, records: AsyncIterator[Record], config: StreamConfig | None = None
@@ -887,7 +852,7 @@ class AsyncElasticsearchDatabase(
 
         # Execute search
         try:
-            response = await self._client.search(
+            response = await self._require_client().search(
                 index=self.index_name,
                 **query,  # Unpack the query dict directly
                 size=k,
@@ -972,7 +937,7 @@ class AsyncElasticsearchDatabase(
 
         # Update index mapping
         try:
-            await self._client.indices.put_mapping(
+            await self._require_client().indices.put_mapping(
                 index=self.index_name, properties={f"data.{vector_field}": mapping}
             )
 
@@ -1103,7 +1068,7 @@ class AsyncElasticsearchDatabase(
             if filter_query:
                 body["post_filter"] = filter_query
 
-            response = await self._client.search(
+            response = await self._require_client().search(
                 index=self.index_name,
                 body=body,
             )
@@ -1211,7 +1176,7 @@ class AsyncElasticsearchDatabase(
         }
 
         try:
-            response = await self._client.search(
+            response = await self._require_client().search(
                 index=self.index_name,
                 body=body,
             )

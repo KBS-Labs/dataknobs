@@ -273,56 +273,17 @@ class TestElasticsearchRangeOperators:
     """Test BETWEEN operators with real Elasticsearch backend."""
 
     @pytest.fixture
-    def es_db(self):
-        """Create an Elasticsearch database connection."""
+    def es_db(self, make_elasticsearch_test_index):
+        """Create an Elasticsearch database over an index of its own."""
         from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 
-        import requests
-
-        es_host = os.getenv("ELASTICSEARCH_HOST", "localhost:9200")
-        if ":" in es_host:
-            host, port = es_host.split(":")
-            port = int(port)
-        else:
-            host = es_host
-            port = 9200
-
-        db = SyncElasticsearchDatabase(
-            config={
-                "host": host,
-                "port": port,
-                "index": "test_range_index",
-                "refresh": True,  # Immediate refresh for testing
-            }
-        )
-
-        # Connect
-        db.connect()
-
-        # Clean up any existing index. Deleting an index that is not there
-        # returns False rather than raising, so the only failure this has to
-        # tolerate is the server going away between connect() and here.
-        try:
-            db.es_index.delete()
-        except requests.RequestException:
-            pass
-
-        # Create fresh index
-        db.es_index.create()
-
-        yield db
-
-        # Cleanup. Tolerate broadly and always disconnect: this runs while an
-        # assertion failure may already be propagating, and a teardown error
-        # would replace it with a less useful one. ValueError joins
-        # RequestException because the response handler parses with json.loads,
-        # so a non-JSON error body raises from the parse, not the transport.
-        try:
-            db.es_index.delete()
-        except (requests.RequestException, ValueError):
-            pass
-        finally:
-            db.disconnect()
+        for config in make_elasticsearch_test_index("test_range_"):
+            db = SyncElasticsearchDatabase(config)
+            db.connect()
+            try:
+                yield db
+            finally:
+                db.close()
 
     def test_numeric_between_elasticsearch(self, es_db):
         """Test BETWEEN with numeric values in Elasticsearch."""

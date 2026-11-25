@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`make_elasticsearch_test_index` logs an index deletion Elasticsearch
+  refused**, at WARNING; it went unreported.
 - **A registry bounds its own error once a factory has added words to it.**
   An error a `PluginRegistry` raised -- a nested lookup that missed, a nested
   factory's bounded failure -- passes through an outer factory as itself,

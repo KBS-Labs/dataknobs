@@ -1,6 +1,5 @@
 """Tests for Elasticsearch backend implementation."""
 
-import os
 import uuid
 
 import pytest
@@ -13,8 +12,8 @@ pytestmark = requires_real_elasticsearch
 
 
 @pytest.fixture
-def elasticsearch_config():
-    """Connection config both Elasticsearch backends accept.
+def elasticsearch_config(make_elasticsearch_test_index):
+    """Connection config both Elasticsearch backends accept, over its own index.
 
     Only ``index`` and ``refresh`` are shared surface beyond host/port --
     the sync and async backends diverge past that, so anything else goes
@@ -22,12 +21,7 @@ def elasticsearch_config():
     how ``settings`` (a sync-only field) came to be sent to the async
     backend, which has no field for it and hardcodes its index settings.
     """
-    return {
-        "host": os.environ.get("ELASTICSEARCH_HOST", "localhost"),
-        "port": int(os.environ.get("ELASTICSEARCH_PORT", "9200")),
-        "index": f"test_records_{uuid.uuid4().hex[:8]}",  # Unique index per test
-        "refresh": True,  # Immediate refresh for testing
-    }
+    yield from make_elasticsearch_test_index("test_records_")
 
 
 @pytest.fixture
@@ -56,8 +50,6 @@ def sync_db(sync_elasticsearch_config):
     # Cleanup: delete the test index
     try:
         db.clear()
-        # Delete the index completely
-        db.es_index.delete()
     except Exception:
         pass
     db.close()
@@ -71,8 +63,6 @@ async def async_db(elasticsearch_config):
     # Cleanup
     try:
         await db.clear()
-        # Delete the index completely
-        db._sync_db.es_index.delete()
     except Exception:
         pass
     await db.close()
@@ -85,9 +75,8 @@ class TestSyncElasticsearchDatabase:
         """Test creating an Elasticsearch database."""
         db = SyncDatabase.from_backend("elasticsearch", sync_elasticsearch_config)
         assert db is not None
-        assert hasattr(db, "es_index")
         assert hasattr(db, "index_name")
-        assert db.es_index.exists()
+        assert db.count() == 0
         db.close()
 
     def test_crud_operations(self, sync_db):

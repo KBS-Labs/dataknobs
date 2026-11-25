@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: an Elasticsearch request that fails raises.** Only a missing
+  record is `None` or `False`; a rejected query, a closed, blocked or missing
+  index, and an unreachable server raise the client's own error, the same one
+  on both twins. What a failure answered before:
+
+  | Operation | sync | async |
+  |---|---|---|
+  | `search`, `count` | `[]`, `0` | raised |
+  | `read`, `read_batch` | `None` | `None` |
+  | `get_version`, `exists` | `None`, `False` | raised |
+  | `update`, `delete` | `False` | `False` |
+  | `create_batch`, `upsert_batch` | `[]` | `[]` |
+  | `update_batch`, `delete_batch` | `[False]` | `[False]` |
+  | `clear` | `0` | raised |
+
+  A `search` that sorts on a field Elasticsearch cannot sort by is one of
+  these: the sync backend returned no records for it.
+- **BREAKING: a failed item in an Elasticsearch batch raises `DatabaseError`**,
+  whose `context["failures"]` names every one, after the rest of the batch has
+  been written. `create_batch` and `upsert_batch` left the id out of their
+  result. A colliding `create_batch` id is still `DuplicateRecordError` unless
+  something else failed too. `delete_batch` answers `False` for a missing
+  record on both twins; the sync one answered `True`. The async batches are now
+  sent in requests of up to 500 records, as the sync ones are.
+- **BREAKING: `SyncElasticsearchDatabase` uses the official client alone**, and
+  no longer has `es_index` or `es_client`. It raises
+  `RuntimeError` for any operation after `close()`, which now closes the
+  client. `create` and `upsert` raise the client's error where they raised
+  `DatabaseError`, and retry as the client does (502, 503 and 504, without a
+  delay) where they retried any 5xx with a backoff.
 - **BREAKING: `SyncS3Database` and `AsyncS3Database` read `prefix` the same
   way**, so one config is one key layout. Unset is `records/`, any other
   value takes one trailing slash, and empty is the bucket root. A record `x`:
@@ -1731,6 +1761,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`SyncElasticsearchDatabase` no longer prints to stderr.** Every request
+  wrote its response there, document bodies included.
+- **`SyncElasticsearchDatabase.connect()` raises when it cannot create its
+  index**, and either twin accepts an index another process created first.
+- **`AsyncElasticsearchDatabase.exists` returns a `bool`**; it returned the
+  client's response object.
 - **`AsyncS3Database` lists its own prefix and no other.** A database at
   prefix `p` also listed, counted and searched the records of one at `pq`, and
   its `clear()` deleted them.

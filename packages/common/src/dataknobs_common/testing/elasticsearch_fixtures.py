@@ -352,8 +352,8 @@ try:
         - ``index``: ``f"{index_prefix}{uuid8}"``
         - ``refresh``: ``True`` (immediate visibility for tests)
 
-        Cleanup is best-effort: ``ConnectionError`` / ``ValueError`` during
-        teardown are logged at WARNING and swallowed so a teardown failure
+        Cleanup is best-effort: ``ConnectionError`` / ``ValueError`` /
+        ``ElasticsearchRequestError`` during teardown are logged at WARNING and swallowed so a teardown failure
         doesn't mask the real test outcome. Other exceptions propagate so
         unexpected failures surface.
 
@@ -369,6 +369,7 @@ try:
 
         def factory(index_prefix: str) -> Iterator[dict[str, Any]]:
             from dataknobs_utils.elasticsearch_utils import (
+                ElasticsearchRequestError,
                 SimplifiedElasticsearchIndex,
             )
 
@@ -388,7 +389,7 @@ try:
                     )
                     if es_index.exists():
                         es_index.delete()
-                except (ConnectionError, ValueError) as exc:
+                except (ConnectionError, ElasticsearchRequestError, ValueError) as exc:
                     logger.warning(
                         "Failed to clean up Elasticsearch index %s: %s",
                         config["index"],
