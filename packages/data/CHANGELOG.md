@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   | sort on a field no record has | raised | the value is missing from each |
   | range with a string bound on a text field | compared lowercased words | compares the value |
   | string equality or pattern on a field mapped `keyword` | matched nothing | matches |
+  | string equality on a field mapped `date` or `ip` | matched nothing | compares the value; raises for a string that is not one |
   | number equality on a text field | matched any word | matches the whole value |
 
   The first query naming a field asks the index about it, one request per query

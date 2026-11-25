@@ -91,6 +91,22 @@ _EXISTENCE_OPS = frozenset({Operator.EXISTS, Operator.NOT_EXISTS})
 _ANALYZED_TYPES = frozenset({"text", "match_only_text"})
 #: Elasticsearch types that hold a string's full value.
 _EXACT_STRING_TYPES = frozenset({"keyword", "constant_keyword", "wildcard", "flattened"})
+#: Elasticsearch types for which a string is not a value but a spelling of one:
+#: it reads ``"3"`` as the number and refuses a string that spells none.
+_NOT_STRING_TYPES = frozenset(
+    {
+        "byte",
+        "short",
+        "integer",
+        "long",
+        "unsigned_long",
+        "half_float",
+        "float",
+        "double",
+        "scaled_float",
+        "boolean",
+    }
+)
 
 
 class FieldTypes:
@@ -149,13 +165,25 @@ class FieldTypes:
         return self._exact.get(name, f"data.{name}")
 
     def holds_exact_strings(self, name: str) -> bool:
-        """Whether :meth:`value_path` can be matched against a string or a pattern.
+        """Whether :meth:`value_path` can be matched against a pattern.
 
         True for a field that is not mapped, which no document has a value for.
         """
         if is_storage_key_field(name) or name in self._exact or name not in self._types:
             return True
         return bool(self._types[name] & _EXACT_STRING_TYPES)
+
+    def equals_no_string(self, name: str) -> bool:
+        """Whether no string equals a field's value, by how it is mapped.
+
+        True for a number or a boolean, and for text whose full value nothing
+        holds: its own terms are words, and a word is not the value. False for a
+        date, an IP address or any other type a string is the way to write:
+        Elasticsearch reads the operand as the type, as it does a range's.
+        """
+        if name in self._exact or name not in self._types:
+            return False
+        return self._types[name] <= _NOT_STRING_TYPES | _ANALYZED_TYPES
 
 
 def condition_fields(condition: Condition | None) -> set[str]:
@@ -230,12 +258,14 @@ def _field_path(filter_obj: Filter, types: FieldTypes) -> str:
     if op in _EXISTENCE_OPS and not is_storage_key_field(name):
         # A sub-field leaves out a value past its ``ignore_above``.
         return f"data.{name}"
-    matches_strings = op in _KEYWORD_PATTERN_OPS or (
-        op in _KEYWORD_EQUALITY_OPS and _is_string_value(filter_obj.value)
-    )
-    if matches_strings and not types.holds_exact_strings(name):
-        # Elasticsearch refuses a string or a pattern on a number, date or
-        # boolean. No string is there to match, and a path nothing maps says so.
+    if op in _KEYWORD_PATTERN_OPS:
+        matches_nothing = not types.holds_exact_strings(name)
+    elif op in _KEYWORD_EQUALITY_OPS and _is_string_value(filter_obj.value):
+        matches_nothing = types.equals_no_string(name)
+    else:
+        matches_nothing = False
+    if matches_nothing:
+        # No string is there to match, and a path nothing maps says so.
         return f"data.{name}.keyword"
     return types.value_path(name)
 

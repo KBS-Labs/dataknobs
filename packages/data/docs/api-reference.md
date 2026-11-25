@@ -1398,8 +1398,12 @@ pre-filters agree:
   field mapped as `text` is compared and sorted through its keyword sub-field,
   whatever that is called; a keyword, number, date or boolean field is used
   directly. A field the index does not map yet matches nothing, sorts as a
-  missing value, and is asked about again by the next query. A string equality or
-  a pattern on a number, date or boolean field matches nothing.
+  missing value, and is asked about again by the next query. A pattern on
+  a number, date or boolean field matches nothing, and no string equals a number
+  or a boolean.
+- **A string compared with a date field is read as a date** by equality and range
+  alike, and Elasticsearch refuses one that is not a date. An `ip` field reads
+  its operand the same way.
 - **A `text` field with no keyword sub-field** (a mapping made elsewhere) has no
   full value to reach: equality and patterns match nothing, a range compares its
   analyzed words, and Elasticsearch refuses to sort by it.

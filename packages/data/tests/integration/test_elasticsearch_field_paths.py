@@ -32,6 +32,8 @@ FOREIGN_MAPPINGS: dict[str, Any] = {
                 "kw": {"type": "keyword"},
                 "raw": {"type": "text", "fields": {"exact": {"type": "keyword"}}},
                 "day": {"type": "date"},
+                "ip": {"type": "ip"},
+                "words": {"type": "text"},
                 "flat": {"type": "flattened"},
                 "alias": {"type": "alias", "path": "data.kw"},
             }
@@ -39,9 +41,36 @@ FOREIGN_MAPPINGS: dict[str, Any] = {
     }
 }
 ROWS: dict[str, dict[str, Any]] = {
-    "a": {"kw": "Banana", "raw": "Banana", "day": "2024-01-01", "rank": 3, "flat": {"k": "x"}},
-    "b": {"kw": "apple", "raw": "apple", "day": "2023-01-01", "rank": 1, "flat": {"k": "y"}},
-    "c": {"kw": "Cherry", "raw": "Cherry", "day": "2025-01-01", "rank": 2, "flat": {"k": "z"}},
+    "a": {
+        "kw": "Banana",
+        "raw": "Banana",
+        "words": "banana",
+        "day": "2024-01-01",
+        "rank": 3,
+        "flat": {"k": "x"},
+        "ip": "10.0.0.1",
+        "flag": True,
+    },
+    "b": {
+        "kw": "apple",
+        "raw": "apple",
+        "words": "apple",
+        "day": "2023-01-01",
+        "rank": 1,
+        "flat": {"k": "y"},
+        "ip": "10.0.0.2",
+        "flag": False,
+    },
+    "c": {
+        "kw": "Cherry",
+        "raw": "Cherry",
+        "words": "cherry",
+        "day": "2025-01-01",
+        "rank": 2,
+        "flat": {"k": "z"},
+        "ip": "10.0.0.3",
+        "flag": False,
+    },
 }
 
 
@@ -154,8 +183,30 @@ class TestAnIndexMappedElsewhere:
             ("flat.k", Operator.EQ, "y", ["b"]),
             ("flat.k", Operator.BETWEEN, ["y", "z"], ["b", "c"]),
             ("alias", Operator.EQ, "apple", ["b"]),
-            # A string or a pattern never matches a number or a date.
+            # Equality reads a date as a range does.
+            ("day", Operator.EQ, "2024-01-01", ["a"]),
+            ("day", Operator.EQ, "2024-01-01T00:00:00Z", ["a"]),
+            ("day", Operator.EQ, datetime(2024, 1, 1), ["a"]),
+            ("day", Operator.NEQ, "2024-01-01", ["b", "c"]),
+            ("day", Operator.IN, ["2024-01-01", "2023-01-01"], ["a", "b"]),
+            ("day", Operator.NOT_IN, ["2024-01-01"], ["b", "c"]),
+            ("day", Operator.EQ, "apple", "BadRequestError"),
+            ("day", Operator.GT, "apple", "BadRequestError"),
+            ("ip", Operator.EQ, "10.0.0.2", ["b"]),
+            ("ip", Operator.NEQ, "10.0.0.2", ["a", "c"]),
+            ("ip", Operator.IN, ["10.0.0.1", "10.0.0.3"], ["a", "c"]),
+            # A string is never equal to a number or a boolean, whatever it spells.
             ("rank", Operator.EQ, "apple", []),
+            ("rank", Operator.EQ, "3", []),
+            ("rank", Operator.NEQ, "3", ["a", "b", "c"]),
+            ("rank", Operator.IN, ["3"], []),
+            ("flag", Operator.EQ, "true", []),
+            ("flag", Operator.EQ, True, ["a"]),
+            # Only words are reachable here, and equality is not about a word.
+            ("words", Operator.EQ, "apple", []),
+            ("words", Operator.NEQ, "apple", ["a", "b", "c"]),
+            ("words", Operator.IN, ["apple"], []),
+            # A pattern matches neither a number nor a date.
             ("rank", Operator.LIKE, "1%", []),
             ("day", Operator.STARTS_WITH, "20", []),
         ],

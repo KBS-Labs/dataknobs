@@ -516,13 +516,58 @@ class TestAFieldThatHoldsNoStrings:
     def test_is_compared_directly(self, kind: str, op: Operator, value: object) -> None:
         assert _field_path(Filter("x", op, value), _learned(x=kind)) == "data.x"
 
-    @pytest.mark.parametrize(
-        ("op", "value"),
-        [(Operator.EQ, "s"), (Operator.IN, ["s"]), (Operator.LIKE, "p"), (Operator.REGEX, "p")],
-    )
-    def test_matches_no_string(self, kind: str, op: Operator, value: object) -> None:
+    @pytest.mark.parametrize("op", [Operator.LIKE, Operator.STARTS_WITH, Operator.REGEX])
+    def test_matches_no_pattern(self, kind: str, op: Operator) -> None:
         # Elasticsearch refuses these on the field itself.
-        assert _field_path(Filter("x", op, value), _learned(x=kind)) == "data.x.keyword"
+        assert _field_path(Filter("x", op, "p"), _learned(x=kind)) == "data.x.keyword"
+
+
+STRING_EQUALITIES = [
+    (Operator.EQ, "s"),
+    (Operator.NEQ, "s"),
+    (Operator.IN, ["s"]),
+    (Operator.NOT_IN, ["s"]),
+]
+
+
+@pytest.mark.parametrize(("op", "value"), STRING_EQUALITIES)
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "byte",
+        "short",
+        "integer",
+        "long",
+        "unsigned_long",
+        "half_float",
+        "float",
+        "double",
+        "scaled_float",
+        "boolean",
+    ],
+)
+def test_no_string_equals_a_number_or_boolean(kind: str, op: Operator, value: object) -> None:
+    assert _field_path(Filter("x", op, value), _learned(x=kind)) == "data.x.keyword"
+
+
+@pytest.mark.parametrize(("op", "value"), STRING_EQUALITIES)
+@pytest.mark.parametrize("kind", ["date", "date_nanos", "ip", "version", "date_range"])
+def test_a_string_is_how_other_values_are_written(kind: str, op: Operator, value: object) -> None:
+    assert _field_path(Filter("x", op, value), _learned(x=kind)) == "data.x"
+
+
+@pytest.mark.parametrize(("op", "value"), STRING_EQUALITIES)
+@pytest.mark.parametrize("kind", ["text", "match_only_text"])
+def test_no_string_equals_text_with_no_full_value(kind: str, op: Operator, value: object) -> None:
+    types = FieldTypes()
+    types.learn(["x"], {"data.x": {kind: {}}})
+    assert _field_path(Filter("x", op, value), types) == "data.x.keyword"
+
+
+def test_an_alias_over_indices_that_map_a_field_both_ways_asks_the_field() -> None:
+    types = FieldTypes()
+    types.learn(["x"], {"data.x": {"long": {}, "date": {}}})
+    assert _field_path(Filter("x", Operator.EQ, "2024"), types) == "data.x"
 
 
 @pytest.mark.parametrize(("op", "value"), ALL_OPERATORS)
