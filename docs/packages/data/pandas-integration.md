@@ -346,6 +346,10 @@ print(f"Not found: {result['not_found']}")
 print(f"Failed: {result['failed']}")
 ```
 
+The frame's columns replace those fields of each record, which keeps its other
+fields and its metadata. Each record is read before it is written, so a change
+made to it between the two is overwritten.
+
 Rows whose ID is not in the database count as `not_found` rather than
 being inserted: `update_from_dataframe` updates, it does not upsert.
 

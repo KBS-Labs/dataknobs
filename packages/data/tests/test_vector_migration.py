@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
-from dataknobs_data.fields import FieldType
+from dataknobs_data.fields import FieldType, VectorField
 from dataknobs_data.records import Record
 from dataknobs_data.schema import DatabaseSchema, FieldSchema
 from dataknobs_data.testing import text_embedding as _text_embedding
@@ -329,6 +329,78 @@ class TestVectorMigration:
         # Check rollback occurred
         assert len(migration._rollback_data) > 0
         assert migration._rollback_data  # Should have stored original data
+
+    async def test_rollback_restores_the_whole_record(self):
+        """It restored field values alone, erasing metadata and field metadata."""
+        db = AsyncMemoryDatabase()
+        db.schema.add_vector_field("embedding", dimensions=2, source_field="content")
+        original = Record(
+            data={"content": "ok", "tags": {"k": ["v"]}}, metadata={"owner": {"name": "o"}}
+        )
+        original.fields["other"] = VectorField(
+            value=[0.1, 0.2], name="other", source_field="content", model_name="m"
+        )
+        migrated_id = await db.create(original)
+        before = await db.read(migrated_id)
+        for _ in range(2):
+            await db.create(Record(data={"content": "refused"}))
+        seen: list[bool] = []
+
+        async def embed(text: str) -> np.ndarray:
+            if text == "refused":
+                stored = await db.read(migrated_id)
+                seen.append("embedding" in stored.fields)
+                raise RuntimeError("Embedding service failed")
+            return np.array([1.0, 0.0])
+
+        migration = VectorMigration(
+            source_db=db,
+            embedding_fn=embed,
+            config=MigrationConfig(
+                enable_rollback=True, batch_size=1, max_retries=1, retry_delay=0.0
+            ),
+        )
+        with pytest.raises(RuntimeError, match="Embedding service failed"):
+            await migration.add_vectors_to_existing({"embedding": "content"})
+
+        assert all(seen), "the first record was never migrated, so nothing was rolled back"
+        after = await db.read(migrated_id)
+        assert after.metadata == before.metadata == {"owner": {"name": "o"}}
+        assert after.fields.keys() == before.fields.keys()
+        assert after.get_value("tags") == {"k": ["v"]}
+        assert isinstance(after.fields["other"], VectorField)
+        assert after.fields["other"].metadata == before.fields["other"].metadata
+        assert after.id == before.id
+
+    async def test_rollback_restores_what_the_target_held(self):
+        """With a target of its own, the source's record is not the original."""
+        source, target = AsyncMemoryDatabase(), AsyncMemoryDatabase()
+        source.schema.add_vector_field("embedding", dimensions=2, source_field="content")
+        target.schema.add_vector_field("embedding", dimensions=2, source_field="content")
+        for record_id, text in (("a", "ok"), ("b", "refused"), ("c", "refused")):
+            await source.upsert(record_id, Record({"content": text}))
+        await target.upsert("a", Record({"content": "ok", "kept": 1}, metadata={"owner": "o"}))
+
+        async def embed(text: str) -> np.ndarray:
+            if text == "refused":
+                raise RuntimeError("Embedding service failed")
+            return np.array([1.0, 0.0])
+
+        migration = VectorMigration(
+            source_db=source,
+            target_db=target,
+            embedding_fn=embed,
+            config=MigrationConfig(
+                enable_rollback=True, batch_size=1, max_retries=1, retry_delay=0.0
+            ),
+        )
+        with pytest.raises(RuntimeError, match="Embedding service failed"):
+            await migration.add_vectors_to_existing({"embedding": "content"})
+
+        after = await target.read("a")
+        assert {name: f.value for name, f in after.fields.items()} == {"content": "ok", "kept": 1}
+        assert after.metadata == {"owner": "o"}
+        assert await target.read("b") is None
 
     @pytest.mark.parametrize("via_config", [False, True], ids=["argument", "config"])
     async def test_the_retry_delay_given_is_the_one_waited(self, via_config):

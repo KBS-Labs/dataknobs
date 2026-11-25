@@ -496,6 +496,9 @@ def test_a_timeout_reaches_the_caller_through_a_skipping_update():
     going after a row raises without even logging it.
     """
     db = StallingWitness()
+    # A row whose record is not stored never reaches the write that stalls.
+    for i in range(8):
+        asyncio.run(db.upsert(f"r{i}", Record({"n": i})))
     ops = BatchOperations(db, timeout=0.1)
 
     with pytest.raises(OperationTimeoutError):

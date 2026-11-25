@@ -20,6 +20,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def replacing_script(doc: dict[str, Any]) -> dict[str, Any]:
+    """The script of an update that replaces the stored document with ``doc``.
+
+    A partial update (``doc``) merges into the stored document instead, keeping
+    every field, nested key and metadata key the new one lacks. Indexing would
+    replace it, and would also create a document that is not there.
+
+    ``doc`` is a parameter, so one compiled script serves every update.
+    """
+    return {"lang": "painless", "source": "ctx._source = params.doc", "params": {"doc": doc}}
+
+
 def es_version_token(seq_no: int, primary_term: int) -> str:
     """Compose the opaque optimistic-concurrency token for an ES document.
 

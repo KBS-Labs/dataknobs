@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-11-25T15:41:56Z",
+  "timestamp": "2026-11-25T16:37:00Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.13.9 (Homebrew 2026-11-17 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "ci-required-check-reads-change-detection",
-  "git_commit": "fee9df6efaf57ba985df053124934a39a863ea6d",
+  "git_branch": "elasticsearch-update-replaces",
+  "git_commit": "644583004c49ae6c803700a24ec06a899642ee6e",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

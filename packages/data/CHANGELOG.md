@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: an Elasticsearch `update` replaces the stored record**, as on the
+  other backends, on both twins. `update`, `update_batch` and an `upsert` with an
+  `expected_version` merged into it, so a field, nested key or metadata key the
+  new record lacked was still stored, searched and returned. Code that passed
+  only the changed fields reads the record and updates that. The update is a
+  Painless script, so a cluster whose `script.allowed_types` or
+  `script.allowed_contexts` excludes inline update scripts refuses it. One that
+  changes nothing still advances the version token.
+- **BREAKING: `BatchOperations.update_from_dataframe` keeps the fields and
+  metadata the frame does not name.** It replaced each record with its row,
+  erasing them. Each record is read before it is written. Use `update_batch` to
+  replace whole records.
 - **BREAKING: an Elasticsearch filter or sort reaches a field by how the index
   maps it**, on both twins, instead of by guessing.
 
@@ -1875,6 +1887,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   containing `/` lost its slashes.
 - **`SyncS3Database.search` and `stream_read` return a record with no fields**,
   which they left out.
+- **A `VectorMigration` rollback restores the whole record** the target held.
+  It wrote the source's field values alone, erasing metadata and field types.
+  With rollback enabled, `add_vectors_to_existing` reads each record from the
+  target first.
 - **`VectorMigration(retry_delay=...)` is the delay `add_vectors_to_existing`
   waits** between embedding attempts. It was stored and never read, so every
   retry waited one second. `MigrationConfig` gains `retry_delay` (default
