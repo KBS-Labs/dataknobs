@@ -167,14 +167,7 @@ def _ids(records: list[Record]) -> set[str]:
 def _expected(db: Any, case: str, expected: set[str]) -> set[str]:
     if _is_elasticsearch(db):
         return ELASTICSEARCH.get(case, expected)
-    if type(db).__name__ == "AsyncPostgresDatabase":
-        return ASYNC_POSTGRES.get(case, expected)
     return expected
-
-
-#: asyncpg sends a float to a ``numeric`` comparison as the decimal it is
-#: exactly, which no fraction written as JSON equals; ``EQ`` answers the same.
-ASYNC_POSTGRES: dict[str, set[str]] = {"real": set()}
 
 
 def _is_elasticsearch(db: Any) -> bool:

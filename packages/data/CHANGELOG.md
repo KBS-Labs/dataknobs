@@ -1880,6 +1880,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`AsyncPostgresDatabase` compares a float with a stored number as its sync
+  twin does.** `asyncpg` sent the decimal a double is exactly, which no stored
+  `0.1` equals, so `EQ`, `IN` and `CONTAINS` missed the record, `NEQ` and
+  `NOT_IN` matched it, and an ordering or a range answered wrongly at its own
+  bound. A float past 2**53 that its decimal does not equal, such as `1e30`,
+  was missed too. The bound is now the decimal `jsonb` holds, on both twins. So
+  a float such as `2.0**60`, whose decimal is another number, now equals that
+  stored float and no longer the stored integer it equals in Python.
 - **`SyncElasticsearchDatabase` no longer prints to stderr.** Every request
   wrote its response there, document bodies included.
 - **`SyncElasticsearchDatabase.connect()` raises when it cannot create its

@@ -584,9 +584,13 @@ Numbers compare and sort by value, exactly, as Python compares them: `2**53 + 1`
 is not `2**53`, and the float `1e30` is not the integer `10**30`. A bound no
 engine can bind (an integer past 64 bits on SQLite, past 128 on DuckDB)
 neither raises nor rounds: it is compared through the stored value nearest it
-on the side the operator needs. Two limits are the engines' own. SQLite reads
+on the side the operator needs. Three limits are the engines' own. SQLite reads
 a stored integer past 64 bits as a double, and DuckDB one past 128 bits, so
 past those magnitudes a stored integer compares as the double nearest it.
+PostgreSQL's `jsonb` holds a float as the decimal JSON writes it as, so a float
+bound is sent as that decimal: `0.1` equals a stored `0.1`. There, unlike in
+Python, the float `1e30` is the integer `10**30`, and `2.0**60` equals a stored
+`2.0**60` but not a stored `2**60`.
 DuckDB reads a JSON number for a sort or a filter in a type that holds it, an
 integer as `HUGEINT` and any other number as `DOUBLE`, so an expression index
 on a cast of the field does not serve those either.
