@@ -4,13 +4,15 @@ import asyncio
 import importlib
 import logging
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from dataknobs_common.testing import assert_no_leaked_bridge_threads
+
+from dataknobs_data import Filter, Operator
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,27 @@ def _no_leaked_daemon_threads() -> Iterator[None]:
     """
     with assert_no_leaked_bridge_threads():
         yield
+
+
+@pytest.fixture
+def filters_to_ask() -> Callable[[str, list[Filter]], list[Filter]]:
+    """The filters worth asking one backend, by its kind.
+
+    S3 reads every record back for each search and answers with
+    ``Filter.matches``, as the memory backend does, so what it adds is what
+    became of each value it stored: it is asked every ``EQ``, and the first
+    filter of each other operator. Every other kind is asked them all.
+    """
+
+    def choose(kind: str, filters: list[Filter]) -> list[Filter]:
+        if kind != "s3":
+            return filters
+        first: dict[Operator, Filter] = {}
+        for spec in filters:
+            first.setdefault(spec.operator, spec)
+        return [s for s in filters if s.operator == Operator.EQ or s is first[s.operator]]
+
+    return choose
 
 
 _TEST_INDEX_PREFIXES = ("test_records_", "test_factory_vectors_")
