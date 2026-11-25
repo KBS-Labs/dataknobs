@@ -52,6 +52,12 @@ extending it — union the default in when adding a type.
 It is a source scan, not a runtime check: the defect is a shape in the code,
 and the runtime path that reaches any given site may need a live database to
 trigger.
+
+It reads one handler at a time, which leaves two shapes it does not see: an
+exception kept in a variable and quoted by a raise *after* the handler (the last
+error of a retry loop), and a message built by a helper that is itself what is
+raised (``raise self._error(exc)``). A site written either way needs a test of
+its own.
 """
 
 from __future__ import annotations
@@ -113,57 +119,137 @@ def _is_under(name: str, package: str) -> bool:
     return name == package or name.startswith(f"{package}.")
 
 
-def _module_names(root: ModuleType) -> list[str]:
-    """Every module under ``root``, named from its file.
+def _module_files(root: ModuleType) -> dict[str, Path]:
+    """Every file under ``root``, by the dotted name it has or would have.
 
     From the files rather than ``pkgutil``, which does not descend into a
     directory without an ``__init__.py``. The scan reads those files, so the
     errors they define have to be named too.
     """
-    names: set[str] = set()
+    files: dict[str, Path] = {}
     for location in getattr(root, "__path__", []):
         base = Path(location)
-        for path in base.rglob("*.py"):
+        for path in sorted(base.rglob("*.py")):
             parts = path.relative_to(base).with_suffix("").parts
-            if parts[-1] == "__main__":
-                continue
             if parts[-1] == "__init__":
                 parts = parts[:-1]
-            if parts and all(part.isidentifier() for part in parts):
-                names.add(".".join((root.__name__, *parts)))
-    return sorted(names)
+            files[".".join((root.__name__, *parts))] = path
+    if not files and getattr(root, "__file__", None):
+        files[root.__name__] = Path(str(root.__file__))
+    return files
 
 
-def _names_bound_in(module: ModuleType, package: str) -> Iterator[str]:
+def _is_importable(name: str) -> bool:
+    """Whether to import the module: a legal name, and not a program."""
+    parts = name.split(".")
+    return parts[-1] != "__main__" and all(part.isidentifier() for part in parts)
+
+
+class _Owners(NamedTuple):
+    """Whose exceptions are guarded."""
+
+    packages: frozenset[str]
+
+    def own(self, module: str) -> bool:
+        """Whether a module belongs to the scanned package, dataknobs or ``also``."""
+        top = module.split(".", maxsplit=1)[0]
+        return (
+            top == "dataknobs"
+            or top.startswith("dataknobs_")
+            or any(_is_under(module, package) for package in self.packages)
+        )
+
+
+def _names_bound_in(module: ModuleType, owners: _Owners) -> Iterator[str]:
     """The names this module binds to an exception class the project owns."""
     for name, obj in vars(module).items():
         if not (isinstance(obj, type) and issubclass(obj, BaseException)):
             continue
-        if issubclass(obj, DataknobsError) or _is_under(obj.__module__, package):
+        if issubclass(obj, DataknobsError) or owners.own(obj.__module__):
             yield name
 
 
+class _SourceNames:
+    """What the files themselves say, for names no imported module binds.
+
+    An error imported or defined inside a function, or nested in a class, or
+    raised as ``module.SomeError``, is not among a module's own names. Neither
+    is one in a file that is not imported. A name is taken when some file raises
+    it, so only a raise site decides that a class or an import is an error.
+    """
+
+    def __init__(self, owners: _Owners) -> None:
+        self._owners = owners
+        self._classes: set[str] = set()
+        self._raised: set[str] = set()
+        self._from_owned: set[str] = set()
+
+    def read(self, path: Path) -> None:
+        tree = _parse(path)
+        imported: set[str] = set()
+        calls: list[ast.Call] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                self._classes.add(node.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level or self._owners.own(node.module or ""):
+                    imported.update(alias.asname or alias.name for alias in node.names)
+            elif isinstance(node, ast.Import):
+                imported.update(
+                    alias.asname or alias.name.split(".")[0]
+                    for alias in node.names
+                    if self._owners.own(alias.name)
+                )
+            elif isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
+                calls.append(_unwrap_marks(node.exc))
+        for call in calls:
+            if (name := _raised_name(call)) is None:
+                continue
+            self._raised.add(name)
+            if _leftmost_name(call.func) in imported:
+                self._from_owned.add(name)
+
+    def names(self) -> frozenset[str]:
+        return frozenset((self._classes & self._raised) | self._from_owned)
+
+
+def _leftmost_name(node: ast.expr) -> str | None:
+    """``a`` of ``a.b.c``, or of ``a``."""
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
 def error_names_in(
-    package: str | ModuleType, *, skip_modules: Iterable[str] = ()
+    package: str | ModuleType,
+    *,
+    skip_modules: Iterable[str] = (),
+    also: Iterable[str] = (),
 ) -> frozenset[str]:
-    """Every error name a package's raise sites can use, read from its modules.
+    """The error names a package's raise sites use, read from its modules.
 
     Imports each module under ``package`` and collects the names it binds to an
     exception class that is a :class:`~dataknobs_common.exceptions.DataknobsError`
-    or is defined in the package. The result includes
-    :data:`GUARDED_ERROR_NAMES`.
+    or is defined in the package, in any dataknobs package, or in one named by
+    ``also``. The files are then read for what no module binds: an error
+    imported or defined inside a function, nested in a class, raised as
+    ``module.SomeError``, or raised in a file that is not imported. The result
+    includes :data:`GUARDED_ERROR_NAMES`.
 
-    A raise site is matched on its bare name, so what matters is the name a
-    module binds rather than the class behind it: an alias and an error imported
-    from another package are both included. An alias made inside a function is
-    not seen; union it on.
+    A raise site is matched on its bare name, so an alias is included under the
+    name the module gives it. Two names are not seen, and have to be unioned on:
+    one assigned inside a function (``err = SomeError``), and one reached through
+    an object another package defines (``self.Inner`` inherited from it).
 
-    ``__main__`` modules are not imported, since importing one runs a program.
+    ``__main__`` modules, and files whose name is not an identifier, are read
+    without being imported.
 
     Args:
         package: The package (or single module) to read, or its dotted name.
-        skip_modules: Dotted names of modules not to import, each with what is
+        skip_modules: Dotted names of modules not to read, each with what is
             under it. An entry matching no module is an error.
+        also: Other packages whose plain exceptions are guarded too, for a
+            project of several.
 
     Returns:
         The names, for ``error_names=`` of
@@ -176,21 +262,30 @@ def error_names_in(
     """
     root = importlib.import_module(package) if isinstance(package, str) else package
     prefix = root.__name__
+    owners = _Owners(frozenset({prefix, *also}))
     skipped = frozenset(skip_modules)
     used: set[str] = set()
     failures: list[str] = []
-    names = set(_names_bound_in(root, prefix))
+    names = set(_names_bound_in(root, owners))
+    source = _SourceNames(owners)
 
-    for name in _module_names(root):
+    for name, path in _module_files(root).items():
         if matched := {entry for entry in skipped if _is_under(name, entry)}:
             used |= matched
             continue
+        source.read(path)
+        if not _is_importable(name):
+            continue
         try:
             module = importlib.import_module(name)
-        except (Exception, SystemExit) as exc:
+        except KeyboardInterrupt:
+            raise
+        except BaseException as exc:
+            # Not `Exception`: `sys.exit` and `pytest.skip` are not, and a skip
+            # here would skip the guard.
             failures.append(f"{name}: {type(exc).__name__}: {exc}")
             continue
-        names.update(_names_bound_in(module, prefix))
+        names.update(_names_bound_in(module, owners))
 
     if stale := sorted(skipped - used):
         listed = "\n".join(f"  {entry}" for entry in stale)
@@ -204,7 +299,7 @@ def error_names_in(
             f"errors they define would go unguarded:\n{listed}\n\n"
             "Install what each needs, or name it in `skip_modules`."
         )
-    return frozenset(names) | GUARDED_ERROR_NAMES
+    return frozenset(names) | source.names() | GUARDED_ERROR_NAMES
 
 
 class BroadExceptFinding(NamedTuple):
@@ -359,12 +454,10 @@ def _raised_name(call: ast.Call) -> str | None:
     return None
 
 
-def _scan_file(
-    path: Path, error_names: frozenset[str], unbounded: frozenset[str]
-) -> list[BroadExceptFinding]:
+def _parse(path: Path) -> ast.Module:
     source = path.read_text(encoding="utf-8")
     try:
-        tree = ast.parse(source, filename=str(path))
+        return ast.parse(source, filename=str(path))
     except SyntaxError as exc:  # pragma: no cover - exercised via the public API
         raise AssertionError(
             f"{path}: could not be parsed, so the guard cannot vouch for it "
@@ -372,6 +465,11 @@ def _scan_file(
             "a file it cannot read reports green on whatever is inside it."
         ) from exc
 
+
+def _scan_file(
+    path: Path, error_names: frozenset[str], unbounded: frozenset[str]
+) -> list[BroadExceptFinding]:
+    tree = _parse(path)
     findings: list[BroadExceptFinding] = []
 
     for handler in (n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler)):

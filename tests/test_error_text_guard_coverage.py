@@ -28,6 +28,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from tests._workspace import ROOT, load_bin_module
 
 #: The function a package's wiring has to call. Named once here rather than in
@@ -104,33 +106,56 @@ def test_every_package_wires_the_error_text_guard() -> None:
     )
 
 
-def _guarded_names_arguments(source: str) -> list[ast.expr]:
-    """What each call to the guard in ``source`` passes as ``error_names``."""
+#: How a wiring spells the root it scans: the package's own ``src``.
+SOURCE_ROOT = "Path(__file__).resolve().parents[1] / 'src'"
+
+
+def _scans_of_source(source: str) -> list[ast.Call]:
+    """Each call to the guard in ``source`` that scans the package's ``src``.
+
+    The root is a name, so the assignment is what is compared. The guard's own
+    suite also calls it on planted files, which are not a wiring.
+    """
+    tree = ast.parse(source)
+    roots = {
+        target.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign) and ast.unparse(node.value) == SOURCE_ROOT
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
     return [
-        keyword.value
-        for node in ast.walk(ast.parse(source))
+        node
+        for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id == GUARD_CALL.rstrip("(")
-        for keyword in node.keywords
-        if keyword.arg == "error_names"
+        and any(isinstance(arg, ast.Name) and arg.id in roots for arg in node.args)
     ]
 
 
-def _derives(argument: ast.expr, import_names: set[str]) -> bool:
-    """Whether an ``error_names`` argument is ``error_names_in`` of this package.
+def _derives(call: ast.Call, import_names: set[str]) -> bool:
+    """Whether a call's ``error_names`` is ``error_names_in`` of this package.
 
     Exactly that call. ``error_names_in(...) | {"X"}`` is a list growing back.
     """
-    return (
-        isinstance(argument, ast.Call)
+    return any(
+        keyword.arg == "error_names"
+        and isinstance(argument := keyword.value, ast.Call)
         and isinstance(argument.func, ast.Name)
         and argument.func.id == "error_names_in"
         and len(argument.args) == 1
         and isinstance(argument.args[0], ast.Constant)
         and argument.args[0].value in import_names
         and not argument.keywords
+        for keyword in call.keywords
     )
+
+
+def _wired_by_derivation(source: str, import_names: set[str]) -> bool:
+    """Whether every scan of ``src`` in a wiring derives its names, and one exists."""
+    calls = _scans_of_source(source)
+    return bool(calls) and all(_derives(call, import_names) for call in calls)
 
 
 def _import_names(package_root: Path) -> set[str]:
@@ -143,24 +168,35 @@ def test_every_wiring_derives_the_names_it_guards() -> None:
     for package in ALL_PACKAGES:
         root = ROOT / "packages" / package
         wiring = root / "tests" / "test_error_text_guard.py"
-        arguments = _guarded_names_arguments(wiring.read_text(encoding="utf-8"))
-        if not any(_derives(argument, _import_names(root)) for argument in arguments):
+        if not wiring.exists() or not _wired_by_derivation(
+            wiring.read_text(encoding="utf-8"), _import_names(root)
+        ):
             listed.append(package)
     assert not listed, (
-        f"{listed}: the guard is not passed `error_names=error_names_in(<this package>)`. "
+        f"{listed}: tests/test_error_text_guard.py does not scan the package's src "
+        "with `error_names=error_names_in(<this package>)` in every call. "
         "A list written by hand misses the next error class."
     )
 
 
-def test_a_list_unioned_onto_the_derived_names_is_not_derived() -> None:
-    call = GUARD_CALL + "SRC, error_names={})"
-    for names, expected in {
-        'error_names_in("pkg")': True,
-        'error_names_in("pkg") | {"ExtraError"}': False,
-        'GUARDED_ERROR_NAMES | {"ExtraError"}': False,
-        'error_names_in("another")': False,
-        'error_names_in("pkg", skip_modules=["pkg.x"])': False,
-        "NAMES": False,
-    }.items():
-        (argument,) = _guarded_names_arguments(call.format(names))
-        assert _derives(argument, {"pkg"}) is expected, names
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ('{guard}_SRC, error_names=error_names_in("pkg"))', True),
+        ('{guard}_SRC, error_names=error_names_in("pkg") | {{"ExtraError"}})', False),
+        ('{guard}_SRC, error_names=GUARDED_ERROR_NAMES | {{"ExtraError"}})', False),
+        ('{guard}_SRC, error_names=error_names_in("another"))', False),
+        ('{guard}_SRC, error_names=error_names_in("pkg", skip_modules=["pkg.x"]))', False),
+        ("{guard}_SRC, error_names=NAMES)", False),
+        ("{guard}_SRC)", False),
+        ('{guard}OTHER, error_names=error_names_in("pkg"))', False),
+        (
+            '{guard}_SRC, error_names=error_names_in("pkg"))\n{guard}_SRC, error_names=NAMES)',
+            False,
+        ),
+        ('{guard}_SRC, error_names=error_names_in("pkg"))\n{guard}OTHER, error_names=NAMES)', True),
+    ],
+)
+def test_what_counts_as_a_derived_wiring(body: str, expected: bool) -> None:
+    source = f"_SRC = {SOURCE_ROOT}\nOTHER = tmp_path\n" + body.format(guard=GUARD_CALL)
+    assert _wired_by_derivation(source, {"pkg"}) is expected

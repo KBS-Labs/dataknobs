@@ -630,6 +630,85 @@ class TestErrorNamesIn:
         name = package("errors", "class PlantedPlainError(RuntimeError): pass\n")
         assert "PlantedPlainError" in error_names_in(name)
 
+    @pytest.mark.parametrize(
+        ("module", "error"),
+        [
+            ("dataknobs_common.config_loading", "ConfigLoadError"),
+            ("dataknobs_common.paths", "PathEscapeError"),
+        ],
+    )
+    def test_a_dataknobs_error_outside_the_hierarchy_is_named(self, package, module, error):
+        name = package("use", f"from {module} import {error}\n")
+        assert error in error_names_in(name)
+
+    def test_another_packages_plain_error_is_named_when_it_is_included(self, package):
+        name = package(
+            "use", "Foreign = type('Foreign', (ValueError,), {'__module__': 'acme.x'})\n"
+        )
+        assert "Foreign" not in error_names_in(name)
+        assert "Foreign" in error_names_in(name, also=["acme"])
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "def f():\n    from dataknobs_common.paths import PathEscapeError\n"
+            "    raise PathEscapeError('x')\n",
+            "def f():\n    from dataknobs_common.paths import PathEscapeError as Aliased\n"
+            "    raise Aliased('x')\n",
+            "def f():\n    from .errors import Local as Renamed\n    raise Renamed('x')\n",
+            "def f():\n    class InFunction(ValueError): pass\n    raise InFunction('x')\n",
+            "class A:\n    class Inner(ValueError): pass\n"
+            "    def f(self):\n        raise self.Inner('x')\n",
+            "from dataknobs_common import paths\ndef f():\n    raise paths.PathEscapeError('x')\n",
+            "import dataknobs_common.paths\n"
+            "def f():\n    raise dataknobs_common.paths.PathEscapeError('x')\n",
+            "def f():\n    from .errors import Holder\n    raise Holder.Nested('x')\n",
+        ],
+    )
+    def test_an_error_no_module_binds_by_name_is_named_where_it_is_raised(self, package, body):
+        package(
+            "errors",
+            "class Local(ValueError): pass\nclass Holder:\n    class Nested(ValueError): pass\n",
+        )
+        raised = body.rsplit("raise ", 1)[1].split("(")[0].rsplit(".", 1)[-1]
+        assert raised in error_names_in(package("use", body))
+
+    def test_an_inner_error_raised_in_another_module_is_named(self, package):
+        package("base", "class Base:\n    class Inner(ValueError): pass\n")
+        name = package(
+            "use",
+            "from .base import Base\n"
+            "class Sub(Base):\n    def f(self):\n        raise self.Inner('x')\n",
+        )
+        assert "Inner" in error_names_in(name)
+
+    def test_a_marked_raise_is_read_through_its_mark(self, package):
+        name = package(
+            "use",
+            "def f():\n    from dataknobs_common.paths import PathEscapeError\n"
+            "    raise _ours(PathEscapeError('x'))\n",
+        )
+        assert "PathEscapeError" in error_names_in(name)
+
+    def test_a_foreign_error_imported_in_a_function_is_not_named(self, package):
+        name = package(
+            "use",
+            "def f():\n    from json import JSONDecodeError\n    raise JSONDecodeError('', '', 0)\n",
+        )
+        assert error_names_in(name) == GUARDED_ERROR_NAMES
+
+    @pytest.mark.parametrize("module", ["a-b", "a-dir.inside", "__main__"])
+    def test_a_file_that_is_not_imported_is_still_read(self, package, module):
+        """The scan reads the file, so what it raises has to be named."""
+        name = package(
+            module, "class UnimportedError(ValueError): pass\nraise UnimportedError('run')\n"
+        )
+        assert "UnimportedError" in error_names_in(name)
+
+    def test_a_file_that_is_not_imported_can_be_skipped(self, package):
+        name = package("a-b", "class SkippedError(ValueError): pass\nraise SkippedError('x')\n")
+        assert "SkippedError" not in error_names_in(name, skip_modules=[f"{name}.a-b"])
+
     def test_a_nested_module_is_read(self, package):
         package("sub.__init__", "")
         name = package("sub.deep", "class DeepError(ValueError): pass\n")
@@ -688,6 +767,20 @@ class TestErrorNamesIn:
         """``sys.exit`` at import is not an ``Exception``."""
         name = package("quits", "import sys\nsys.exit(3)\n")
         with pytest.raises(AssertionError, match=r"\.quits"):
+            error_names_in(name)
+
+    def test_a_module_that_skips_on_import_fails_rather_than_skipping(self, package):
+        """``pytest.skip`` raises a ``BaseException``; it would skip this guard."""
+        name = package("skips", "import pytest\npytest.skip('no', allow_module_level=True)\n")
+        # Caught here, or the regression would report this test as skipped.
+        with pytest.raises((AssertionError, pytest.skip.Exception)) as excinfo:
+            error_names_in(name)
+        assert excinfo.type is AssertionError
+        assert ".skips" in str(excinfo.value)
+
+    def test_an_interrupt_on_import_is_not_swallowed(self, package):
+        name = package("stops", "raise KeyboardInterrupt\n")
+        with pytest.raises(KeyboardInterrupt):
             error_names_in(name)
 
     def test_a_skipped_module_is_not_imported(self, package):

@@ -807,17 +807,29 @@ guard, because it also reports green over the listed shapes written slightly
 differently. The cost is the occasional false positive, which `ignore=`
 covers.
 
-`error_names_in(package)` names the errors a package can raise. It imports every
-module under the package and collects each name bound to an exception class that
-is a `DataknobsError` or is defined in the package, so a new error class is
-guarded the day it is added. Matching is on the bare name at the raise site, and
-an alias or an error imported from another package is included under the name
-the module gives it. An alias made inside a function is not seen; union it on.
+`error_names_in(package)` names the errors a package's raise sites use. It
+imports every module under the package and collects each name bound to an
+exception class that is a `DataknobsError`, or is defined in the package or in
+any dataknobs package, so a new error class is guarded the day it is added.
+`also=["acme_core"]` adds another package's plain exceptions. It also reads the
+files, for an error imported or defined inside a function, nested in a class, or
+raised as `module.SomeError`.
+
+Matching is on the bare name at the raise site, and an alias is included under
+the name the module gives it. Two names are not seen: one assigned inside a
+function (`err = SomeError`), and one reached through an object another package
+defines (`self.Inner` inherited from it). Union those on.
 
 A module that cannot be imported fails the call, because the errors it defines
 would go unguarded under a green scan. Install what it needs, or exempt it with
 `skip_modules=["my_package.module"]`, which also skips what is under it; an
-entry that matches nothing fails. `__main__` modules are not imported.
+entry that matches nothing fails. `__main__` modules, and files whose name is
+not an identifier, are read without being imported.
+
+Two shapes of raise are not scanned, and a site written either way needs a test
+of its own: an exception kept in a variable and quoted by a raise after the
+handler (the last error of a retry loop), and one whose error a helper builds
+(`raise self._error(exc)`).
 
 `GUARDED_ERROR_NAMES` is the shared part on its own: the names in
 `dataknobs_common.exceptions`. `error_names_in` always includes it.

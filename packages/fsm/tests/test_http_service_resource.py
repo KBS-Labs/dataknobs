@@ -211,7 +211,7 @@ class TestFailures:
             api.get("/", session=_session(api))
 
         assert str(excinfo.value) == (
-            "Request failed after 3 retries (HTTP 503: Service Unavailable)"
+            "Request failed after 3 attempts (HTTP 503: Service Unavailable)"
         )
         assert isinstance(excinfo.value.__cause__, HTTPError)
 
@@ -220,7 +220,7 @@ class TestFailures:
         with pytest.raises(ResourceError) as excinfo:
             api.get("/", session=_session(api, max_retries=2))
 
-        assert str(excinfo.value) == "Request failed after 2 retries (URLError)"
+        assert str(excinfo.value) == "Request failed after 2 attempts (URLError)"
         assert "refused" in str(excinfo.value.__cause__)
 
     def test_a_credential_in_the_base_url_is_not_in_the_message(self):
@@ -228,13 +228,51 @@ class TestFailures:
         with pytest.raises(ResourceError) as excinfo:
             api.get("/", session=_session(api, max_retries=1))
 
-        assert str(excinfo.value) == "Request failed after 1 retries (InvalidURL)"
+        assert str(excinfo.value) == "Request failed after 1 attempt (InvalidURL)"
         assert "hunter2" in str(excinfo.value.__cause__)
+
+    @pytest.mark.parametrize(
+        ("path", "operation"),
+        [
+            ("/orders?api_key=hunter2#hunter2", "GET /orders"),
+            ("http://svc:hunter2@127.0.0.1:1/orders", "GET /orders"),
+        ],
+    )
+    def test_a_credential_in_the_path_is_not_in_the_operation(self, api, server, path, operation):
+        server.statuses = [404]
+        with pytest.raises(ResourceError) as excinfo:
+            api.get(path, session=_session(api, max_retries=1))
+        assert excinfo.value.operation == operation
+        assert "hunter2" not in str(excinfo.value.context)
+
+    def test_a_url_that_cannot_be_read_names_the_method(self, api):
+        with pytest.raises(ResourceError) as excinfo:
+            api.get("http://svc:hunter2@[bad", session=_session(api))
+        assert str(excinfo.value) == "Request URL is not valid (ValueError)"
+        assert excinfo.value.operation == "GET"
+
+    def test_a_retried_response_is_closed_and_the_raised_one_can_be_read(
+        self, api, server, monkeypatch
+    ):
+        answered: list[HTTPError] = []
+        original = HTTPError.__init__
+
+        def record(error, *args, **kwargs):
+            original(error, *args, **kwargs)
+            answered.append(error)
+
+        monkeypatch.setattr(HTTPError, "__init__", record)
+        server.statuses = [503, 503]
+        with pytest.raises(ResourceError) as excinfo:
+            api.get("/", session=_session(api, max_retries=2))
+
+        assert [error.closed for error in answered] == [True, False]
+        assert excinfo.value.__cause__.read() == b'{"ok": true}'
 
     def test_a_session_allowed_no_attempts_fails_without_a_cause(self, api, server):
         with pytest.raises(ResourceError) as excinfo:
             api.get("/", session=_session(api, max_retries=0))
-        assert str(excinfo.value) == "Request failed after 0 retries"
+        assert str(excinfo.value) == "Request failed after 0 attempts"
         assert excinfo.value.__cause__ is None
         assert server.requests == []
 
@@ -253,7 +291,7 @@ class TestCircuit:
         sent = len(server.requests)
 
         with pytest.raises(ResourceError) as excinfo:
-            api.get("/orders", session=session)
+            api.get("/orders?api_key=hunter2", session=session)
 
         assert str(excinfo.value) == "Circuit breaker is open - service unavailable"
         assert excinfo.value.resource_name == "orders_api"

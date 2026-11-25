@@ -19,7 +19,13 @@ from dataknobs_fsm.api.advanced import create_advanced_fsm
 from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution
 from dataknobs_fsm.core.exceptions import FunctionError
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.functions.base import ExecutionResult
+from dataknobs_fsm.functions.base import (
+    ExecutionResult,
+    ResourceError,
+    StateTransitionError,
+    TransformError,
+)
+from dataknobs_fsm.functions.library.database import DatabaseFetch
 from dataknobs_fsm.resources.manager import ResourceManager
 
 _DSN = "postgresql://svc:hunter2@db.internal/orders"
@@ -89,12 +95,38 @@ async def test_a_failure_the_transform_reports_keeps_its_words():
 
 
 @pytest.mark.parametrize("pre_test", [False, True])
-async def test_an_error_raised_as_a_function_error_keeps_its_words(pre_test):
+@pytest.mark.parametrize(
+    "error",
+    [
+        FunctionError("order is closed"),
+        TransformError("order is closed"),
+        ResourceError("order is closed", resource_name="db", operation="read"),
+    ],
+    ids=lambda e: type(e).__name__,
+)
+async def test_an_error_in_this_packages_words_keeps_them(error, pre_test):
     def refuse(data, context):
-        raise FunctionError("order is closed")
+        raise error
 
     error = await _failure(_arc(refuse, pre_test=pre_test))
     assert str(error).endswith("execution failed: order is closed")
+
+
+async def test_a_library_transform_naming_its_missing_resource_is_quoted():
+    transform = DatabaseFetch(resource_name="orders_db", query="select 1")
+    error = await _failure(_arc(transform.transform))
+    assert "Arc execution failed: Resource 'orders_db' not found" in str(error)
+
+
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+async def test_a_state_transition_error_is_bounded():
+    """The same class is exported as ``functions.FunctionError``."""
+
+    def refuse(data, context):
+        raise StateTransitionError("x", from_state="a", to_state="b")
+
+    error = await _failure(_arc(refuse))
+    assert str(error) == "Arc execution failed (StateTransitionError)"
 
 
 @pytest.mark.parametrize("pre_test", [False, True])

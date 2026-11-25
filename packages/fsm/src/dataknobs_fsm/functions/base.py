@@ -890,9 +890,11 @@ class ResourceError(BaseResourceError, FSMError):
 
     Also a :class:`dataknobs_common.exceptions.ResourceError`, which is what
     a caller reads to tell "the deployment could not reach something" apart
-    from "the request was wrong". Note that the message may carry
-    infrastructure detail -- a connection string from a failed connect --
-    so a caller rendering this to an untrusted client should mask it.
+    from "the request was wrong". The message is in this package's words: a
+    provider names what failed and the type of what it caught, and keeps the
+    original as the cause. An arc quotes the message, so a provider of your own
+    should not put a driver's text in it. It still names resources and
+    backends, so a caller rendering it to an untrusted client should mask it.
     """
 
     def __init__(self, message: str, resource_name: str, operation: str):

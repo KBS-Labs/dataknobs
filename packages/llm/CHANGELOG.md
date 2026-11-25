@@ -99,7 +99,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can be its connection URL. The message names the type instead, `Failed to load
   conversation (ConnectionError)`, with the original on `__cause__`. A refused
   schema version, an unusable stored message and a missing conversation keep
-  their words.
+  their words. `delete_conversations` let a backend's `ValueError` through
+  unwrapped; it is a `StorageError` now, and only a call with no filter raises
+  `ValueError`.
 
 - **`create_intent_classifier` keeps a classifier factory's own words out of
   its errors.** It, and its async twin, unwrapped any `ValueError` off the

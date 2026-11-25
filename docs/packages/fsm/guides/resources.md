@@ -198,9 +198,10 @@ with http_resource.session_context() as session:
 
 A request that fails raises `ResourceError`. Its message gives the status and
 its standard phrase (`HTTP 404: Not Found`), or the type of the last error
-(`Request failed after 3 retries (URLError)`), never the server's or the
+(`Request failed after 3 attempts (URLError)`), never the server's or the
 transport's own text, which can carry a credential from the URL. The original is
-the error's `__cause__`. After five failures in one session, further requests on
+the error's `__cause__`. Its `operation` is the method and path, without the query
+string or host. After five failures in one session, further requests on
 it raise `ResourceError` without being sent until the circuit's wait has passed.
 
 ### LLM Resource

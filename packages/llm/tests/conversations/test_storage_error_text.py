@@ -28,8 +28,10 @@ _DSN = "postgresql://svc:hunter2@db.internal/chat"
 class UnreachableDatabase(AsyncMemoryDatabase):
     """A memory database whose operations fail as a driver's do."""
 
+    error_type: type[Exception] = ConnectionError
+
     async def _unreachable(self, *args: Any, **kwargs: Any) -> Any:
-        raise ConnectionError(f"could not connect to {_DSN}")
+        raise self.error_type(f"could not connect to {_DSN}")
 
     upsert = read = delete = search = count = _unreachable
 
@@ -57,14 +59,17 @@ _OPERATIONS = {
 }
 
 
+@pytest.mark.parametrize("error_type", [ConnectionError, ValueError])
 @pytest.mark.parametrize("operation", _OPERATIONS)
-async def test_what_the_driver_said_is_the_cause_and_not_the_message(operation):
-    storage = DataknobsConversationStorage(UnreachableDatabase())
+async def test_what_the_driver_said_is_the_cause_and_not_the_message(operation, error_type):
+    database = UnreachableDatabase()
+    database.error_type = error_type
+    storage = DataknobsConversationStorage(database)
 
     with pytest.raises(StorageError) as excinfo:
         await _OPERATIONS[operation](storage)
 
-    assert str(excinfo.value) == f"Failed to {operation} (ConnectionError)"
+    assert str(excinfo.value) == f"Failed to {operation} ({error_type.__name__})"
     assert _DSN in str(excinfo.value.__cause__)
 
 
@@ -82,6 +87,12 @@ async def test_a_storage_error_passes_through_unwrapped(operation):
     storage = DataknobsConversationStorage(RefusingDatabase())
     with pytest.raises(StorageError, match=r"^the store is read-only today$"):
         await _OPERATIONS[operation](storage)
+
+
+async def test_deleting_with_no_filter_is_the_callers_error():
+    storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+    with pytest.raises(ValueError, match="At least one filter parameter"):
+        await storage.delete_conversations()
 
 
 async def test_updating_metadata_is_bounded_too():

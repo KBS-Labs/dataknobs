@@ -10,12 +10,22 @@ from enum import Enum
 from typing import Any, Callable, ClassVar, Dict, TYPE_CHECKING
 
 from dataknobs_fsm.core.exceptions import FunctionError, ResourceError
-from dataknobs_fsm.functions.base import FunctionContext, as_state_test_callable
+from dataknobs_fsm.functions.base import (
+    FunctionContext,
+    ResourceError as ProviderResourceError,
+    TransformError,
+    as_state_test_callable,
+)
 
 if TYPE_CHECKING:
     from dataknobs_fsm.execution.context import ExecutionContext
 
 logger = logging.getLogger(__name__)
+
+#: Errors an arc quotes. Their messages are this package's words, or those of an
+#: author who chose one of these types to say something. Anything else a
+#: function raises is named by its type alone.
+_WORDED = (FunctionError, ResourceError, TransformError, ProviderResourceError)
 
 
 class DataIsolationMode(Enum):
@@ -524,8 +534,8 @@ class ArcExecution:
                 return bool(result[0])
             return bool(result)
 
-        except (FunctionError, ResourceError) as e:
-            # Worded by this package, or by an author who chose its type.
+        except _WORDED as e:
+            # Worded by this package, or by an author who chose one of its types.
             raise FunctionError(
                 f"Pre-test execution failed: {e}",
                 from_state=self.source_state,
@@ -621,8 +631,8 @@ class ArcExecution:
 
             return result
 
-        except (FunctionError, ResourceError) as e:
-            # Worded by this package, or by an author who chose its type.
+        except _WORDED as e:
+            # Worded by this package, or by an author who chose one of its types.
             self._record_failure()
             raise FunctionError(
                 f"Arc execution failed: {e}",
