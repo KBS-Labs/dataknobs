@@ -450,9 +450,9 @@ class BatchOperations:
             if id_column not in df.columns:
                 raise ValueError(f"ID column '{id_column}' not found in DataFrame")
             # Use specified column as ID source
-            for i, record in enumerate(records):
-                record_id = str(df.iloc[i][id_column])
-                updates.append((record_id, record))
+            # From the column: a row would hold an int beside a float as a float.
+            for value, record in zip(df[id_column], records, strict=True):
+                updates.append((str(value), record))
 
         # Process updates in chunks
         for i in range(0, len(updates), config.chunk_size):

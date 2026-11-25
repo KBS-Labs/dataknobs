@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 import pytest
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from enum import Enum
 
 from dataknobs_data.pandas.converter import DataFrameConverter, ConversionOptions
@@ -170,7 +170,7 @@ class TestDataFrameConverter:
         record = records[0]
 
         # Check type conversions
-        assert isinstance(record.get_value("datetime"), pd.Timestamp)
+        assert type(record.get_value("datetime")) is datetime
         assert isinstance(record.get_value("date"), date)
         assert isinstance(record.get_value("timedelta"), timedelta)
         assert record.get_value("category") == "A"

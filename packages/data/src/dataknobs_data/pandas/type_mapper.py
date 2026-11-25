@@ -8,16 +8,24 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 
 import numpy as np
 import pandas as pd
-from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_dtype
+from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_dtype, is_scalar
 
 from dataknobs_data.fields import FieldType
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+
+def is_missing(value: Any) -> bool:
+    """Whether a cell holds no value: ``None``, ``NaN``, ``NaT`` or ``NA``.
+
+    ``pd.isna`` answers for the elements of a list or array; the cell holds one.
+    """
+    return bool(is_scalar(value) and pd.isna(value))
 
 
 @dataclass
@@ -34,11 +42,11 @@ class PandasTypeMapping:
 class TypeMapper:
     """Handles type mapping between DataKnobs Field types and Pandas dtypes."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize type mapper with default mappings."""
         self._init_mappings()
 
-    def _init_mappings(self):
+    def _init_mappings(self) -> None:
         """Initialize type mappings."""
         self._field_to_pandas: dict[FieldType, PandasTypeMapping] = {
             FieldType.STRING: PandasTypeMapping(
@@ -167,14 +175,8 @@ class TypeMapper:
         Returns:
             Field-compatible value
         """
-        # Handle pandas NA/NaN/None
-        # Use try-except to handle arrays and other special cases
-        try:
-            if pd.isna(value):
-                return None
-        except (TypeError, ValueError):
-            # pd.isna can fail on arrays/lists
-            pass
+        if is_missing(value):
+            return None
 
         mapping = self._field_to_pandas.get(field_type)
         if mapping and mapping.reverse_converter:
@@ -195,16 +197,8 @@ class TypeMapper:
         Returns:
             Inferred FieldType
         """
-        if value is None:
+        if is_missing(value):
             return FieldType.STRING  # Default for null
-
-        # Check for pandas NA separately to avoid array ambiguity
-        try:
-            if pd.isna(value):
-                return FieldType.STRING
-        except (TypeError, ValueError):
-            # pd.isna can fail on some types like lists
-            pass
 
         if isinstance(value, (bool, np.bool_)):
             return FieldType.BOOLEAN
@@ -214,7 +208,7 @@ class TypeMapper:
             return FieldType.FLOAT
         elif isinstance(value, (datetime, pd.Timestamp)):
             return FieldType.DATETIME
-        elif isinstance(value, bytes):  # type: ignore[unreachable]
+        elif isinstance(value, bytes):
             return FieldType.BINARY
         elif isinstance(value, (dict, list)):
             return FieldType.JSON
@@ -245,7 +239,7 @@ class TypeMapper:
 
             # Special handling for JSON
             if field_type == FieldType.JSON:
-                return series.apply(self._ensure_json_serializable)
+                return cast("pd.Series", series.apply(self._ensure_json_serializable))
 
             # Standard casting
             return series.astype(target_dtype)  # type: ignore[arg-type]
@@ -254,7 +248,7 @@ class TypeMapper:
             return series.astype("object")
 
     @staticmethod
-    def _to_datetime(value: Any) -> pd.Timestamp:
+    def _to_datetime(value: Any) -> object:
         """Convert value to pandas Timestamp."""
         if isinstance(value, (str, datetime)):
             return pd.Timestamp(value)
@@ -264,7 +258,7 @@ class TypeMapper:
         return value
 
     @staticmethod
-    def _from_datetime(value: Any) -> datetime:
+    def _from_datetime(value: Any) -> object:
         """Convert pandas Timestamp to datetime."""
         if isinstance(value, pd.Timestamp):
             return value.to_pydatetime()
@@ -297,7 +291,7 @@ class TypeMapper:
     @staticmethod
     def _ensure_json_serializable(value: Any) -> Any:
         """Ensure value is JSON-serializable."""
-        if pd.isna(value):
+        if is_missing(value):
             return None
         if isinstance(value, (dict, list)):
             return value
@@ -353,7 +347,7 @@ class TypeMapper:
                     ),
                 ):
                     return "datetime"
-                elif hasattr(sample, "__class__") and "date" in sample.__class__.__name__.lower():  # type: ignore[unreachable]
+                elif hasattr(sample, "__class__") and "date" in sample.__class__.__name__.lower():
                     return "date"
                 elif hasattr(sample, "__class__") and "time" in sample.__class__.__name__.lower():
                     return "time"
@@ -398,7 +392,7 @@ class TypeMapper:
         Returns:
             Converted value
         """
-        if value is None or pd.isna(value):
+        if is_missing(value):
             return None
 
         target_type = target_type.lower()
@@ -476,10 +470,10 @@ class TypeMapper:
 
         # If series is timezone-naive, localize it
         if series.dt.tz is None:
-            return series.dt.tz_localize(target_tz)
+            return cast("pd.Series", series.dt.tz_localize(target_tz))
         else:
             # If timezone-aware, convert to target timezone
-            return series.dt.tz_convert(target_tz)
+            return cast("pd.Series", series.dt.tz_convert(target_tz))
 
     def get_optimal_dtype(self, series: pd.Series) -> str:
         """Determine optimal dtype for a Series based on its values.

@@ -130,6 +130,17 @@ class CustomTypeConverter(TypeMapper):
 converter = DataFrameConverter(type_converter=CustomTypeConverter())
 ```
 
+### Values from a DataFrame
+
+`dataframe_to_records`, and so every write on this page, turns a numpy integer,
+float or bool into the Python one, a `Timestamp` into a `datetime`, and a missing
+value (`NaN`, `NaT`, `NA`) into `None`. A `datetime` has no nanoseconds: pandas
+drops them with a `UserWarning`. An int column stays ints beside a float one.
+
+Any other cell is kept as it is, such as an array or `Timedelta`, and so are the
+values inside a list or dict. Use Python values there for a backend that stores
+JSON.
+
 ## Metadata Preservation
 
 ### Metadata Strategies
