@@ -5,8 +5,10 @@
 
 import json
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field as dataclass_field
+from http import HTTPStatus
 from typing import Any, Dict, Union
 from urllib.parse import urljoin
 import urllib.request
@@ -71,6 +73,24 @@ class HTTPSession:
             self.circuit_open = True
 
 
+def _describe_status(code: int) -> str:
+    """A status code with its standard phrase.
+
+    Not the server's own reason, which is text this package did not write.
+    """
+    try:
+        return f"HTTP {code}: {HTTPStatus(code).phrase}"
+    except ValueError:
+        return f"HTTP {code}"
+
+
+def _describe_failure(error: Exception) -> str:
+    """What a failed attempt says about itself, without the error's text."""
+    if isinstance(error, urllib.error.HTTPError):
+        return _describe_status(error.code)
+    return type(error).__name__
+
+
 class HTTPServiceResource(BaseResourceProvider):
     """HTTP service resource provider with session management."""
 
@@ -82,7 +102,7 @@ class HTTPServiceResource(BaseResourceProvider):
         auth: Dict[str, str] | None = None,
         timeout: float = 30.0,
         max_retries: int = 3,
-        **config,
+        **config: Any,
     ):
         """Initialize HTTP service resource.
 
@@ -98,39 +118,43 @@ class HTTPServiceResource(BaseResourceProvider):
         super().__init__(name, config)
 
         self.base_url = base_url.rstrip("/")
-        self.default_headers = headers or {}
+        self.default_headers = dict(headers or {})
         self.auth = auth
         self.timeout = timeout
         self.max_retries = max_retries
 
         # Set up authentication headers if provided
         if self.auth:
-            self._setup_auth()
+            self._setup_auth(self.auth)
 
-        self._sessions = {}
+        self._sessions: Dict[int, HTTPSession] = {}
         self.status = ResourceStatus.IDLE
 
-    def _setup_auth(self) -> None:
-        """Set up authentication headers."""
-        if self.auth.get("type") == "bearer":
-            token = self.auth.get("token")
+    def _setup_auth(self, auth: Dict[str, str]) -> None:
+        """Set up authentication headers.
+
+        Args:
+            auth: Authentication configuration.
+        """
+        if auth.get("type") == "bearer":
+            token = auth.get("token")
             if token:
                 self.default_headers["Authorization"] = f"Bearer {token}"
-        elif self.auth.get("type") == "basic":
-            username = self.auth.get("username")
-            password = self.auth.get("password")
+        elif auth.get("type") == "basic":
+            username = auth.get("username")
+            password = auth.get("password")
             if username and password:
                 import base64
 
                 credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
                 self.default_headers["Authorization"] = f"Basic {credentials}"
-        elif self.auth.get("type") == "api_key":
-            key_name = self.auth.get("key_name", "X-API-Key")
-            key_value = self.auth.get("key_value")
+        elif auth.get("type") == "api_key":
+            key_name = auth.get("key_name", "X-API-Key")
+            key_value = auth.get("key_value")
             if key_value:
                 self.default_headers[key_name] = key_value
 
-    def acquire(self, **kwargs) -> HTTPSession:
+    def acquire(self, **kwargs: Any) -> HTTPSession:
         """Acquire an HTTP session.
 
         Args:
@@ -164,7 +188,9 @@ class HTTPServiceResource(BaseResourceProvider):
             # naming the endpoint, which on a self-hosted deployment is an
             # internal host and port. __cause__ carries it to the logs.
             raise ResourceError(
-                f"Failed to acquire HTTP session ({type(e).__name__})", resource_name=self.name
+                f"Failed to acquire HTTP session ({type(e).__name__})",
+                resource_name=self.name,
+                operation="acquire",
             ) from e
 
     def release(self, resource: Any) -> None:
@@ -236,7 +262,7 @@ class HTTPServiceResource(BaseResourceProvider):
         path: str,
         data: Union[Dict, bytes] | None = None,
         headers: Dict[str, str] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """Execute an HTTP request with retry logic.
 
@@ -252,11 +278,15 @@ class HTTPServiceResource(BaseResourceProvider):
             Response dictionary with status, headers, and body.
 
         Raises:
-            ResourceError: If request fails after retries.
+            ResourceError: If the circuit is open, the server answers with a 4xx
+                status, or every attempt fails. The message carries no text of
+                the server's or the transport's; the last error is its cause.
         """
         if session.is_circuit_open():
             raise ResourceError(
-                "Circuit breaker is open - service unavailable", resource_name=self.name
+                "Circuit breaker is open - service unavailable",
+                resource_name=self.name,
+                operation=f"{method} {path}",
             )
 
         url = urljoin(session.base_url, path)
@@ -274,7 +304,7 @@ class HTTPServiceResource(BaseResourceProvider):
             else:
                 request_data = data
 
-        last_error = None
+        last_error: Exception | None = None
         for attempt in range(session.max_retries):
             try:
                 # Create request
@@ -308,7 +338,7 @@ class HTTPServiceResource(BaseResourceProvider):
                     # Client error, don't retry
                     session.record_failure()
                     raise ResourceError(
-                        f"HTTP {e.code}: {e.reason}",
+                        _describe_status(e.code),
                         resource_name=self.name,
                         operation=f"{method} {path}",
                     ) from e
@@ -323,14 +353,15 @@ class HTTPServiceResource(BaseResourceProvider):
 
         # All retries failed
         session.record_failure()
+        reason = f" ({_describe_failure(last_error)})" if last_error is not None else ""
         raise ResourceError(
-            f"Request failed after {session.max_retries} retries: {last_error}",
+            f"Request failed after {session.max_retries} retries{reason}",
             resource_name=self.name,
             operation=f"{method} {path}",
-        )
+        ) from last_error
 
     @contextmanager
-    def session_context(self, **kwargs):
+    def session_context(self, **kwargs: Any) -> Iterator[HTTPSession]:
         """Context manager for HTTP session.
 
         Args:
@@ -345,7 +376,7 @@ class HTTPServiceResource(BaseResourceProvider):
         finally:
             self.release(session)
 
-    def get(self, path: str, session: HTTPSession | None = None, **kwargs) -> Dict[str, Any]:
+    def get(self, path: str, session: HTTPSession | None = None, **kwargs: Any) -> Dict[str, Any]:
         """Execute GET request.
 
         Args:
@@ -366,7 +397,7 @@ class HTTPServiceResource(BaseResourceProvider):
         path: str,
         data: Union[Dict, bytes] | None = None,
         session: HTTPSession | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """Execute POST request.
 
@@ -389,7 +420,7 @@ class HTTPServiceResource(BaseResourceProvider):
         path: str,
         data: Union[Dict, bytes] | None = None,
         session: HTTPSession | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """Execute PUT request.
 
@@ -407,7 +438,9 @@ class HTTPServiceResource(BaseResourceProvider):
                 return self._request(ctx_session, "PUT", path, data, **kwargs)
         return self._request(session, "PUT", path, data, **kwargs)
 
-    def delete(self, path: str, session: HTTPSession | None = None, **kwargs) -> Dict[str, Any]:
+    def delete(
+        self, path: str, session: HTTPSession | None = None, **kwargs: Any
+    ) -> Dict[str, Any]:
         """Execute DELETE request.
 
         Args:

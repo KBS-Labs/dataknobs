@@ -228,7 +228,7 @@
         {
           "path": "packages/fsm/src",
           "tier": "transitional",
-          "ceiling": 244,
+          "ceiling": 224,
           "reason": "ratchet group"
         },
         {

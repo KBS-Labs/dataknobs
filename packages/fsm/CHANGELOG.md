@@ -295,6 +295,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   words. `AdvancedFSM`'s stepping reports that message in `StepResult.error` and
   now logs the failure with its traceback.
 
+- **`HTTPServiceResource` keeps a server's or transport's text out of its
+  errors.** A failed request quoted the last error, a password in `base_url`
+  included, and dropped it as the cause. It now reads `Request failed after 3
+  retries (URLError)`, or `(HTTP 503: Service Unavailable)`, raised from that
+  error. A 4xx gives the code's standard phrase rather than the server's.
+
+- **An open `HTTPServiceResource` circuit raises `ResourceError`.** It raised
+  `TypeError`, as did a session that could not be acquired.
+
+- **`HTTPServiceResource` leaves the caller's `headers` alone.** Its auth header
+  was written into the dict it was given, so a dict shared by two resources sent
+  one's credential to the other's service.
+
 - **`dataknobs-fsm[postgres]` installs from wheels.** It forwards to
   `dataknobs-data[postgres]`, which required the source-built `psycopg2` and so
   failed to install without `pg_config`. That extra now requires
