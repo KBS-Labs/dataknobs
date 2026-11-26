@@ -777,14 +777,26 @@ def test_the_gate_records_both_stages_suite_times_from_this_reader() -> None:
         assert f'--field "suite_seconds=${stage}_SUITE_SECONDS"' in source, stage
 
 
-def test_only_an_integration_suite_that_passed_records_its_time() -> None:
-    """As for the unit suites: one that failed may have stopped early."""
+def test_both_stages_record_their_times_through_one_runner() -> None:
+    """Each stage's suite time is written in one place, the runner both stages share.
+
+    That only a passing suite records one is held for each stage by
+    ``test_only_a_suite_that_passed_records_its_time`` in test_gate_progress.py,
+    which runs the runner rather than reading it.
+    """
     source = GATE.read_text(encoding="utf-8")
-    failed = source.index('print_error "Integration tests failed for $pkg')
-    written = source.index('> "$OUTPUT_DIR/integration-test-seconds-$pkg.txt"')
-    passed = source.index('print_success "Integration tests passed for $pkg')
-    assert failed < written < passed
-    assert source.count("integration-test-seconds-$pkg.txt") == 1
+    assert source.count('-test-seconds-$pkg.txt"') == 1
+    assert '> "$OUTPUT_DIR/$stage-test-seconds-$pkg.txt"' in source
+    assert re.search(
+        r'^\s*run_suite_for_pkg unit "\$1" "\$UNIT_COV_REPORT" \|\| return \$\?$',
+        source,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r'^\s*run_suite_for_pkg integration "\$1" "\$TEST_COV_REPORT" \|\| return \$\?$',
+        source,
+        re.MULTILINE,
+    )
 
 
 def test_the_gate_clears_an_earlier_run_s_provisioning_records_before_any_check_runs() -> None:
@@ -795,24 +807,26 @@ def test_the_gate_clears_an_earlier_run_s_provisioning_records_before_any_check_
 
 
 def test_every_pr_mode_suite_writes_its_provisioning_record() -> None:
-    """Each stage of each package names its own record, which the measurer reads by name."""
+    """Each stage of each package names its own record, which the measurer reads by name.
+
+    Both stages run through one runner, so the record is named once per
+    invocation there: one with extra pytest arguments and one without. That
+    each stage's suite is handed its own record is held by running the runner,
+    in test_gate_progress.py.
+    """
     source = GATE.read_text(encoding="utf-8")
-    for stage, report in (("unit", "cov_report"), ("integration", "TEST_COV_REPORT")):
-        invocations = re.findall(
-            rf'DK_PROVISIONING_RECORD="\$OUTPUT_DIR/provisioning-{stage}-\$pkg\.json" \\\s*\n'
-            rf'\s*\$TEST_CMD "\$pkg" -t {stage} --cov-report "\${report}"',
-            source,
-        )
-        # One with extra pytest arguments and one without.
-        assert len(invocations) == 2, stage
-        assert len(re.findall(rf'\$TEST_CMD "\$pkg" -t {stage}\b', source)) == 2, stage
+    invocations = re.findall(
+        r'DK_PROVISIONING_RECORD="\$OUTPUT_DIR/provisioning-\$stage-\$pkg\.json" \\\s*\n'
+        r'\s*\$TEST_CMD "\$pkg" -t "\$stage" --cov-report "\$cov_report"',
+        source,
+    )
+    assert len(invocations) == 2
+    assert len(re.findall(r'\$TEST_CMD "\$pkg" -t ', source)) == 2
 
 
 def test_the_provisioning_check_reads_the_records_after_the_test_stages() -> None:
     source = GATE.read_text(encoding="utf-8")
-    integration_loop = source.index(
-        'for pkg in $PACKAGES_TO_TEST; do\n            if [ -d "packages/$pkg" ]'
-    )
+    integration_loop = source.index('run_pool "$GATE_INTEGRATION_JOBS" run_integration_for_pkg')
     check = source.index('"$SCRIPT_DIR/quality-contract.py" check --tool provisioning')
     assert integration_loop < check
     assert re.search(

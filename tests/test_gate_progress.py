@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 import sys
 import textwrap
@@ -246,26 +247,31 @@ def test_ordering_outside_a_repository_fails_rather_than_guessing(tmp_path: Path
     assert result.returncode != 0
 
 
+@pytest.mark.parametrize("stage", ["unit", "integration"])
 @pytest.mark.parametrize(("exit_code", "recorded"), [(0, True), (1, False)])
 def test_only_a_suite_that_passed_records_its_time(
-    tmp_path: Path, exit_code: int, recorded: bool
+    tmp_path: Path, exit_code: int, recorded: bool, stage: str
 ) -> None:
     """One that failed may have stopped early; the time it last took still stands."""
     suite = tmp_path / "suite.sh"
-    suite.write_text(f"exit {exit_code}\n")
-    record = tmp_path / "unit-test-seconds-data.txt"
+    suite.write_text(f': > "$COVERAGE_FILE"\nexit {exit_code}\n')
+    record = tmp_path / f"{stage}-test-seconds-data.txt"
     record.write_text("before\n")
+    # Not the output directory, which is where the suite's data is moved to.
+    root = tmp_path / "root"
+    root.mkdir()
 
     result = _run_gate_functions(
         tmp_path,
-        ("run_unit_for_pkg",),
+        ("run_suite_for_pkg", "run_unit_for_pkg", "run_integration_for_pkg"),
         f"""
-        cd "{tmp_path}"
-        PROJECT_ROOT="{tmp_path}"
+        cd "{root}"
+        PROJECT_ROOT="{root}"
         UNIT_COV_REPORT=none
+        TEST_COV_REPORT=xml
         TEST_FLAGS=""
         TEST_CMD="bash {suite}"
-        run_unit_for_pkg data || true
+        run_{stage}_for_pkg data || true
         """,
     )
     assert result.returncode == 0, result.stderr
@@ -275,6 +281,282 @@ def test_only_a_suite_that_passed_records_its_time(
 def test_the_gate_runs_its_unit_suites_through_the_pool() -> None:
     source = GATE.read_text(encoding="utf-8")
     assert re.search(r"^\s*run_pool .*\|\| UNIT_TEST_STATUS=", source, re.MULTILINE)
+
+
+# --------------------------------------------------------------------------
+# how many at once
+# --------------------------------------------------------------------------
+
+_SETTINGS = ("DK_GATE_UNIT_JOBS", "DK_GATE_INTEGRATION_JOBS", "DK_GATE_DOCS")
+
+
+def _settings(**values: str) -> subprocess.CompletedProcess[str]:
+    """resolve_gate_settings under exactly these variables, the rest unset."""
+    assigned = "".join(f"export {name}={shlex.quote(value)}\n" for name, value in values.items())
+    return _bash(
+        f"unset {' '.join(_SETTINGS)}\n{assigned}"
+        "resolve_gate_settings\n"
+        'echo "$GATE_UNIT_JOBS $GATE_INTEGRATION_JOBS $GATE_DOCS"'
+    )
+
+
+def test_the_defaults_are_the_values_the_gate_always_used() -> None:
+    """Three unit slots, the docs in the pool, integration one suite at a time."""
+    result = _settings()
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["3", "1", "pool"]
+
+
+def test_an_empty_setting_takes_its_default() -> None:
+    result = _settings(DK_GATE_UNIT_JOBS="", DK_GATE_INTEGRATION_JOBS="", DK_GATE_DOCS="")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["3", "1", "pool"]
+
+
+def test_each_setting_is_read() -> None:
+    result = _settings(DK_GATE_UNIT_JOBS="6", DK_GATE_INTEGRATION_JOBS="12", DK_GATE_DOCS="beside")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["6", "12", "beside"]
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("DK_GATE_UNIT_JOBS", "0"),
+        ("DK_GATE_UNIT_JOBS", "-1"),
+        ("DK_GATE_UNIT_JOBS", "four"),
+        ("DK_GATE_UNIT_JOBS", "3.5"),
+        ("DK_GATE_UNIT_JOBS", " 3"),
+        # bash arithmetic would read it as octal 8
+        ("DK_GATE_UNIT_JOBS", "010"),
+        ("DK_GATE_INTEGRATION_JOBS", "0"),
+        ("DK_GATE_INTEGRATION_JOBS", "1x"),
+        ("DK_GATE_DOCS", "inside"),
+        ("DK_GATE_DOCS", "Beside"),
+    ],
+)
+def test_a_value_the_setting_does_not_accept_fails_and_names_it(name: str, value: str) -> None:
+    """Falling back to the default would time one configuration and report another."""
+    result = _settings(**{name: value})
+    assert result.returncode != 0, result.stdout
+    assert name in result.stderr
+    assert f"'{value}'" in result.stderr
+
+
+def test_the_gate_reads_the_settings_before_any_check_runs() -> None:
+    source = GATE.read_text(encoding="utf-8")
+    resolved = source.index("\nif ! resolve_gate_settings; then\n")
+    assert resolved < source.index('print_status "Capturing environment information..."')
+    assert resolved < source.index('print_status "Validating package references')
+
+
+def test_environment_json_records_the_settings_the_run_used() -> None:
+    """A time in the summary is only comparable with the configuration beside it."""
+    source = GATE.read_text(encoding="utf-8")
+    heredoc = source[source.index('cat > "$OUTPUT_DIR/environment.json" <<EOF') :]
+    heredoc = heredoc[: heredoc.index("\nEOF\n")]
+    assert '"gate_unit_jobs": $GATE_UNIT_JOBS,' in heredoc
+    assert '"gate_integration_jobs": $GATE_INTEGRATION_JOBS,' in heredoc
+    assert '"gate_docs": "$GATE_DOCS"' in heredoc
+
+
+def test_full_mode_runs_one_at_a_time_whatever_the_settings_say() -> None:
+    source = GATE.read_text(encoding="utf-8")
+    full = source[source.index("\nif ! resolve_gate_settings; then\n") :]
+    full = full[full.index('if [ "$RUN_MODE" = "full" ]; then') :]
+    full = full[: full.index("\nfi\n")]
+    assert "GATE_UNIT_JOBS=1" in full
+    assert "GATE_INTEGRATION_JOBS=1" in full
+    assert 'GATE_DOCS="pool"' in full
+
+
+def test_both_stages_run_through_the_pool_at_their_own_setting() -> None:
+    source = GATE.read_text(encoding="utf-8")
+    assert re.search(r'^\s*run_pool "\$GATE_UNIT_JOBS" run_gate_job ', source, re.MULTILINE)
+    assert re.search(
+        r'^\s*run_pool "\$GATE_INTEGRATION_JOBS" run_integration_for_pkg \$INTEGRATION_ORDER',
+        source,
+        re.MULTILINE,
+    )
+    assert "MAX_CONCURRENT" not in source
+
+
+def test_docs_beside_the_pool_take_no_slot() -> None:
+    """With GATE_DOCS=beside the docs job starts outside the pool and is waited for after it."""
+    source = GATE.read_text(encoding="utf-8")
+    block = source[source.index('GATE_JOBS="@workspace"') :]
+    block = block[: block.index("WORKSPACE_GUARD_SECONDS=")]
+    beside = block.index("run_beside run_gate_job @docs")
+    pool = block.index('run_pool "$GATE_UNIT_JOBS"')
+    waited = block.index('wait "$DOCS_BESIDE_PID"')
+    assert beside < pool < waited
+    assert 'if [ "$GATE_DOCS" = "beside" ]; then' in block
+
+
+def test_a_job_started_beside_runs_while_the_pool_does() -> None:
+    """The pool's slots stay full while the job beside it runs, and both finish."""
+    result = _bash(
+        """
+        dir=$(mktemp -d)
+        beside_job() {
+            for _ in $(seq 100); do
+                [ -e "$dir/b" ] && { echo "beside saw the pool"; return 0; }
+                sleep 0.1
+            done
+            echo "the pool never ran"
+        }
+        job() { : > "$dir/$1"; sleep 0.2; }
+        run_beside beside_job x
+        run_pool 1 job a b
+        wait "$BESIDE_PID"
+        rm -rf "$dir"
+        """
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "beside saw the pool", result.stdout
+
+
+# --------------------------------------------------------------------------
+# what each suite writes
+# --------------------------------------------------------------------------
+
+#: A stand-in for bin/test.sh: what it writes, and where, without a test run.
+#: It writes its xml report where --cov-xml says (./coverage.xml if nothing
+#: does, as test.sh would) and its data to COVERAGE_FILE, then waits until
+#: every suite named in $SUITES has written, so the suites overlap by
+#: construction rather than by timing.
+_SUITE_STUB = r"""
+pkg=$1
+xml=coverage.xml
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --cov-xml) xml=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+echo "$pkg" > "$xml"
+echo "$pkg" > "$COVERAGE_FILE"
+echo "$pkg" > "$DK_PROVISIONING_RECORD"
+: > "$SYNC/$pkg"
+for _ in $(seq 100); do
+    all=yes
+    for other in $SUITES; do [ -e "$SYNC/$other" ] || all=""; done
+    [ -n "$all" ] && exit 0
+    sleep 0.1
+done
+exit 9
+"""
+
+
+def _suites_at_once(tmp_path: Path, *packages: str) -> subprocess.CompletedProcess[str]:
+    out = tmp_path / "out"
+    sync = tmp_path / "sync"
+    work = tmp_path / "work"
+    for directory in (out, sync, work):
+        directory.mkdir()
+    stub = tmp_path / "suite.sh"
+    stub.write_text(_SUITE_STUB)
+    return _run_gate_functions(
+        out,
+        ("run_suite_for_pkg", "run_integration_for_pkg"),
+        f"""
+        cd "{work}"
+        PROJECT_ROOT="{work}"
+        TEST_COV_REPORT=xml
+        TEST_FLAGS=""
+        TEST_CMD="bash {stub}"
+        export SYNC="{sync}" SUITES="{" ".join(packages)}"
+        run_pool {len(packages)} run_integration_for_pkg {" ".join(packages)}
+        """,
+    )
+
+
+def test_suites_running_at_once_each_keep_their_own_coverage_report(tmp_path: Path) -> None:
+    """Two suites both writing ./coverage.xml leave one report, filed under both names.
+
+    The gate used to let test.sh write the report into the working directory and
+    move it after the suite ended. Run one at a time that was safe; run side by
+    side, the second suite's report replaced the first's and was then moved
+    under the first suite's name, and nothing failed.
+    """
+    result = _suites_at_once(tmp_path, "data", "bots")
+    out = tmp_path / "out"
+    assert result.returncode == 0, result.stdout + result.stderr
+    for pkg in ("data", "bots"):
+        assert (out / f"coverage-integration-{pkg}.xml").read_text().strip() == pkg
+        assert (out / f".coverage.integration.{pkg}").read_text().strip() == pkg
+        assert (out / f"provisioning-integration-{pkg}.json").read_text().strip() == pkg
+    assert not (tmp_path / "work" / "coverage.xml").exists()
+    assert not list((tmp_path / "work").glob(".coverage*"))
+
+
+@pytest.mark.parametrize(("exit_code", "fails"), [(0, True), (5, False), (1, True)], ids=str)
+def test_a_suite_that_leaves_no_coverage_data_is_not_given_another_suites(
+    tmp_path: Path, exit_code: int, fails: bool
+) -> None:
+    """A stray ./.coverage is no longer taken as the suite's data.
+
+    It was the fallback for a COVERAGE_FILE that was not honoured. With suites
+    running at once, whose it was could only be guessed, so it is left alone,
+    and a suite that passed but wrote no data fails: it measured nothing.
+    Exit 5, nothing collected, has nothing to measure.
+    """
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".coverage").write_text("another suite's\n")
+    suite = tmp_path / "suite.sh"
+    suite.write_text(f"exit {exit_code}\n")
+    result = _run_gate_functions(
+        tmp_path,
+        ("run_suite_for_pkg", "run_integration_for_pkg"),
+        f"""
+        cd "{work}"
+        PROJECT_ROOT="{work}"
+        TEST_COV_REPORT=xml
+        TEST_FLAGS=""
+        TEST_CMD="bash {suite}"
+        run_integration_for_pkg data && echo PASSED || echo FAILED
+        """,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ("FAILED" in result.stdout) is fails, result.stdout
+    assert not (tmp_path / ".coverage.integration.data").exists()
+    assert (work / ".coverage").read_text() == "another suite's\n"
+
+
+def test_integration_suites_are_ordered_by_their_own_times(tmp_path: Path) -> None:
+    _repo(tmp_path)
+    _sized_suites(tmp_path, ("a", 10, 10), ("b", 10, 10))
+    _commit_summary(tmp_path, {"a": 99, "b": 1})
+    _commit_summary(tmp_path, {"a": 3, "b": 26}, check="integration_tests")
+
+    result = _bash('longest_suite_first --stage integration "$@"', str(tmp_path), "a", "b")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["b", "a"]
+
+
+def test_integration_suites_never_timed_are_ordered_by_their_integration_code(
+    tmp_path: Path,
+) -> None:
+    _repo(tmp_path)
+    _sized_suites(tmp_path, ("unit_heavy", 9000, 10), ("service_heavy", 10, 900))
+
+    result = _bash(
+        'longest_suite_first --stage integration "$@"',
+        str(tmp_path),
+        "unit_heavy",
+        "service_heavy",
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ["service_heavy", "unit_heavy"]
+
+
+def test_an_unknown_stage_fails_rather_than_ordering_by_unit_times(tmp_path: Path) -> None:
+    _repo(tmp_path)
+    _sized_suites(tmp_path, ("a", 10, 10))
+    result = _bash('longest_suite_first --stage e2e "$@"', str(tmp_path), "a")
+    assert result.returncode != 0
+    assert "e2e" in result.stderr
 
 
 # --------------------------------------------------------------------------

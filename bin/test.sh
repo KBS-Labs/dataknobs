@@ -44,6 +44,10 @@ START_SERVICES="auto"
 COVERAGE="yes"
 PYTEST_ARGS=""
 COV_REPORT="term-missing"
+# Where an xml report goes. The working directory by default; the gate names a
+# path per suite, since two suites running at once would otherwise both write
+# ./coverage.xml and the second would replace the first without anything failing.
+COV_XML="coverage.xml"
 SKIP_INTEGRATION="false"  # If true, sets TEST_*=false
 ONLY_INTEGRATION="false"  # If true, only runs integration tests
 PARALLEL="no"  # If yes, use pytest-xdist for parallel test execution
@@ -96,7 +100,7 @@ build_cov_args() {
                 args="$args --cov-report=html:htmlcov"
                 ;;
             xml)
-                args="$args --cov-report=xml:coverage.xml"
+                args="$args --cov-report=xml:$COV_XML"
                 ;;
         esac
     done
@@ -275,6 +279,7 @@ ${YELLOW}Options:${NC}
     --no-cov                Disable coverage reporting
     --cov-report TYPE       Coverage report type: term, term-missing, html, xml, or combinations
                            (default: term-missing, use comma to combine: term-missing,html,xml)
+    --cov-xml PATH          Where the xml report is written (default: ./coverage.xml)
     --print-targets         Print what this invocation would run and exit, running nothing
     -h, --help              Show this help message
 
@@ -380,6 +385,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --cov-report=*)
             COV_REPORT="${1#--cov-report=}"
+            shift
+            ;;
+        --cov-xml)
+            COV_XML="$2"
+            shift 2
+            ;;
+        --cov-xml=*)
+            COV_XML="${1#--cov-xml=}"
             shift
             ;;
         -j|--parallel)

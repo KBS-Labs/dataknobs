@@ -293,14 +293,39 @@ done
 
 In PR and `--all` runs, the workspace guards, the documentation checks and the package
 unit suites share one pool that runs three jobs at a time; `--full` runs them one
-at a time. The pool starts the suites that took longest first, by each package's
-most recent unit `suite_seconds` in that history
-(`bin/quality-summary.py last-seconds`). Reading it from history rather than from a
+at a time. The integration suites run after it, one at a time. The pool starts the
+suites that took longest first, by each package's most recent unit `suite_seconds`
+in that history (`bin/quality-summary.py last-seconds`), and the integration
+suites are ordered the same way by their integration `suite_seconds`. Reading it from history rather than from a
 file beside the run means a new checkout, such as every worktree, orders its first
 run as the branch's last run would have. A package with no recorded time goes
 first, by the size of its unit tests. Each duration is the time that check itself took, except that
 `unit_tests` spans the whole pool. Rows therefore overlap, and their sum
 can exceed `total_seconds`.
+
+How many run at once is configurable, so the gate can be timed at other values,
+or tuned for a machine with more or fewer cores, without an edit:
+
+| Variable | Default | Values |
+|---|---|---|
+| `DK_GATE_UNIT_JOBS` | `3` | slots in the unit pool, a whole number from 1 |
+| `DK_GATE_INTEGRATION_JOBS` | `1` | integration suites at once, a whole number from 1 |
+| `DK_GATE_DOCS` | `pool` | `pool`: the documentation checks take a unit slot; `beside`: they run alongside the pool and take none |
+
+```bash
+DK_GATE_UNIT_JOBS=4 DK_GATE_INTEGRATION_JOBS=4 bin/dk pr
+```
+
+A value the gate does not accept stops it before any check runs, naming the
+variable, rather than falling back to the default. `--full` ignores all three and
+runs everything one at a time. `environment.json` records the values the run used
+(`gate_unit_jobs`, `gate_integration_jobs`, `gate_docs`), so a time in the summary
+can always be read with the configuration that produced it.
+
+Each suite writes its coverage data and its xml report to paths named by stage and
+package (`bin/test.sh --cov-xml`), never to the working directory, so suites
+running at once cannot replace each other's report. A suite that passes but
+leaves no coverage data fails: it measured nothing.
 
 Ctrl-C ends a run in any stage. Suites running in the pool are interrupted and
 given five seconds to tear down before they are killed. A run stopped before it
