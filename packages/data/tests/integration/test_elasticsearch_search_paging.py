@@ -16,7 +16,8 @@ So the twins disagreed, and neither could read past ``index.max_result_window``.
 Both now drive one plan: a bounded read inside the window is one ``from`` /
 ``size`` request, anything else pages with ``search_after``. The second half of
 this module sets a small window and page size, so the paging path runs on the
-node with a handful of records rather than ten thousand.
+node with a handful of records rather than ten thousand. Those are the
+backend's settings, not the index's, so both sizes read one seeded corpus.
 
 The in-memory backend is the oracle.
 """
@@ -33,6 +34,7 @@ from dataknobs_data import Filter, Operator, Query, Record
 from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 from dataknobs_data.backends.memory import SyncMemoryDatabase
+from dataknobs_data.testing import seed_elasticsearch_records
 
 pytestmark = [pytest.mark.integration, requires_real_elasticsearch]
 
@@ -92,17 +94,20 @@ def _check(found: list[Record], query: Query, ordered: bool) -> None:
     assert set(ids) <= whole_match
 
 
+def _records() -> list[Record]:
+    return [Record(data=dict(data), id=record_id) for record_id, data in RECORDS]
+
+
 @pytest.fixture
-def es_config(make_elasticsearch_test_index: Any) -> Iterator[dict[str, Any]]:
-    yield from make_elasticsearch_test_index("test_search_paging_")
+def corpus(make_elasticsearch_corpus: Any) -> dict[str, Any]:
+    """The records, seeded once and read by every case below."""
+    return make_elasticsearch_corpus("test_search_paging_", seed_elasticsearch_records(_records()))
 
 
 def _sync_db(config: dict[str, Any]) -> Iterator[SyncElasticsearchDatabase]:
     db = SyncElasticsearchDatabase(config)
     db.connect()
     try:
-        for record_id, data in RECORDS:
-            db.create(Record(data=dict(data), id=record_id))
         yield db
     finally:
         db.close()
@@ -112,8 +117,6 @@ async def _async_db(config: dict[str, Any]) -> AsyncIterator[AsyncElasticsearchD
     db = AsyncElasticsearchDatabase(config)
     await db.connect()
     try:
-        for record_id, data in RECORDS:
-            await db.create(Record(data=dict(data), id=record_id))
         yield db
     finally:
         await db.close()
@@ -121,18 +124,18 @@ async def _async_db(config: dict[str, Any]) -> AsyncIterator[AsyncElasticsearchD
 
 @pytest.fixture(params=["default", "small"])
 def sync_db(
-    request: pytest.FixtureRequest, es_config: dict[str, Any]
+    request: pytest.FixtureRequest, corpus: dict[str, Any]
 ) -> Iterator[SyncElasticsearchDatabase]:
     extra = SMALL if request.param == "small" else {}
-    yield from _sync_db({**es_config, **extra})
+    yield from _sync_db({**corpus, **extra})
 
 
 @pytest.fixture(params=["default", "small"])
 async def async_db(
-    request: pytest.FixtureRequest, es_config: dict[str, Any]
+    request: pytest.FixtureRequest, corpus: dict[str, Any]
 ) -> AsyncIterator[AsyncElasticsearchDatabase]:
     extra = SMALL if request.param == "small" else {}
-    async for db in _async_db({**es_config, **extra}):
+    async for db in _async_db({**corpus, **extra}):
         yield db
 
 
@@ -155,26 +158,30 @@ def test_sync_stream_read_reads_every_record(sync_db: SyncElasticsearchDatabase)
 
 
 @pytest.fixture
-def unmapped_config(es_config: dict[str, Any]) -> Iterator[dict[str, Any]]:
+def unmapped_config(make_elasticsearch_test_index: Any) -> Iterator[dict[str, Any]]:
     """An index created bare, so ``id`` is dynamically mapped as text.
 
     That is what an index created outside the backend gets, and a sort on
-    ``id`` there is refused; the paged read must not depend on one.
+    ``id`` there is refused; the paged read must not depend on one. Its own
+    index, because creating it bare is the point.
     """
     from elasticsearch import Elasticsearch
 
-    client = Elasticsearch([f"http://{es_config['host']}:{es_config['port']}"])
-    try:
-        client.indices.create(index=es_config["index"])
-        yield {**es_config, **SMALL}
-    finally:
-        client.close()
+    for es_config in make_elasticsearch_test_index("test_search_paging_bare_"):
+        client = Elasticsearch([f"http://{es_config['host']}:{es_config['port']}"])
+        try:
+            client.indices.create(index=es_config["index"])
+            yield {**es_config, **SMALL}
+        finally:
+            client.close()
 
 
 def test_sync_pages_an_index_without_the_backends_mapping(
     unmapped_config: dict[str, Any],
 ) -> None:
     for db in _sync_db(unmapped_config):
+        for record in _records():
+            db.create(record)
         assert len(db.search(Query())) == len(RECORDS)
 
 
@@ -182,4 +189,6 @@ async def test_async_pages_an_index_without_the_backends_mapping(
     unmapped_config: dict[str, Any],
 ) -> None:
     async for db in _async_db(unmapped_config):
+        for record in _records():
+            await db.create(record)
         assert len(await db.search(Query(offset_value=3))) == len(RECORDS) - 3

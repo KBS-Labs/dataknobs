@@ -38,6 +38,16 @@ each suite it runs. When set:
 
 The result travels on each report's ``user_properties``, which cross the
 pytest-xdist boundary, so the record is the same at ``-n 0`` and ``-n 8``.
+
+The plugin also guards the other side of the trade: a resource seeded once
+and **shared** by tests that only read it. A factory hands one out with
+:func:`take_shared_resource` and, in its own teardown, calls
+:func:`check_shared_resources`; ``make_elasticsearch_corpus`` does. Every
+shared resource the test took is fingerprinted against the reading taken when
+it was first handed out. A test that wrote errors in its own teardown, and
+every later test that asks for the resource errors at setup, naming the
+writer, rather than failing on data it did not expect. That check always
+runs: it is what makes sharing safe, not a measurement.
 """
 
 from __future__ import annotations
@@ -69,6 +79,20 @@ class _Handle:
 
 
 @dataclass
+class _Shared:
+    """One shared resource: how to read it, how it read when first handed out, and who wrote it."""
+
+    fingerprint: Callable[[], Hashable | None]
+    baseline: Hashable | None
+    instead: str
+    written_by: str | None = None
+
+
+class SharedResourceWrittenError(Exception):
+    """A test wrote to a resource it shared with other tests."""
+
+
+@dataclass
 class _ProcessState:
     """What the plugin knows in this process. Per process, which is what xdist workers are.
 
@@ -79,6 +103,9 @@ class _ProcessState:
     ``taken`` holds the handles each running test took, keyed by node id, and
     is cleared as each test ends.
 
+    ``shared`` holds every shared resource handed out in this process, by label,
+    and ``shared_taken`` the labels each running test took.
+
     ``recorder_active`` says a recorder is registered in this process. A pytest
     session run in-process inside a test (``pytester.runpytest_inprocess``) sees
     the same environment variable, and must not write the outer session's record.
@@ -86,6 +113,8 @@ class _ProcessState:
 
     current_item: Any = None
     taken: dict[str, list[_Handle]] = field(default_factory=dict)
+    shared: dict[str, _Shared] = field(default_factory=dict)
+    shared_taken: dict[str, list[str]] = field(default_factory=dict)
     recorder_active: bool = False
 
 
@@ -115,6 +144,82 @@ def take_fresh_resource(label: str, fingerprint: Callable[[], Hashable | None]) 
     if item is None:
         return
     _state.taken.setdefault(item.nodeid, []).append(_Handle(label, fingerprint))
+
+
+def take_shared_resource(
+    label: str, fingerprint: Callable[[], Hashable | None], *, instead: str
+) -> None:
+    """Record that the running test took a resource it shares with other tests.
+
+    Called by factory fixtures each time they hand a shared resource out. The
+    first call for a ``label`` reads the baseline, so a factory calls this
+    once the resource is fully seeded. The factory's teardown then calls
+    :func:`check_shared_resources`, and a difference is an error in that test.
+
+    Args:
+        label: What the resource is, unique in this process and read in the
+            error messages, such as ``"index test_corpus_1a2b3c4d"``.
+        fingerprint: Reads the resource's current state, as for
+            :func:`take_fresh_resource`.
+        instead: What a test that writes should take, named in the error a
+            writer gets, such as ``"make_elasticsearch_test_index"``.
+
+    Raises:
+        SharedResourceWrittenError: An earlier test wrote to the resource. It
+            no longer holds what it was seeded with, so this test would be
+            reading something else.
+    """
+    entry = _state.shared.get(label)
+    if entry is None:
+        entry = _state.shared[label] = _Shared(fingerprint, fingerprint(), instead)
+    elif entry.written_by is not None:
+        raise SharedResourceWrittenError(
+            f"The shared {label} was written by {entry.written_by}, so it no "
+            "longer holds what it was seeded with. Fix that test; this one did "
+            "nothing wrong."
+        )
+    item = _state.current_item
+    if item is not None:
+        taken = _state.shared_taken.setdefault(item.nodeid, [])
+        if label not in taken:
+            taken.append(label)
+
+
+def check_shared_resources() -> None:
+    """Raise if the running test left any shared resource it took changed.
+
+    Called from the teardown of the factory fixture that handed the resources
+    out. That runs after the teardown of every fixture that asked the factory
+    for one, so a fixture that writes on its way out is caught too, and before
+    any session-scoped teardown that deletes the resources.
+
+    Every changed resource is marked written before raising, so each later
+    test that asks for one is told which test wrote it.
+
+    Raises:
+        SharedResourceWrittenError: The test wrote to a shared resource.
+    """
+    item = _state.current_item
+    if item is None:
+        return
+    nodeid = item.nodeid
+    labels = _state.shared_taken.pop(nodeid, [])
+    written = [
+        (label, entry)
+        for label in labels
+        if (entry := _state.shared[label]).written_by is None
+        and entry.fingerprint() != entry.baseline
+    ]
+    for _label, entry in written:
+        entry.written_by = nodeid
+    if written:
+        names = ", ".join(label for label, _entry in written)
+        remedies = ", ".join(sorted({entry.instead for _label, entry in written}))
+        raise SharedResourceWrittenError(
+            f"{nodeid} wrote to the shared {names}. A shared resource is seeded "
+            "once and read by every test that asks for it, so a test that writes "
+            f"takes one of its own: {remedies}. See .claude/rules/test-cost.md."
+        )
 
 
 def _repository_root(start: Path) -> Path:
@@ -252,6 +357,7 @@ try:
         finally:
             _state.current_item = outer
             _state.taken.pop(item.nodeid, None)
+            _state.shared_taken.pop(item.nodeid, None)
 
     @pytest.hookimpl(wrapper=True)
     def pytest_runtest_call(item: pytest.Item) -> Iterator[Any]:

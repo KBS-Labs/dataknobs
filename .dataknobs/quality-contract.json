@@ -445,7 +445,7 @@
         {
           "path": "packages/data/tests",
           "tier": "counted",
-          "ceiling": 290,
+          "ceiling": 136,
           "reason": "tests on a fresh Elasticsearch index that read it and never wrote to it; each could share a seeded index instead"
         },
         {

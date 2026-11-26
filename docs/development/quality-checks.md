@@ -660,7 +660,7 @@ format/tests exceeds its ceiling: 21 files against 20 allowed
 The other three tools run over the tree. `provisioning` counts tests that took a
 fresh Elasticsearch index from `make_elasticsearch_test_index`, which setup
 created, and never wrote to it during the test: each paid for an index it could
-have shared. That count exists only once the tests have run, so it differs in
+have shared, as a seeded corpus from `make_elasticsearch_corpus`. That count exists only once the tests have run, so it differs in
 four ways:
 
 - **It is read from records, not measured.** Each PR-mode suite runs with

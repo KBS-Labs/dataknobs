@@ -1084,6 +1084,7 @@ controls its table/index naming.
 | `elasticsearch_connection_params` | session | `dataknobs_common.testing.elasticsearch_fixtures` |
 | `ensure_elasticsearch_ready` | session | `dataknobs_common.testing.elasticsearch_fixtures` |
 | `make_elasticsearch_test_index` | function | `dataknobs_common.testing.elasticsearch_fixtures` |
+| `make_elasticsearch_corpus` | function (corpora live for the session) | `dataknobs_common.testing.elasticsearch_fixtures` |
 
 The non-fixture helpers `wait_for_postgres()` and `wait_for_elasticsearch()`
 are also importable from `dataknobs_common.testing`, along with
@@ -1349,11 +1350,65 @@ The `docker-compose.override.yml` Elasticsearch service also sets
 `cluster.max_shards_per_node=3000` — headroom for a single run that spikes
 many concurrent indices before the next sweep, not the fix itself.
 
+### A Seeded Corpus for Tests That Only Read
+
+A fresh index costs a create, a seed and a refresh in setup, and a test that
+then only searches it bought nothing with that cost. `make_elasticsearch_corpus`
+seeds an index once and hands it to every test that asks for it by name:
+
+```python
+from dataknobs_data import Record
+from dataknobs_data.testing import seed_elasticsearch_records
+
+RECORDS = [Record({"n": n}, id=f"r{n}") for n in range(25)]
+
+@pytest.fixture
+def corpus(make_elasticsearch_corpus):
+    return make_elasticsearch_corpus("test_records_", seed_elasticsearch_records(RECORDS))
+```
+
+`corpus(name, seed)` returns a config dict of the same shape as
+`make_elasticsearch_test_index` yields. The first call for a `name` in a test
+module creates the index `f"{name}{uuid8}"`, calls `seed(config)` and refreshes
+once; every later call from that module returns the same index without seeding.
+Two modules that pick the same name get separate corpora. The seed is any
+callable taking the config. `seed_elasticsearch_records` from
+`dataknobs_data.testing` is the usual one: it writes the records in one batch
+through `SyncElasticsearchDatabase`, so the index has the backend's own mapping.
+Extra keyword arguments (`mappings=`, `settings=`) are laid over the config the
+backend opens with. A test of an index created some other way passes its own seed.
+
+Because a backend creates an index only when it is absent, any number of sync
+and async database objects can open one corpus without writing to it. So a
+parametrized fixture can hand the same corpus to both twins, and to every case.
+
+**Only tests that never write may share one.** When the factory fixture tears
+down, after every fixture that asked it for a corpus, each corpus the test took
+is fingerprinted (below) and compared with the reading taken after seeding:
+
+- A test that wrote errors in its own teardown: `<nodeid> wrote to the shared
+  index <name> ... takes one of its own: make_elasticsearch_test_index`.
+- Every later test that asks for that corpus errors at setup, naming the
+  writer, rather than failing on records it did not expect.
+
+The check runs whether or not the count below is being recorded: it is what
+makes sharing safe, not a measurement. The generic halves are
+`take_shared_resource(label, fingerprint, instead=...)` and
+`check_shared_resources()` in `dataknobs_common.testing.provisioning`.
+
+**Lifetime.** A corpus lives until the session ends (per xdist worker) and is
+deleted then; a seed that raises leaves no index behind. The
+[session-start sweep](#session-start-index-sweep) deletes `test_*` indices
+older than `DK_ES_TEST_INDEX_MAX_AGE_SECONDS` (300 by default), so a session
+holding a corpus longer than that could lose it to another checkout's session
+starting meanwhile. The longest suite that holds one runs well inside that. A
+corpus name must start `test_`, so a corpus a killed run leaks is swept too.
+
 ### Counting Tests That Never Write to Their Index
 
-A fresh index costs a create, a seed and a refresh in setup. A test that then
-only searches it could have shared one seeded index with its neighbours. The
-`dataknobs_common.testing.provisioning` plugin counts such tests, so the count
+A test on a fresh index that only searches it could have shared a seeded
+corpus with its neighbours. The `dataknobs_common.testing.provisioning` plugin
+counts such tests, so the count
 can be held under a ceiling; unlike wall time, it does not move with how loaded
 the machine is.
 
@@ -1362,8 +1417,8 @@ gate sets for each suite it runs. Then:
 
 - `make_elasticsearch_test_index` reports each index it hands out to the
   plugin, through `take_fresh_resource(label, fingerprint)`.
-- As each test's **call** phase begins and ends, every index it took is
-  fingerprinted. An index that **existed when the call began and reads the same
+- As each test's **call** phase begins and ends, every fresh index it took is
+  fingerprinted (a corpus is not: it is meant to be read). An index that **existed when the call began and reads the same
   when it ended** was created in setup and never written to, and the test is
   counted. A name taken and never created is not counted. Seeding in setup is
   not counted as the test writing, because only the call phase is read.

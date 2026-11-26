@@ -18,6 +18,7 @@ make easy, and the remaining risk is a count the gate holds under a ceiling.
 
 | Pattern | Do | Don't |
 |---|---|---|
+| **Seed once, read many** | `make_elasticsearch_corpus(name, seed)` for tests that only search, count or read: seeded once per module and name, shared by every case and both twins | give each read-only case an index of its own to seed and refresh |
 | **A fresh resource only for a writer** | `make_elasticsearch_test_index` in a test that creates, updates, deletes, closes, blocks or remaps | take one for a test that only searches, counts or reads |
 | **Seed in a batch** | `create_batch(records)`, so one refresh covers the corpus | `create()` per record with `refresh=True`: one refresh per record |
 | **Never re-ensure a session resource** | ask `make_localstack_s3_bucket` for a bucket; it is made once per session and the factory remembers it | ensure or recreate a shared bucket per test; isolate with a per-test key prefix instead |
@@ -26,6 +27,13 @@ make easy, and the remaining risk is a count the gate holds under a ceiling.
 A test that seeds in **setup** and then only reads is the shape the count looks
 for. Seeding inside the test body is a write, so such a test is not counted, but
 it pays for the index all the same; prefer the shared shape for it too.
+
+`seed_elasticsearch_records(records, **config)` (`dataknobs_data.testing`) is
+the usual seed: one `create_batch` through the backend, so the corpus has the
+backend's own mapping. A test of an index made some other way (a foreign
+mapping, a bare index) passes its own seed callable. In a parity suite, only the
+Elasticsearch branch of the backend helper takes the corpus; skip the shared
+seeding loop for that branch, since the corpus is already seeded.
 
 ## What holds it
 
@@ -44,8 +52,8 @@ per package test directory. It is a ratchet like every other cell:
 
 - **Above its ceiling, the gate fails.** The message names each file and its
   count; the suite's `provisioning-<stage>-<package>.json` under the gate's
-  output directory names each test. Make the test share a seeded index, or, if
-  it should write, let it.
+  output directory names each test. Move the test onto a corpus
+  (`make_elasticsearch_corpus`), or, if it should write, let it.
 - **Below its ceiling, the gate also fails,** and prints the command that lowers
   it. Lowering it is how the progress is recorded:
 
@@ -63,6 +71,17 @@ The count only exists once the tests have run, so it is not part of the bare
 `quality-contract.py check` (which the gate runs before any test). It runs after
 the integration stage. `charge --tool provisioning <path> --records <dir> --tested <package>`
 answers per file from the same records.
+
+### The corpus check
+
+Sharing is safe only while nobody writes. When `make_elasticsearch_corpus`
+tears down, each corpus the test took is fingerprinted against the reading
+taken after seeding. A test that wrote errors in its own teardown, naming
+`make_elasticsearch_test_index`; every later test asking for that corpus errors
+at setup, naming the writer. This runs on every session, recorded or not.
+
+When it fires, the test it names writes: move it onto a fresh index. Do not
+re-seed or work around it in the later tests, which did nothing wrong.
 
 ### The census guard
 
@@ -87,5 +106,6 @@ the patterns above still apply to them.
 
 - [`touched-file-cleanup.md`](./touched-file-cleanup.md) — the same ratchet,
   for type-checker findings
-- `packages/common/docs/testing.md` — the fixtures, the count and the record
+- `packages/common/docs/testing.md` — the fixtures, the corpus, the count and
+  the record
 - `docs/development/quality-checks.md` — where the check runs in the gate

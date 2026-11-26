@@ -6,7 +6,8 @@
 Deterministic vector draws, for this package's own tests and for consumers
 testing their own ``VectorStore`` implementations against the same protocol,
 plus :class:`HoldingStreamDatabase` for testing that a consumer of
-``stream_read`` closes the read it opened.
+``stream_read`` closes the read it opened, and :func:`seed_elasticsearch_records`
+for seeding a shared Elasticsearch corpus.
 
 Every helper here builds its own ``numpy.random.Generator`` rather than reading
 the process-global stream. That is what makes a draw safe to call from
@@ -27,7 +28,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -44,6 +45,7 @@ __all__ = [
     "DeterministicEmbedder",
     "HoldingStreamDatabase",
     "chroma_embedding_function",
+    "seed_elasticsearch_records",
     "text_embedding",
     "vector",
     "vectors",
@@ -356,3 +358,56 @@ class HoldingStreamDatabase(AsyncMemoryDatabase):
                 yield Record(data=dict(row))
         finally:
             self.held -= 1
+
+
+def seed_elasticsearch_records(
+    records: Iterable[Record], **config: Any
+) -> Callable[[dict[str, Any]], None]:
+    """A seed for ``make_elasticsearch_corpus`` that writes ``records`` in one batch.
+
+    ``make_elasticsearch_corpus`` (from ``dataknobs-common``'s pytest plugin)
+    seeds an index once and shares it between the tests that only read it. It
+    takes the seed as a callable, because ``dataknobs-common`` cannot import a
+    backend; this builds the usual one:
+
+        RECORDS = [Record({"n": n}, id=f"r{n}") for n in range(25)]
+
+        @pytest.fixture
+        def records_config(make_elasticsearch_corpus):
+            return make_elasticsearch_corpus(
+                "test_records_", seed_elasticsearch_records(RECORDS)
+            )
+
+    The seed opens a :class:`~dataknobs_data.backends.elasticsearch.SyncElasticsearchDatabase`
+    on the corpus config, so the index gets the backend's own mapping exactly
+    as a test that created it through the backend would, writes every record
+    with ``create_batch`` (one bulk request rather than one request and refresh
+    per record), and closes it. A record's ``id`` is kept, and minted where
+    absent.
+
+    The seed is synchronous, so called from an async fixture it blocks that
+    test's event loop for the bulk write. That loop is built for the one test
+    and torn down after it, so nothing else on it waits.
+
+    Args:
+        records: The records to write. Read once, when this is called, so a
+            generator is fine.
+        **config: Backend configuration laid over the corpus config, such as
+            ``mappings`` or ``settings`` for the index the backend creates.
+
+    Returns:
+        ``seed(config)``, to pass to ``make_elasticsearch_corpus``.
+    """
+    batch = list(records)
+
+    def seed(corpus_config: dict[str, Any]) -> None:
+        from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
+
+        db = SyncElasticsearchDatabase({**corpus_config, **config})
+        db.connect()
+        try:
+            db.create_batch(batch)
+        finally:
+            db.close()
+
+    return seed

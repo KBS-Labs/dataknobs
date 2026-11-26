@@ -16,7 +16,7 @@ These apply to all work in this project. See the global `~/.claude/CLAUDE.md` fo
 8. **Consumer extensibility** - bias toward extension points (registries, hooks, injectable parameters) over special-case knobs; capture deferred opportunities with rationale rather than dismissing them; we're building a production-ready toolkit consumers grab off the shelf and run to production, NOT a set of seams they must finish themselves — ship reference impls of standard production behaviors alongside their Protocols, and defer only against a named category in the deferral bar (see `rules/consumer-extensibility.md`)
 9. **The config decides what is an error** - ruff and mypy configuration is the sole authority on what is a lint or type error. Ask `bin/quality-contract.py explain <CODE> [<path>]` before reporting or "fixing" a finding; never report one from a declined rule, and never narrow `--select` while fixing (see `rules/lint-policy-authority.md`)
 10. **Clear what the file you opened owes** - a change that opens a file clears the mypy findings it owes and lowers the ceiling in the same PR, unless the file owes more than 25. Ask with `bin/quality-contract.py charge --tool mypy <path>`; do not estimate. Fix, don't suppress; reproduce-first still applies to any finding whose fix changes behaviour; a companion PR is acceptable (see `rules/touched-file-cleanup.md`)
-11. **A fresh service resource is for a test that writes** - a test that only reads shares a seeded resource; take index names from `make_elasticsearch_test_index`, never spell them. The gate counts tests that took a fresh index and never wrote to it, per package, under the contract's `provisioning` ceilings (see `rules/test-cost.md`)
+11. **A fresh service resource is for a test that writes** - a test that only reads shares a seeded resource (`make_elasticsearch_corpus`); take index names from `make_elasticsearch_test_index`, never spell them. The gate counts tests that took a fresh index and never wrote to it, per package, under the contract's `provisioning` ceilings (see `rules/test-cost.md`)
 
 ### This Project's Special Role
 
@@ -108,6 +108,7 @@ These exist for use by dataknobs tests AND all consuming projects:
 | Event bus | `InMemoryEventBus` | `dataknobs-common` |
 | Rate limiter | `InMemoryRateLimiter` - sliding window, per-category rates, weighted ops | `dataknobs-common` |
 | Pytest markers | `@requires_ollama`, `@requires_faiss`, `@requires_redis` | `dataknobs-common` |
+| Elasticsearch index for read-only tests | `make_elasticsearch_corpus` fixture - seeded once per module and name, shared, errors a test that writes to it; seed with `seed_elasticsearch_records` (`dataknobs_data.testing`) | `dataknobs-common` |
 | Sync/async twin parity | `assert_twins_agree` (one pair), `assert_twin_types_agree` (named members of two twinned types) - one guard for a twin pair's surface, with each stated difference declared | `dataknobs-common` |
 
 If a new testing construct is needed, **add it to the appropriate dataknobs package** for cross-project reuse.

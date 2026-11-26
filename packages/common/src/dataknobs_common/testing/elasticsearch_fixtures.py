@@ -8,12 +8,19 @@ This module is a pytest11 plugin (registered in
 ``dataknobs-common`` automatically gets these fixtures via pytest's plugin
 discovery — no explicit ``conftest.py`` imports required.
 
-Consumers wrap :func:`make_elasticsearch_test_index` with a thin per-prefix
-fixture to get a clean per-test index:
+Two factories hand out an index. A test that writes takes one of its own from
+:func:`make_elasticsearch_test_index`, through a thin per-prefix fixture:
 
     @pytest.fixture
     def elasticsearch_test_index(make_elasticsearch_test_index):
         yield from make_elasticsearch_test_index("test_records_")
+
+A test that only reads takes a seeded corpus from
+:func:`make_elasticsearch_corpus`, which seeds an index once and shares it:
+
+    @pytest.fixture
+    def records(make_elasticsearch_corpus):
+        return make_elasticsearch_corpus("test_records_", seed_the_records)
 
 The ``requests`` and ``dataknobs_utils.elasticsearch_utils`` imports are
 deferred to fixture-body execution so this module does not impose either
@@ -39,7 +46,11 @@ from collections.abc import Callable, Iterator
 from typing import Any, NamedTuple
 
 from dataknobs_common.testing._core import _docker_aware_default_host
-from dataknobs_common.testing.provisioning import take_fresh_resource
+from dataknobs_common.testing.provisioning import (
+    check_shared_resources,
+    take_fresh_resource,
+    take_shared_resource,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +243,44 @@ def _present_fingerprint(config: dict[str, Any]) -> Callable[[], IndexFingerprin
         return fingerprint if fingerprint.exists else None
 
     return read
+
+
+def _delete_index(config: dict[str, Any]) -> None:
+    """Delete ``config``'s index if it exists, logging rather than raising a failure.
+
+    Teardown is best-effort: ``ConnectionError`` / ``ValueError`` /
+    ``ElasticsearchRequestError`` are logged at WARNING and swallowed, so a
+    cleanup failure does not mask the test's own outcome. Other exceptions
+    propagate so unexpected failures surface.
+    """
+    from dataknobs_utils.elasticsearch_utils import (
+        ElasticsearchRequestError,
+        SimplifiedElasticsearchIndex,
+    )
+
+    try:
+        es_index = SimplifiedElasticsearchIndex(
+            index_name=config["index"],
+            host=config["host"],
+            port=config["port"],
+        )
+        if es_index.exists():
+            es_index.delete()
+    except (ConnectionError, ElasticsearchRequestError, ValueError) as exc:
+        logger.warning("Failed to clean up Elasticsearch index %s: %s", config["index"], exc)
+
+
+def _refresh_index(config: dict[str, Any]) -> None:
+    """Make everything written to ``config``'s index visible to search."""
+    from dataknobs_utils.requests_utils import RequestHelper
+
+    response = RequestHelper(config["host"], config["port"], timeout=30).post(
+        f"{config['index']}/_refresh"
+    )
+    if not response.succeeded:
+        raise ConnectionError(
+            f"Refreshing index {config['index']} returned status {response.status}"
+        )
 
 
 #: Default staleness threshold (seconds) below which an index is considered
@@ -483,11 +532,6 @@ try:
         """
 
         def factory(index_prefix: str) -> Iterator[dict[str, Any]]:
-            from dataknobs_utils.elasticsearch_utils import (
-                ElasticsearchRequestError,
-                SimplifiedElasticsearchIndex,
-            )
-
             test_id = uuid.uuid4().hex[:8]
             config = elasticsearch_connection_params.copy()
             config["index"] = f"{index_prefix}{test_id}"
@@ -497,22 +541,114 @@ try:
             try:
                 yield config
             finally:
-                try:
-                    es_index = SimplifiedElasticsearchIndex(
-                        index_name=config["index"],
-                        host=config["host"],
-                        port=config["port"],
-                    )
-                    if es_index.exists():
-                        es_index.delete()
-                except (ConnectionError, ElasticsearchRequestError, ValueError) as exc:
-                    logger.warning(
-                        "Failed to clean up Elasticsearch index %s: %s",
-                        config["index"],
-                        exc,
-                    )
+                _delete_index(config)
 
         return factory
+
+    @pytest.fixture(scope="session")
+    def _elasticsearch_corpora(
+        ensure_elasticsearch_ready: None,
+    ) -> Iterator[dict[tuple[str, str], dict[str, Any]]]:
+        """Every corpus this session seeded, by test module and name; deleted at the end."""
+        corpora: dict[tuple[str, str], dict[str, Any]] = {}
+        yield corpora
+        for config in corpora.values():
+            _delete_index(config)
+
+    @pytest.fixture
+    def make_elasticsearch_corpus(
+        request: pytest.FixtureRequest,
+        _elasticsearch_corpora: dict[tuple[str, str], dict[str, Any]],
+        elasticsearch_connection_params: dict[str, Any],
+    ) -> Iterator[Callable[[str, Callable[[dict[str, Any]], None]], dict[str, Any]]]:
+        """Factory fixture for a seeded index that tests which only read share.
+
+        A test that creates, seeds and refreshes an index of its own pays for
+        it in setup, and if it then only searches, that cost bought nothing.
+        This factory seeds an index once and hands it to every test that asks
+        for it by the same name:
+
+            def seed(config):
+                ...  # write the records to config["index"]
+
+            @pytest.fixture
+            def records(make_elasticsearch_corpus):
+                return make_elasticsearch_corpus("test_records_", seed)
+
+        ``corpus(name, seed)`` returns a connection-config dict of the same
+        shape as :func:`make_elasticsearch_test_index` yields. The first call
+        for a ``name`` in a test module builds the index
+        ``f"{name}{uuid8}"``, calls ``seed(config)``, and refreshes once; every
+        later call from that module returns the same index without seeding.
+        A corpus belongs to the module that asked for it, so two modules that
+        pick one name never read each other's records. ``dataknobs_data.testing``
+        provides ``seed_elasticsearch_records`` for the usual seed, a batch of
+        records written through the backend.
+
+        **Only tests that never write may share a corpus.** In this fixture's
+        teardown, after that of every fixture that asked it for a corpus, the
+        corpus is compared with how the seed left it
+        (:func:`elasticsearch_index_fingerprint`). A test that wrote errors in
+        its own teardown, naming :func:`make_elasticsearch_test_index`, which is
+        what a writer should take; every later test that asks for that corpus
+        errors at setup, naming the writer. Opening a backend on the index does
+        not count as a write: the backends create an index only when it is
+        absent.
+
+        **Lifetime.** A corpus lives until the session ends (per xdist worker)
+        and is deleted then. The session sweep in
+        :func:`ensure_elasticsearch_ready` deletes ``test_*`` indices older than
+        ``DK_ES_TEST_INDEX_MAX_AGE_SECONDS`` (300 by default), so a corpus held
+        longer than that could be removed by another checkout's session that
+        starts while this one runs. ``name`` must therefore start ``test_``: that
+        is the namespace the sweep reclaims, so a corpus a killed run leaked is
+        reclaimed too.
+
+        A seed that raises leaves no index behind: it is deleted before the
+        exception propagates, with a note naming it.
+
+        Args:
+            request: The asking test, whose module scopes the corpus.
+            _elasticsearch_corpora: The session's corpora.
+            elasticsearch_connection_params: Session-scoped connection params.
+
+        Yields:
+            A callable that, given a ``name`` and a ``seed``, returns the config
+            of the module's corpus of that name, seeding it on first use.
+        """
+
+        def corpus(name: str, seed: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+            if not name.startswith("test_"):
+                raise ValueError(
+                    f"A corpus name must start 'test_', the namespace the session sweep "
+                    f"reclaims, so a corpus a killed run leaks is not kept forever; "
+                    f"got {name!r}"
+                )
+            key = (str(request.path), name)
+            config = _elasticsearch_corpora.get(key)
+            if config is None:
+                config = elasticsearch_connection_params.copy()
+                config["index"] = f"{name}{uuid.uuid4().hex[:8]}"
+                config["refresh"] = True
+                try:
+                    seed(dict(config))
+                    _refresh_index(config)
+                except BaseException as exc:
+                    _delete_index(config)
+                    exc.add_note(
+                        f"while seeding the corpus index {config['index']}, which was deleted"
+                    )
+                    raise
+                _elasticsearch_corpora[key] = config
+            take_shared_resource(
+                f"index {config['index']}",
+                _present_fingerprint(config),
+                instead="make_elasticsearch_test_index",
+            )
+            return dict(config)
+
+        yield corpus
+        check_shared_resources()
 
 except ImportError:
     # pytest not installed — fixture decorators unavailable.
@@ -520,3 +656,5 @@ except ImportError:
     elasticsearch_connection_params = None  # type: ignore[assignment]
     ensure_elasticsearch_ready = None  # type: ignore[assignment]
     make_elasticsearch_test_index = None  # type: ignore[assignment]
+    _elasticsearch_corpora = None  # type: ignore[assignment]
+    make_elasticsearch_corpus = None  # type: ignore[assignment]
