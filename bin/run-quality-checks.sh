@@ -772,6 +772,21 @@ fi
 # Set environment variables for all checks
 set_environment_vars
 
+# How many suites run at once (bin/gate-progress.sh, resolve_gate_settings).
+# Read before anything runs, so a value the gate does not accept stops it here
+# rather than after validation. Full mode is sequential by definition, so there
+# the settings are the values that make it so, whatever the environment says,
+# and environment.json records what ran.
+if ! resolve_gate_settings; then
+    print_error "Invalid gate setting (see above)"
+    exit 1
+fi
+if [ "$RUN_MODE" = "full" ]; then
+    GATE_UNIT_JOBS=1
+    GATE_INTEGRATION_JOBS=1
+    GATE_DOCS="pool"
+fi
+
 # Capture environment information (an artifact, so gate only)
 if [ "$EMIT_ARTIFACTS" = "yes" ]; then
     print_status "Capturing environment information..."
@@ -785,7 +800,10 @@ if [ "$EMIT_ARTIFACTS" = "yes" ]; then
   "git_branch": "$(git branch --show-current 2>/dev/null || echo 'unknown')",
   "git_commit": "$(git rev-parse HEAD 2>/dev/null || echo 'unknown')",
   "docker_container": "$IN_DOCKER",
-  "docker_compose_services": "postgres, elasticsearch, localstack"
+  "docker_compose_services": "postgres, elasticsearch, localstack",
+  "gate_unit_jobs": $GATE_UNIT_JOBS,
+  "gate_integration_jobs": $GATE_INTEGRATION_JOBS,
+  "gate_docs": "$GATE_DOCS"
 }
 EOF
     print_success "Environment captured"
@@ -1261,58 +1279,82 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             PYTEST_ARGS="$GATE_PYTEST_REPORT_FLAGS $PYTEST_ARGS"
         fi
 
-        # Helper: run unit tests for a single package, saving artifacts.
-        # Uses per-package coverage filenames to avoid race conditions in concurrent mode.
-        # Args: $1=package name. UNIT_COV_REPORT is the coverage report type.
-        # shellcheck disable=SC2329  # called by run_gate_job
-        run_unit_for_pkg() {
-            local pkg=$1
-            local cov_report="$UNIT_COV_REPORT"
-            local suite_start
+        # One package's suite at one stage, with its artifacts. The unit and
+        # integration stages differ only in the stage name and the coverage
+        # report, so they share this rather than each keeping a copy.
+        #
+        # Everything a suite writes is named by stage and package, because
+        # either stage may run several suites at once: its own COVERAGE_FILE,
+        # output file, provisioning record and, when an xml report is asked
+        # for, its own xml path (test.sh --cov-xml). Nothing is written to the
+        # working directory, where two suites would replace each other's file.
+        #
+        # Args: $1=stage (unit|integration), $2=package, $3=coverage report type.
+        # shellcheck disable=SC2329  # called by run_unit_for_pkg and run_integration_for_pkg
+        run_suite_for_pkg() {
+            local stage=$1 pkg=$2 cov_report=$3
+            local label suite_start test_exit=0
+            local data_file="$PROJECT_ROOT/.coverage.$stage.$pkg"
+            local output="$OUTPUT_DIR/$stage-test-output-$pkg.txt"
+            case "$stage" in
+                unit) label="Unit" ;;
+                integration) label="Integration" ;;
+            esac
             suite_start=$(date +%s)
-            print_status "Running unit tests for $pkg..."
-            local test_exit=0
+            print_status "Running $stage tests for $pkg..."
 
-            # Set unique coverage file to avoid collisions in concurrent mode
-            export COVERAGE_FILE="$PROJECT_ROOT/.coverage.unit.$pkg"
-
+            rm -f "$data_file"
             if [ -n "$PYTEST_ARGS" ]; then
                 # Deliberate word splitting — see the waiver above the ruff call.
                 # shellcheck disable=SC2086
-                DK_PROVISIONING_RECORD="$OUTPUT_DIR/provisioning-unit-$pkg.json" \
-                    $TEST_CMD "$pkg" -t unit --cov-report "$cov_report" $TEST_FLAGS -- $PYTEST_ARGS > "$OUTPUT_DIR/unit-test-output-$pkg.txt" 2>&1 || test_exit=$?
+                COVERAGE_FILE="$data_file" \
+                DK_PROVISIONING_RECORD="$OUTPUT_DIR/provisioning-$stage-$pkg.json" \
+                    $TEST_CMD "$pkg" -t "$stage" --cov-report "$cov_report" \
+                    --cov-xml "$OUTPUT_DIR/coverage-$stage-$pkg.xml" \
+                    $TEST_FLAGS -- $PYTEST_ARGS > "$output" 2>&1 || test_exit=$?
             else
                 # Deliberate word splitting — see the waiver above the ruff call.
                 # shellcheck disable=SC2086
-                DK_PROVISIONING_RECORD="$OUTPUT_DIR/provisioning-unit-$pkg.json" \
-                    $TEST_CMD "$pkg" -t unit --cov-report "$cov_report" $TEST_FLAGS > "$OUTPUT_DIR/unit-test-output-$pkg.txt" 2>&1 || test_exit=$?
+                COVERAGE_FILE="$data_file" \
+                DK_PROVISIONING_RECORD="$OUTPUT_DIR/provisioning-$stage-$pkg.json" \
+                    $TEST_CMD "$pkg" -t "$stage" --cov-report "$cov_report" \
+                    --cov-xml "$OUTPUT_DIR/coverage-$stage-$pkg.xml" \
+                    $TEST_FLAGS > "$output" 2>&1 || test_exit=$?
             fi
 
-            # Save coverage artifacts
-            if [ -f "coverage.xml" ]; then
-                mv coverage.xml "$OUTPUT_DIR/coverage-unit-$pkg.xml"
+            # The data file is this suite's or nothing. There used to be a
+            # fallback to a bare ./.coverage, for a COVERAGE_FILE that was not
+            # honoured; with suites running at once, whose that file was could
+            # only be guessed. A suite that passed and left no data measured
+            # nothing, and saying so is the check.
+            if [ -f "$data_file" ]; then
+                mv "$data_file" "$OUTPUT_DIR/.coverage.$stage.$pkg"
+            elif [ "$test_exit" -eq 0 ]; then
+                print_error "$label tests for $pkg passed but wrote no coverage data to $data_file"
+                echo "No coverage data at $data_file: COVERAGE_FILE was not honoured." >> "$output"
+                test_exit=1
             fi
-            if [ -f "$PROJECT_ROOT/.coverage.unit.$pkg" ]; then
-                mv "$PROJECT_ROOT/.coverage.unit.$pkg" "$OUTPUT_DIR/.coverage.unit.$pkg"
-            elif [ -f ".coverage" ]; then
-                mv .coverage "$OUTPUT_DIR/.coverage.unit.$pkg"
-            fi
-
-            # Unset to avoid leaking
-            unset COVERAGE_FILE
 
             if [ "$test_exit" -ne 0 ] && [ "$test_exit" -ne 5 ]; then
-                print_error "Unit tests failed for $pkg ($(format_elapsed "$(elapsed_since "$suite_start")"))"
-                report_failed_suite "$OUTPUT_DIR/unit-test-output-$pkg.txt" "$FAILED_SUITES_FILE"
+                print_error "$label tests failed for $pkg ($(format_elapsed "$(elapsed_since "$suite_start")"))"
+                report_failed_suite "$output" "$FAILED_SUITES_FILE"
                 return "$test_exit"
-            else
-                # Recorded as this suite's time in the summary's suite_seconds,
-                # which longest_suite_first reads back from the committed
-                # history. Not for one that failed, which may have stopped early.
-                elapsed_since "$suite_start" > "$OUTPUT_DIR/unit-test-seconds-$pkg.txt"
-                print_success "Unit tests passed for $pkg ($(format_elapsed "$(elapsed_since "$suite_start")"))"
-                return 0
             fi
+            # Recorded as this suite's time in the summary's suite_seconds,
+            # which longest_suite_first reads back from the committed history.
+            # Not for one that failed, which may have stopped early.
+            elapsed_since "$suite_start" > "$OUTPUT_DIR/$stage-test-seconds-$pkg.txt"
+            print_success "$label tests passed for $pkg ($(format_elapsed "$(elapsed_since "$suite_start")"))"
+        }
+
+        # shellcheck disable=SC2329  # called by run_gate_job
+        run_unit_for_pkg() {
+            run_suite_for_pkg unit "$1" "$UNIT_COV_REPORT" || return $?
+        }
+
+        # shellcheck disable=SC2329  # called by run_pool, by name
+        run_integration_for_pkg() {
+            run_suite_for_pkg integration "$1" "$TEST_COV_REPORT" || return $?
         }
 
         # Determine packages to test. The empty case is load-bearing: it is
@@ -1402,16 +1444,17 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         # the guards and the documentation checks collect no coverage.
         print_status "Running unit tests..."
         _unit_start=$(date +%s)
+        # How many at once is GATE_UNIT_JOBS (resolve_gate_settings, above;
+        # 1 in full mode). The default of 3 was set to keep CPU contention from
+        # breaking timing-sensitive tests; no test was named when it was, so
+        # what a higher value breaks is for a measurement to say.
         if [ "$RUN_MODE" = "full" ]; then
             # Full mode: sequential execution, with each suite's own XML report.
-            MAX_CONCURRENT=1
             UNIT_COV_REPORT="$TEST_COV_REPORT"
         else
-            # PR/All mode: concurrent execution.
-            # Skip per-package XML reports to avoid write collisions — XML is generated
-            # from combined .coverage data in the coverage combining phase.
-            # Limit concurrency to avoid CPU contention breaking timing-sensitive tests.
-            MAX_CONCURRENT=3
+            # PR/All mode: concurrent execution. No per-package XML report:
+            # the XML is generated from the combined .coverage data in the
+            # coverage combining phase.
             UNIT_COV_REPORT="none"
         fi
 
@@ -1433,13 +1476,25 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             print_error "Could not order the unit suites: '$PACKAGES_TO_TEST' became '$UNIT_ORDER'"
             exit 1
         fi
+        # The documentation checks take a slot in the pool, or with
+        # GATE_DOCS=beside run alongside it and take none. Either way their
+        # verdict is their status file, not the pool's status.
         GATE_JOBS="@workspace"
+        DOCS_BESIDE_PID=""
         if [ "$DOCS_CHECKS_DUE" = "yes" ]; then
-            GATE_JOBS="$GATE_JOBS @docs"
+            if [ "$GATE_DOCS" = "beside" ]; then
+                run_beside run_gate_job @docs
+                DOCS_BESIDE_PID=$BESIDE_PID
+            else
+                GATE_JOBS="$GATE_JOBS @docs"
+            fi
         fi
         rm -f "$OUTPUT_DIR/workspace-guards-seconds.txt"
         # shellcheck disable=SC2086  # two lists of job names, split on purpose
-        run_pool "$MAX_CONCURRENT" run_gate_job $GATE_JOBS $UNIT_ORDER || UNIT_TEST_STATUS=1
+        run_pool "$GATE_UNIT_JOBS" run_gate_job $GATE_JOBS $UNIT_ORDER || UNIT_TEST_STATUS=1
+        if [ -n "$DOCS_BESIDE_PID" ]; then
+            wait "$DOCS_BESIDE_PID" || true
+        fi
         UNIT_TEST_SECONDS=$(elapsed_since "$_unit_start")
         # Absent only if the guards died before recording it, which the pool
         # has already reported as a failure; null says it was not measured.
@@ -1447,8 +1502,18 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             WORKSPACE_GUARD_SECONDS=$(cat "$OUTPUT_DIR/workspace-guards-seconds.txt")
         fi
 
-        # Run integration tests (always sequential — shared external services).
-        # An empty PACKAGES_TO_TEST makes the loop below iterate zero times, so
+        # Run integration tests, GATE_INTEGRATION_JOBS at a time (default 1:
+        # one after another), longest first, as the unit pool orders its suites.
+        #
+        # Suites running at once share the external services. What keeps them
+        # apart: every Elasticsearch index a test takes is named by the plugin
+        # for that session, and the session sweep deletes only test_* indices
+        # older than 300 seconds (DK_ES_TEST_INDEX_MAX_AGE_SECONDS), so two
+        # sessions of one gate cannot sweep each other's while each stays under
+        # five minutes; the longest takes well under one. Whatever else they
+        # share is what running them at once is there to find out.
+        #
+        # An empty PACKAGES_TO_TEST makes the pool below run nothing, so
         # the stage did not run rather than running instantly. Recorded here so
         # the duration and the summary's "skipped" cannot disagree about it.
         if [ -z "$PACKAGES_TO_TEST" ]; then
@@ -1457,50 +1522,32 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         else
             print_status "Running integration tests..."
         fi
-        _integration_start=$(date +%s)
+        INTEGRATION_PACKAGES=""
         for pkg in $PACKAGES_TO_TEST; do
-            if [ -d "packages/$pkg" ] && [ -d "packages/$pkg/tests/integration" ]; then
-                print_status "Running integration tests for $pkg..."
-                local_exit=0
-                _suite_start=$(date +%s)
-
-                # Use per-package coverage file
-                export COVERAGE_FILE="$PROJECT_ROOT/.coverage.integration.$pkg"
-
-                if [ -n "$PYTEST_ARGS" ]; then
-                    # Deliberate word splitting — see the waiver above the ruff call.
-                    # shellcheck disable=SC2086
-                    DK_PROVISIONING_RECORD="$OUTPUT_DIR/provisioning-integration-$pkg.json" \
-                        $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS -- $PYTEST_ARGS > "$OUTPUT_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
-                else
-                    # Deliberate word splitting — see the waiver above the ruff call.
-                    # shellcheck disable=SC2086
-                    DK_PROVISIONING_RECORD="$OUTPUT_DIR/provisioning-integration-$pkg.json" \
-                        $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS > "$OUTPUT_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
-                fi
-
-                unset COVERAGE_FILE
-
-                if [ $local_exit -ne 0 ] && [ $local_exit -ne 5 ]; then
-                    INTEGRATION_TEST_STATUS=$local_exit
-                    print_error "Integration tests failed for $pkg ($(format_elapsed "$(elapsed_since "$_suite_start")"))"
-                    report_failed_suite "$OUTPUT_DIR/integration-test-output-$pkg.txt" "$FAILED_SUITES_FILE"
-                else
-                    # The summary's integration suite_seconds, as for the unit suites.
-                    elapsed_since "$_suite_start" > "$OUTPUT_DIR/integration-test-seconds-$pkg.txt"
-                    print_success "Integration tests passed for $pkg ($(format_elapsed "$(elapsed_since "$_suite_start")"))"
-                fi
-
-                if [ -f "coverage.xml" ]; then
-                    mv coverage.xml "$OUTPUT_DIR/coverage-integration-$pkg.xml"
-                fi
-                if [ -f "$PROJECT_ROOT/.coverage.integration.$pkg" ]; then
-                    mv "$PROJECT_ROOT/.coverage.integration.$pkg" "$OUTPUT_DIR/.coverage.integration.$pkg"
-                elif [ -f ".coverage" ]; then
-                    mv .coverage "$OUTPUT_DIR/.coverage.integration.$pkg"
-                fi
+            if [ -d "packages/$pkg/tests/integration" ]; then
+                INTEGRATION_PACKAGES="$INTEGRATION_PACKAGES $pkg"
             fi
         done
+        INTEGRATION_ORDER=""
+        if [ -n "$INTEGRATION_PACKAGES" ]; then
+            # Counted, as the unit order is: a short order would skip suites.
+            # Deliberate word splitting — a space-separated set of package names.
+            # shellcheck disable=SC2086
+            INTEGRATION_ORDER=$(longest_suite_first --stage integration "$PROJECT_ROOT" $INTEGRATION_PACKAGES) || {
+                print_error "Could not read the suite times to order the integration suites (see above)"
+                exit 1
+            }
+            if [ "$(echo "$INTEGRATION_ORDER" | wc -w)" -ne "$(echo "$INTEGRATION_PACKAGES" | wc -w)" ]; then
+                print_error "Could not order the integration suites: '$INTEGRATION_PACKAGES' became '$INTEGRATION_ORDER'"
+                exit 1
+            fi
+        fi
+        _integration_start=$(date +%s)
+        # A pool job is a subshell, so the verdict is the pool's status: 1 if
+        # any suite failed. The summary reads it only as zero or not.
+        # shellcheck disable=SC2086  # a list of package names, split on purpose
+        run_pool "$GATE_INTEGRATION_JOBS" run_integration_for_pkg $INTEGRATION_ORDER \
+            || INTEGRATION_TEST_STATUS=1
         # Only a stage that ran has a duration. A zero-iteration loop measures
         # 0, and 0 is a measurement rather than the absence of one.
         if [ "$INTEGRATION_SKIPPED" != "true" ]; then

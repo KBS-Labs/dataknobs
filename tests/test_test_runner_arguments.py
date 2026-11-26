@@ -22,6 +22,8 @@ package*, which is the half that was broken.
 
 from __future__ import annotations
 
+import re
+import shlex
 import subprocess
 
 from tests._workspace import ROOT
@@ -44,7 +46,7 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_a_second_package_is_not_swallowed_as_an_unknown_option():
+def test_a_second_package_is_not_swallowed_as_an_unknown_option() -> None:
     """``bin/test.sh <pkg> <pkg>`` must reach the packages, not the usage text.
 
     Probed with a real package and a missing one: the run must fail *because
@@ -64,7 +66,7 @@ def test_a_second_package_is_not_swallowed_as_an_unknown_option():
     )
 
 
-def test_an_unknown_option_is_rejected_as_an_option():
+def test_an_unknown_option_is_rejected_as_an_option() -> None:
     """A misspelled flag must fail, and fail as a *flag*.
 
     The exit code alone was already non-zero here, but for the wrong reason:
@@ -87,9 +89,54 @@ def test_an_unknown_option_is_rejected_as_an_option():
     )
 
 
-def test_help_still_succeeds():
+def test_help_still_succeeds() -> None:
     """The one caller for which exit 0 is right, so the fix cannot overshoot."""
     result = _run("--help")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Usage:" in result.stdout
+
+
+def test_the_xml_report_path_is_an_option_not_a_package() -> None:
+    """``--cov-xml PATH`` is how the gate gives each suite a report of its own.
+
+    Probed as the cases above are: the run fails on the missing package, which
+    it reaches only if ``--cov-xml`` and its value were taken as an option.
+    """
+    result = _run("--cov-xml", "/nonexistent/coverage-unit-x.xml", MISSING)
+    combined = result.stdout + result.stderr
+
+    assert result.returncode != 0, combined
+    assert MISSING in combined and "Unknown option" not in combined, combined
+    assert "coverage-unit-x.xml" not in combined, (
+        "the report path was read as a package name:\n" + combined
+    )
+
+
+def _build_cov_args(**env: str) -> str:
+    """``build_cov_args`` out of test.sh, which runs when executed and so cannot be sourced."""
+    source = TEST_SH.read_text(encoding="utf-8")
+    found = re.search(r"^build_cov_args\(\) \{\n.*?^\}$", source, re.MULTILINE | re.DOTALL)
+    assert found, "bin/test.sh defines no build_cov_args()"
+    assigned = "".join(f"{name}={shlex.quote(value)}\n" for name, value in env.items())
+    result = subprocess.run(
+        ["bash", "-c", f"{found[0]}\n{assigned}build_cov_args data"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    return result.stdout
+
+
+def test_the_xml_report_goes_where_it_is_told() -> None:
+    args = _build_cov_args(COVERAGE="yes", COV_REPORT="xml", COV_XML="/out/coverage-unit-data.xml")
+    assert "--cov-report=xml:/out/coverage-unit-data.xml" in args.split()
+
+
+def test_the_xml_report_goes_to_the_working_directory_by_default() -> None:
+    """Every caller but the gate keeps the report where it always was."""
+    source = TEST_SH.read_text(encoding="utf-8")
+    assert re.search(r'^COV_XML="coverage\.xml"$', source, re.MULTILINE)
+    args = _build_cov_args(COVERAGE="yes", COV_REPORT="xml", COV_XML="coverage.xml")
+    assert "--cov-report=xml:coverage.xml" in args.split()
