@@ -366,6 +366,12 @@ clear_coverage "$OUTPUT_DIR"
 # for a suite this run did not run or that failed.
 rm -f "$OUTPUT_DIR"/unit-test-seconds-*.txt "$OUTPUT_DIR"/integration-test-seconds-*.txt
 
+# Each PR-mode suite writes its provisioning record here (DK_PROVISIONING_RECORD,
+# read by dataknobs_common.testing.provisioning), and the provisioning check reads
+# them after the test stages. One left by an earlier run would be counted as this
+# run's for a suite that crashed before writing its own.
+rm -f "$OUTPUT_DIR"/provisioning-*.json
+
 # record_check <name> <exit_code> [--tool T] [--skipped true|false]
 #              --duration <seconds|null> [--field key=<json>]
 #
@@ -797,6 +803,7 @@ INTEGRATION_TEST_STATUS=0
 WORKFLOW_LINT_STATUS=0
 SHELL_LINT_STATUS=0
 CONTRACT_STATUS=0
+PROVISIONING_STATUS=0
 
 # How long each check took, in whole seconds, for the durations recorded
 # alongside its status in quality-summary.json. These answer "where does a gate
@@ -814,6 +821,7 @@ VALIDATION_SECONDS=null
 SHELL_LINT_SECONDS=null
 WORKFLOW_LINT_SECONDS=null
 CONTRACT_SECONDS=null
+PROVISIONING_SECONDS=null
 UNIT_TEST_SECONDS=null
 INTEGRATION_TEST_SECONDS=null
 WORKSPACE_GUARD_SECONDS=null
@@ -856,7 +864,7 @@ json_array_of() {
 # or leaves it invisible to CI entirely (the workflow lint). Both halves are
 # guarded by tests/test_quality_gate_accounting.py.
 compute_overall_status() {
-    if [ "$VALIDATION_STATUS" -ne 0 ] || [ "$DOCS_STATUS" -ne 0 ] || [ "$DOCS_VERSIONS_STATUS" -ne 0 ] || [ "$DOCS_MIRROR_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ] || [ "$WORKFLOW_LINT_STATUS" -ne 0 ] || [ "$SHELL_LINT_STATUS" -ne 0 ] || [ "$CONTRACT_STATUS" -ne 0 ]; then
+    if [ "$VALIDATION_STATUS" -ne 0 ] || [ "$DOCS_STATUS" -ne 0 ] || [ "$DOCS_VERSIONS_STATUS" -ne 0 ] || [ "$DOCS_MIRROR_STATUS" -ne 0 ] || [ "$TEST_STATUS" -ne 0 ] || [ "$WORKFLOW_LINT_STATUS" -ne 0 ] || [ "$SHELL_LINT_STATUS" -ne 0 ] || [ "$CONTRACT_STATUS" -ne 0 ] || [ "$PROVISIONING_STATUS" -ne 0 ]; then
         echo "FAIL"
     elif [ "$VALIDATION_SKIPPED" = "true" ] && [ "$SKIP_TESTS" = "yes" ]; then
         echo "PASS_WITH_SKIPS"
@@ -1271,11 +1279,13 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             if [ -n "$PYTEST_ARGS" ]; then
                 # Deliberate word splitting — see the waiver above the ruff call.
                 # shellcheck disable=SC2086
-                $TEST_CMD "$pkg" -t unit --cov-report "$cov_report" $TEST_FLAGS -- $PYTEST_ARGS > "$OUTPUT_DIR/unit-test-output-$pkg.txt" 2>&1 || test_exit=$?
+                DK_PROVISIONING_RECORD="$OUTPUT_DIR/provisioning-unit-$pkg.json" \
+                    $TEST_CMD "$pkg" -t unit --cov-report "$cov_report" $TEST_FLAGS -- $PYTEST_ARGS > "$OUTPUT_DIR/unit-test-output-$pkg.txt" 2>&1 || test_exit=$?
             else
                 # Deliberate word splitting — see the waiver above the ruff call.
                 # shellcheck disable=SC2086
-                $TEST_CMD "$pkg" -t unit --cov-report "$cov_report" $TEST_FLAGS > "$OUTPUT_DIR/unit-test-output-$pkg.txt" 2>&1 || test_exit=$?
+                DK_PROVISIONING_RECORD="$OUTPUT_DIR/provisioning-unit-$pkg.json" \
+                    $TEST_CMD "$pkg" -t unit --cov-report "$cov_report" $TEST_FLAGS > "$OUTPUT_DIR/unit-test-output-$pkg.txt" 2>&1 || test_exit=$?
             fi
 
             # Save coverage artifacts
@@ -1460,11 +1470,13 @@ if [ "$SKIP_TESTS" != "yes" ]; then
                 if [ -n "$PYTEST_ARGS" ]; then
                     # Deliberate word splitting — see the waiver above the ruff call.
                     # shellcheck disable=SC2086
-                    $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS -- $PYTEST_ARGS > "$OUTPUT_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
+                    DK_PROVISIONING_RECORD="$OUTPUT_DIR/provisioning-integration-$pkg.json" \
+                        $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS -- $PYTEST_ARGS > "$OUTPUT_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
                 else
                     # Deliberate word splitting — see the waiver above the ruff call.
                     # shellcheck disable=SC2086
-                    $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS > "$OUTPUT_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
+                    DK_PROVISIONING_RECORD="$OUTPUT_DIR/provisioning-integration-$pkg.json" \
+                        $TEST_CMD "$pkg" -t integration --cov-report "$TEST_COV_REPORT" $TEST_FLAGS > "$OUTPUT_DIR/integration-test-output-$pkg.txt" 2>&1 || local_exit=$?
                 fi
 
                 unset COVERAGE_FILE
@@ -1672,6 +1684,33 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         INTEGRATION_SUITE_SECONDS=$(uv run python "$SCRIPT_DIR/quality-summary.py" seconds \
             --dir "$OUTPUT_DIR" --prefix integration-test-seconds-)
     fi
+    # Tests that took a fresh service resource and never wrote to it, held under
+    # the contract's provisioning ceilings. The count exists only once the tests
+    # have run, so this is the contract's second call, here, and not part of the
+    # one in the validation band, which runs before any test. It reads the
+    # records the PR-mode suites wrote; a dev run writes none, measured nothing,
+    # and records a skip.
+    PROVISIONING_STATUS=0
+    PROVISIONING_SKIPPED="true"
+    if [ "$PR_MODE" = "yes" ] && [ -n "$PACKAGES_TO_TEST" ]; then
+        PROVISIONING_SKIPPED="false"
+        print_status "Checking the provisioning count..."
+        _check_start=$(date +%s)
+        # Deliberate word splitting — a space-separated set of package names.
+        # shellcheck disable=SC2086
+        if uv run python "$SCRIPT_DIR/quality-contract.py" check --tool provisioning \
+            --records "$OUTPUT_DIR" --tested $PACKAGES_TO_TEST; then
+            print_success "Every suite is within its provisioning ceiling"
+        else
+            PROVISIONING_STATUS=$?
+            print_error "The provisioning count is not within the contract"
+        fi
+        PROVISIONING_SECONDS=$(elapsed_since "$_check_start")
+    fi
+    record_check provisioning "$PROVISIONING_STATUS" \
+        --tool quality-contract.py --skipped "$PROVISIONING_SKIPPED" \
+        --duration "$PROVISIONING_SECONDS"
+
     record_check unit_tests "$UNIT_TEST_STATUS" \
         --skipped "$UNIT_SKIPPED" --duration "$UNIT_TEST_SECONDS" \
         --field "workspace_guards_seconds=$WORKSPACE_GUARD_SECONDS" \
@@ -1700,6 +1739,7 @@ else
         --field "workspace_guards_seconds=null" --field "suite_seconds=null"
     record_check integration_tests 0 \
         --skipped "$INTEGRATION_SKIPPED" --duration null --field "suite_seconds=null"
+    record_check provisioning 0 --tool quality-contract.py --skipped true --duration null
     if [ "$DOCS_CHECKS_DUE" = "yes" ]; then
         run_docs_checks
     fi

@@ -1,6 +1,5 @@
 """Tests for ID field filtering in Elasticsearch backend."""
 
-import os
 import pytest
 from dataknobs_common.testing import requires_real_elasticsearch
 from dataknobs_data import Query, Record, SyncDatabase
@@ -14,27 +13,14 @@ class TestElasticsearchIdFiltering:
     """Test ID field filtering for Elasticsearch backend."""
 
     @pytest.fixture
-    def db(self):
-        """Create database instance for Elasticsearch backend."""
-        # ``host``/``port``, not ``hosts``: the list form is a field on the
-        # async config only. The sync backend read neither and fell back to
-        # its localhost:9200 default, so ELASTICSEARCH_HOST was ignored here
-        # and a remote server would have been silently bypassed.
-        config = {
-            "host": os.environ.get("ELASTICSEARCH_HOST", "localhost"),
-            "port": int(os.environ.get("ELASTICSEARCH_PORT", "9200")),
-            "index": "test_id_filtering",
-        }
+    def db(self, make_elasticsearch_test_index):
+        """A database over an index of its own, which the plugin deletes afterwards.
 
-        db = SyncDatabase.from_backend("elasticsearch", config=config)
-
-        # Clear any existing data
-        db.clear()
-
-        yield db
-
-        # Cleanup
-        db.clear()
+        The plugin's config carries ``host``/``port`` from ``ELASTICSEARCH_HOST``
+        and ``ELASTICSEARCH_PORT``, so a remote server is reached, not bypassed.
+        """
+        for config in make_elasticsearch_test_index("test_id_filtering_"):
+            yield SyncDatabase.from_backend("elasticsearch", config=config)
 
     def test_id_field_equality_filter(self, db):
         """Test filtering by ID with equality operator."""

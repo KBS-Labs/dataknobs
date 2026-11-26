@@ -594,6 +594,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A count of tests that took a fresh Elasticsearch index and never wrote to
+  it.** The `dataknobs_common.testing.provisioning` pytest plugin is inert until
+  `DK_PROVISIONING_RECORD` names a file. Then each index
+  `make_elasticsearch_test_index` hands out is fingerprinted as the test's call
+  phase begins and ends. A test whose index existed when the call began and was
+  unchanged when it ended is counted, per file, in a JSON record written at the
+  end of the session. The record is the same under pytest-xdist as without it,
+  and it says how many tests were skipped because Elasticsearch was unreachable,
+  since a count taken then would fall. `take_fresh_resource(label, fingerprint)`
+  is how a factory fixture reports a resource.
+
+- **`testing.elasticsearch_index_fingerprint(host, port, index)`** returns an
+  `IndexFingerprint`: the primaries' indexing and delete totals, the settings,
+  mapping and alias versions, the state, and whether the index exists. Two
+  readings differ exactly when the index was written in between, closed or
+  remapped included; a search, count or refresh moves nothing. A node that
+  cannot answer raises `ConnectionError`.
+
 - **`testing.error_names_in(package)`** returns the error names a package's raise
   sites use, read from its modules, for `assert_no_broad_except_in_error_text`.
   A guard given it covers a new error class the day it is added, one from another

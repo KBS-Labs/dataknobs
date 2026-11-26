@@ -1349,6 +1349,67 @@ The `docker-compose.override.yml` Elasticsearch service also sets
 `cluster.max_shards_per_node=3000` — headroom for a single run that spikes
 many concurrent indices before the next sweep, not the fix itself.
 
+### Counting Tests That Never Write to Their Index
+
+A fresh index costs a create, a seed and a refresh in setup. A test that then
+only searches it could have shared one seeded index with its neighbours. The
+`dataknobs_common.testing.provisioning` plugin counts such tests, so the count
+can be held under a ceiling; unlike wall time, it does not move with how loaded
+the machine is.
+
+It is inert unless `DK_PROVISIONING_RECORD` names a file, which the quality
+gate sets for each suite it runs. Then:
+
+- `make_elasticsearch_test_index` reports each index it hands out to the
+  plugin, through `take_fresh_resource(label, fingerprint)`.
+- As each test's **call** phase begins and ends, every index it took is
+  fingerprinted. An index that **existed when the call began and reads the same
+  when it ended** was created in setup and never written to, and the test is
+  counted. A name taken and never created is not counted. Seeding in setup is
+  not counted as the test writing, because only the call phase is read.
+- At the end of the session the controller writes the record:
+
+```json
+{
+  "version": 1,
+  "files": {
+    "packages/data/tests/test_x.py": {
+      "took": 4,
+      "unwritten": ["packages/data/tests/test_x.py::test_reads_only"]
+    }
+  },
+  "service_skipped": {"elasticsearch": 0}
+}
+```
+
+`files` lists every file whose tests took an index, at zero too, so "measured
+zero" and "measured nothing" are different records. `service_skipped` counts
+tests a marker skipped because Elasticsearch was unreachable; a count taken then
+would fall without any test changing. The result travels on each report's
+`user_properties`, which cross the pytest-xdist boundary, so the record is the
+same at `-n 0` and `-n 8`, and node ids are sorted so it is the same byte for byte.
+
+The fingerprint is `elasticsearch_index_fingerprint(host, port, index)`, an
+`IndexFingerprint` read in two requests:
+
+| Field | Moved by |
+|---|---|
+| `index_total` / `delete_total` (primaries) | indexing a document, re-indexing an identical one, deleting one, `_delete_by_query` |
+| `settings_version` | changing a setting (a write block, for one), closing the index |
+| `mapping_version` | a mapping change, including a dynamic one from a new field |
+| `aliases_version` | adding or removing an alias |
+| `state` | closing or opening |
+| `exists` | creating or deleting the index |
+
+A search, a count, a get, a refresh or reading the mapping moves none of them.
+Closing and reopening resets the counters, but the close has already bumped
+`settings_version`, so the two readings still differ. A node that cannot answer
+raises `ConnectionError` rather than returning a reading that might compare equal.
+
+The quality contract holds the count per package under its `provisioning` tool
+(see `docs/development/quality-checks.md`), and the authoring rule behind it is
+in the repository's `.claude/rules/test-cost.md`.
+
 ---
 
 ## Usage Examples

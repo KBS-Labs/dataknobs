@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """Check the repository against the coverage-and-strictness contract.
 
-``.dataknobs/quality-contract.json`` declares, for each of three tools, which
+``.dataknobs/quality-contract.json`` declares, for each of four tools, which
 files it covers and how far from clean each part of the tree is allowed to be.
 This measures the tree and compares.
+
+Three of the tools (ruff, mypy, the formatter) run over the tree. The fourth,
+``provisioning``, counts tests that took a fresh service resource and never
+wrote to it, and that count exists only once the tests have run: it is read
+from the records the test sessions wrote, and measured only when named
+(``check --tool provisioning --records <dir> --tested <package>...``).
 
 Two properties make that declaration a ratchet rather than a list of excuses,
 and both are checked here rather than described:
@@ -41,6 +47,7 @@ import fnmatch
 import io
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -252,6 +259,12 @@ class Measurement(NamedTuple):
     by_cell: dict[str, Counter[str]]
     unattributed: Counter[str]
     output: str = ""
+    #: Cells this pass did not read, so their zero is a silence, not a count.
+    #: ``provisioning`` reads a record per tested package, and a run that tested
+    #: three packages has no evidence about the other seven. This is the shape
+    #: ``_TIER_GATED_TOOLS`` names for the day a measurer needed it; mypy keeps
+    #: its tier rule, because its untargeted cells are a property of the tier.
+    unread: frozenset[str] = frozenset()
 
 
 def _bucket(
@@ -1550,6 +1563,139 @@ def _expand(pattern: str) -> list[PurePosixPath]:
     return [PurePosixPath(pattern)] if target.exists() else []
 
 
+#: Where the provisioning measurer reads its inputs. Environment variables, not
+#: arguments, because every measurer shares one signature; ``--records`` and
+#: ``--tested`` on the command line set them, so there is still one source.
+PROVISIONING_RECORDS_ENV = "DK_PROVISIONING_RECORDS"
+PROVISIONING_TESTED_ENV = "DK_PROVISIONING_TESTED"
+
+#: Tools whose count comes from a test run's records rather than from running a
+#: tool over the tree. A bare ``check`` cannot measure them, because the gate
+#: calls it before any test has run; they are measured only when named.
+_RUN_FED_TOOLS = frozenset({"provisioning"})
+
+#: What to do about a breached ceiling, for a tool whose findings are not
+#: self-explanatory. A lint finding names its rule; a provisioning count names
+#: only a file, so the remedy is spelled out where the failure is read.
+_BREACH_ADVICE = {
+    "provisioning": (
+        "Each test counted above took a fresh index from make_elasticsearch_test_index, "
+        "which setup created, and never wrote to it during the test. A test that only "
+        "reads should share one seeded index rather than pay for its own; keep a fresh "
+        "index for a test that writes. The suite's provisioning-<stage>-<package>.json "
+        "record names each test. See .claude/rules/test-cost.md."
+    ),
+}
+
+#: The test stages that write a provisioning record, by the directory that
+#: decides whether a package has one. The unit stage always runs.
+_PROVISIONING_STAGES = (("unit", None), ("integration", "integration"))
+
+
+def _provisioning_inputs() -> tuple[Path, set[str]]:
+    """The records directory and the packages the run tested, or a refusal."""
+    records = os.environ.get(PROVISIONING_RECORDS_ENV)
+    tested = os.environ.get(PROVISIONING_TESTED_ENV)
+    if not records or tested is None:
+        raise SystemExit(
+            "provisioning is measured from the records a test run wrote, and this "
+            "run named none. Pass --records <dir> and --tested <package>... (the "
+            "gate does, after its test stages), or measure another tool."
+        )
+    return Path(records), set(tested.split())
+
+
+def _read_provisioning_record(path: Path) -> dict[str, Any]:
+    """One suite's record, checked for the shape the plugin writes."""
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"{path} could not be read as a provisioning record: {exc}") from exc
+    if (
+        not isinstance(record, dict)
+        or record.get("version") != 1
+        or not isinstance(record.get("files"), dict)
+        or not isinstance(record.get("service_skipped"), dict)
+    ):
+        raise SystemExit(
+            f"{path} is not a version-1 provisioning record, so nothing in it was counted"
+        )
+    return record
+
+
+def measure_provisioning(
+    contract: dict[str, Any], files: list[PurePosixPath], only: set[str] | None = None
+) -> Measurement:
+    """Tests that took a fresh service resource and never wrote to it, per file.
+
+    Read from the records ``dataknobs_common.testing.provisioning`` writes,
+    one per suite (``provisioning-<stage>-<package>.json``), rather than by
+    running anything: the count only exists once the tests have run. ``files``
+    is unused for the same reason; the records name their own files.
+
+    A cell is read only when its package was tested this run. Every other cell
+    is returned in ``unread``, so ``check`` reports it as ``None`` rather than
+    as a zero nobody measured, and ``update-baseline`` leaves its ceiling alone.
+
+    Three conditions refuse rather than count, because each would make the
+    count fall without any test changing:
+
+    * a tested package left no record for a stage it has;
+    * a record is unreadable or of another shape;
+    * a record says tests were skipped because a service was unreachable.
+      Those tests took nothing, so their file counts low, and a ceiling
+      lowered on that evidence would be one the tree has not earned.
+    """
+    del files
+    cells = contract["tools"]["provisioning"]["cells"]
+    records, tested = _provisioning_inputs()
+
+    unread: set[str] = set()
+    counted: list[str] = []
+    skipped: list[str] = []
+    for cell in _restrict(cells, only):
+        if cell.get("tier") in _UNMEASURED_TIERS:
+            unread.add(cell["path"])
+            continue
+        parts = PurePosixPath(cell["path"]).parts
+        if len(parts) != 3 or parts[0] != "packages" or parts[2] != "tests":
+            raise SystemExit(
+                f"provisioning/{cell['path']}: a counted cell names one package's "
+                "tests, as packages/<package>/tests, because records are per package"
+            )
+        package = parts[1]
+        if package not in tested:
+            unread.add(cell["path"])
+            continue
+        for stage, directory in _PROVISIONING_STAGES:
+            if directory and not (_ROOT / cell["path"] / directory).is_dir():
+                continue
+            path = records / f"provisioning-{stage}-{package}.json"
+            if not path.exists():
+                raise SystemExit(
+                    f"{package} was tested but its {stage} suite left no record at "
+                    f"{path}, so its count was not measured. The gate sets "
+                    "DK_PROVISIONING_RECORD for each suite it runs."
+                )
+            record = _read_provisioning_record(path)
+            for service, count in sorted(record["service_skipped"].items()):
+                if count:
+                    skipped.append(f"{path.name}: {count} test(s) skipped, {service} unreachable")
+            for name, entry in record["files"].items():
+                counted += [name] * len(entry.get("unwritten", []))
+
+    if skipped:
+        raise SystemExit(
+            "provisioning cannot be counted while a service is down: the tests it "
+            "skipped took nothing, so the count would fall and ask for a ceiling "
+            "the tree has not earned. Start the services (bin/dk up) and rerun.\n  "
+            + "\n  ".join(skipped)
+        )
+
+    by_cell, unattributed = _bucket(cells, ((name, name) for name in counted))
+    return Measurement(by_cell, unattributed, unread=frozenset(unread))
+
+
 #: One measurer per tool, each ``(contract, files, only) -> Measurement``.
 MEASURERS: dict[
     str, Callable[[dict[str, Any], list[PurePosixPath], set[str] | None], Measurement]
@@ -1557,6 +1703,7 @@ MEASURERS: dict[
     "ruff": measure_ruff,
     "mypy": measure_mypy,
     "format": measure_format,
+    "provisioning": measure_provisioning,
 }
 
 
@@ -2206,6 +2353,25 @@ def check(
             tier = cell.get("tier", "")
             measured = _measured(measurement, cell)
 
+            # A cell the measurer says it did not read. Checked before the tier
+            # rule below and for the same reason: a zero from a cell nothing
+            # read is a silence. Unlike that rule it holds for a count too,
+            # since a measurer that did not read a cell cannot have counted in it.
+            if cell["path"] in measurement.unread:
+                report["cells"][name] = {
+                    "measured": None,
+                    "ceiling": cell["ceiling"],
+                    "tier": tier,
+                }
+                why = (
+                    f"its tier ({tier}) is outside {tool}'s target set"
+                    if tier in _UNMEASURED_TIERS
+                    else f"this {tool} pass read no evidence for it"
+                    + (" (its package was not among --tested)" if tool in _RUN_FED_TOOLS else "")
+                )
+                report["unmeasured"].append({"cell": name, "tier": tier, "tool": tool, "why": why})
+                continue
+
             # A zero from a cell nothing read is a silence, and a zero from a
             # cell that was read is a count. They are the same integer, so this is
             # where the difference has to be recorded — downstream is where it
@@ -2237,7 +2403,14 @@ def check(
                     "ceiling": cell["ceiling"],
                     "tier": tier,
                 }
-                report["unmeasured"].append({"cell": name, "tier": tier, "tool": tool})
+                report["unmeasured"].append(
+                    {
+                        "cell": name,
+                        "tier": tier,
+                        "tool": tool,
+                        "why": f"its tier ({tier}) is outside {tool}'s target set",
+                    }
+                )
                 continue
 
             report["cells"][name] = {
@@ -2312,6 +2485,10 @@ def update_baseline(
 
     for tool, measurement in _measure(contract, tools, only).items():
         for cell in _restrict(contract["tools"][tool]["cells"], only):
+            # Never lowered on a pass that did not read it: that would set an
+            # untested package's ceiling to zero.
+            if cell["path"] in measurement.unread:
+                continue
             measured = _measured(measurement, cell)
             if measured < cell["ceiling"]:
                 lowered.append(f"{tool}/{cell['path']}: {cell['ceiling']} -> {measured}")
@@ -2444,6 +2621,13 @@ def charge(contract: dict[str, Any], tool: str, paths: list[str]) -> dict[str, A
 
     only = {cell for _kind, _given, cell in resolved}
     measurement = _measure(contract, [tool], only)[tool]
+    not_read = sorted(cell for cell in only if cell in measurement.unread)
+    if not_read:
+        raise SystemExit(
+            f"{not_read} were not read by this {tool} pass — for provisioning, "
+            "their package was not among --tested — so a zero here would be a "
+            "silence rendered as a debt already paid."
+        )
 
     # Merged across the named cells only. Every file under a named path is in
     # exactly one of them, so nothing is double counted, and a finding in some
@@ -3016,7 +3200,8 @@ def _write_ledger(report: dict[str, Any]) -> None:
 
 
 def _selected(requested: str | None) -> list[str]:
-    return [requested] if requested else sorted(MEASURERS)
+    """The tools a command reads: the one named, else every tool a tree can answer."""
+    return [requested] if requested else sorted(set(MEASURERS) - _RUN_FED_TOOLS)
 
 
 def _write_census(report: dict[str, Any]) -> None:
@@ -3071,6 +3256,21 @@ def _add_cells(command: argparse.ArgumentParser) -> None:
         default=[],
         metavar="PATH",
         help="restrict to these cells, named exactly as the contract declares them",
+    )
+
+
+def _add_records(command: argparse.ArgumentParser) -> None:
+    """The inputs a run-fed tool is measured from. Read by ``provisioning`` only."""
+    command.add_argument(
+        "--records",
+        metavar="DIR",
+        help="where a test run wrote its provisioning records (provisioning only)",
+    )
+    command.add_argument(
+        "--tested",
+        nargs="*",
+        metavar="PACKAGE",
+        help="the packages whose suites that run executed (provisioning only)",
     )
 
 
@@ -3132,7 +3332,9 @@ def _build_parser() -> argparse.ArgumentParser:
     # them, so the resolution below reads one shape. Declaring the *option* is
     # still per command — a command that does not is the usage error; this only
     # decides what its namespace looks like once that has passed.
-    parser.set_defaults(tool=None, cell=[], use_json=False, contract=None)
+    parser.set_defaults(
+        tool=None, cell=[], use_json=False, contract=None, records=None, tested=None
+    )
     commands = parser.add_subparsers(dest="command", required=True, metavar="command")
 
     measure = commands.add_parser("check", help="measure the tree and compare every cell")
@@ -3144,6 +3346,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="echo what the tool reported, not only the comparison",
     )
+    _add_records(measure)
     _add_json(measure)
 
     faults = commands.add_parser("verify", help="check the declaration itself, without measuring")
@@ -3156,6 +3359,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_tool(baseline, "restrict to one tool")
     _add_cells(baseline)
     _add_contract(baseline)
+    _add_records(baseline)
 
     split = commands.add_parser("partition", help="which cell each tracked file lands in")
     _add_tool(split, "restrict to one tool")
@@ -3172,6 +3376,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_tool(owed, "the tool to read; a charge is denominated in one tool's findings")
     _add_contract(owed)
     owed.add_argument("paths", nargs="+", help="the files or directories to ask about")
+    _add_records(owed)
     _add_json(owed)
 
     history = commands.add_parser(
@@ -3269,6 +3474,12 @@ def main() -> None:
     # that measures one declaration and rewrites another.
     contract_path = Path(args.contract) if args.contract else _CONTRACT
     contract = load_contract(contract_path)
+
+    # Handed to the provisioning measurer the one way every measurer is reached.
+    if args.records is not None:
+        os.environ[PROVISIONING_RECORDS_ENV] = args.records
+    if args.tested is not None:
+        os.environ[PROVISIONING_TESTED_ENV] = " ".join(args.tested)
 
     if args.command == "explain":
         if args.audit:
@@ -3492,11 +3703,9 @@ def main() -> None:
 
     for unread in report["unmeasured"]:
         logger.warning(
-            "%s was not measured: its tier (%s) is outside %s's target set, so it "
-            "reports no count rather than a count of zero",
+            "%s was not measured: %s, so it reports no count rather than a count of zero",
             unread["cell"],
-            unread["tier"],
-            unread["tool"],
+            unread["why"],
         )
     for stray in report["unattributed"]:
         logger.warning(
@@ -3507,9 +3716,10 @@ def main() -> None:
         )
     for exceeded in report["exceeded"]:
         logger.error(
-            "%s exceeds its ceiling: %d findings against %d allowed",
+            "%s exceeds its ceiling: %d %s against %d allowed",
             exceeded["cell"],
             exceeded["measured"],
+            contract["tools"][exceeded["tool"]]["unit"],
             exceeded["ceiling"],
         )
         # A count alone does not say which file to open, and a failure nobody
@@ -3518,6 +3728,8 @@ def main() -> None:
             logger.error("    %s (%d)", offender["file"], offender["count"])
         if exceeded["further_files"]:
             logger.error("    ... and %d more", exceeded["further_files"])
+        if exceeded["tool"] in _BREACH_ADVICE:
+            logger.error("%s", _BREACH_ADVICE[exceeded["tool"]])
     # Beside the breaches rather than above the warnings, where it used to sit
     # as a note. The two are one comparison with two signs, and reading them
     # apart is most of what made "under its ceiling" look like good news that
@@ -3533,17 +3745,21 @@ def main() -> None:
     declared = f" --contract {args.contract}" if args.contract else ""
     for cleared in report["cleared"]:
         logger.error(
-            "%s is under its ceiling: %d findings against %d declared, so %d "
+            "%s is under its ceiling: %d %s against %d declared, so %d "
             "of headroom is left standing. Write the progress down with:\n"
-            "    %s update-baseline --tool %s --cell %s%s",
+            "    %s update-baseline --tool %s --cell %s%s%s",
             cleared["cell"],
             cleared["measured"],
+            contract["tools"][cleared["tool"]]["unit"],
             cleared["ceiling"],
             cleared["ceiling"] - cleared["measured"],
             _INVOCATION,
             cleared["tool"],
             cleared["path"],
             declared,
+            # A run-fed tool is measured from records, so the command that
+            # lowers its ceiling needs them too.
+            " --records <dir> --tested <package>..." if cleared["tool"] in _RUN_FED_TOOLS else "",
         )
     for dead in report["unused_config"]:
         logger.error(

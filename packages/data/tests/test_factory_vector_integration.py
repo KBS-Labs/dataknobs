@@ -214,28 +214,19 @@ class TestFactoryVectorIntegration:
 
             db.close()
 
+    @pytest.fixture
+    def es_config(self, make_elasticsearch_test_index):
+        """A unique index name; the plugin deletes the index afterwards."""
+        yield from make_elasticsearch_test_index("test_factory_vectors_")
+
     @requires_real_elasticsearch
-    def test_elasticsearch_vector_enabled(self, factory):
+    def test_elasticsearch_vector_enabled(self, factory, es_config):
         """Test Elasticsearch with vector support (requires actual instance)."""
-        import uuid
-
-        # Use a unique index name to avoid conflicts
-        index_name = f"test_factory_vectors_{uuid.uuid4().hex[:8]}"
-
-        # Detect if we're running in Docker container
-        if os.path.exists("/.dockerenv") or os.getenv("DOCKER_CONTAINER"):
-            elasticsearch_host = os.getenv("ELASTICSEARCH_HOST", "elasticsearch")
-        else:
-            elasticsearch_host = os.getenv("ELASTICSEARCH_HOST", "localhost")
-
-        # Get Elasticsearch configuration from environment
-        port = int(os.environ.get("ELASTICSEARCH_PORT", "9200"))
-
         db = factory.create(
             backend="elasticsearch",
-            host=elasticsearch_host,
-            port=port,
-            index=index_name,
+            host=es_config["host"],
+            port=es_config["port"],
+            index=es_config["index"],
             vector_enabled=True,
             vector_dimensions=4,  # Specify dimensions for test vectors
         )
@@ -272,14 +263,5 @@ class TestFactoryVectorIntegration:
             db.delete(record_id)
 
         finally:
-            # Clean up the index
-            try:
-                from elasticsearch import Elasticsearch
-
-                es = Elasticsearch([{"host": elasticsearch_host, "port": port, "scheme": "http"}])
-                if es.indices.exists(index=index_name):
-                    es.indices.delete(index=index_name)
-            except Exception:
-                pass  # Ignore cleanup errors
-
+            # The plugin deletes the index.
             db.close()

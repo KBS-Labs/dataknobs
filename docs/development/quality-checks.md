@@ -500,7 +500,7 @@ rm -rf ~/dataknobs_localstack_data
 
 ## The quality contract
 
-`.dataknobs/quality-contract.json` declares, for each of three tools, which
+`.dataknobs/quality-contract.json` declares, for each of four tools, which
 files it covers and how far from clean each part of the tree is allowed to be.
 It is a **ceiling, not evidence**: no run produces it, CI never signs it, and
 moving a number is a deliberate visible diff rather than something a rerun does
@@ -513,6 +513,7 @@ Each cell names a path, a tier, a ceiling and a reason:
 | `ruff` | `checked` | findings |
 | `mypy` | `strict` / `transitional` / `unchecked` | findings |
 | `format` | `enforced` | files the formatter would rewrite |
+| `provisioning` | `counted` / `unchecked` | tests that took a fresh Elasticsearch index and never wrote to it |
 
 Two properties make it a ratchet rather than a list of excuses, and both are
 enforced rather than described:
@@ -648,11 +649,46 @@ When a ceiling *is* breached, `check` names the files under it, most findings
 first, so a count you cannot act on does not send you to a second tool:
 
 ```
-format/tests exceeds its ceiling: 21 findings against 20 allowed
+format/tests exceeds its ceiling: 21 files against 20 allowed
     tests/test_deep_merge_agreement.py (1)
     tests/test_docs_mirror_check.py (1)
     ... and 11 more
 ```
+
+### The one tool read from a test run: `provisioning`
+
+The other three tools run over the tree. `provisioning` counts tests that took a
+fresh Elasticsearch index from `make_elasticsearch_test_index`, which setup
+created, and never wrote to it during the test: each paid for an index it could
+have shared. That count exists only once the tests have run, so it differs in
+four ways:
+
+- **It is read from records, not measured.** Each PR-mode suite runs with
+  `DK_PROVISIONING_RECORD` set, and the plugin
+  (`dataknobs_common.testing.provisioning`) writes
+  `provisioning-<stage>-<package>.json` into the gate's output directory. The
+  format is in `packages/common/docs/testing.md`.
+- **A bare `check` does not include it.** The gate's `contract` check runs before
+  any test, so the gate makes a second call after the integration stage and
+  records it as the `provisioning` check:
+
+  ```bash
+  uv run python bin/quality-contract.py check --tool provisioning \
+      --records .quality-artifacts --tested data utils
+  ```
+
+  `update-baseline` and `charge` take the same two options for this tool.
+- **A package the run did not test is unmeasured,** reported as `None` with the
+  reason, and `update-baseline` never lowers its ceiling. Its cells are one per
+  package test directory for exactly this reason: a PR run tests some packages
+  and says nothing about the rest.
+- **It refuses rather than count low.** A tested package with no record for a
+  stage it has, a record of another shape, and a record saying a down
+  Elasticsearch skipped tests all fail the check. Each would make the count fall
+  without any test changing.
+
+A breach names each file and its count, and how to fix it; the record names each
+test. The authoring rule is `.claude/rules/test-cost.md`.
 
 ### Asking what one file owes: `charge`
 

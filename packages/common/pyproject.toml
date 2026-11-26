@@ -72,6 +72,7 @@ dataknobs_common_postgres = "dataknobs_common.testing.postgres_fixtures"
 dataknobs_common_elasticsearch = "dataknobs_common.testing.elasticsearch_fixtures"
 dataknobs_common_localstack = "dataknobs_common.testing.localstack_fixtures"
 dataknobs_common_blocking = "dataknobs_common.testing.blocking"
+dataknobs_common_provisioning = "dataknobs_common.testing.provisioning"
 
 [build-system]
 # hatchling gained PEP 639 support (a bare-string `license` and a list-form

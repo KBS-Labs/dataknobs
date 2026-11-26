@@ -361,6 +361,130 @@
           "reason": "the purpose-built cell: a fixture tree that is clean under this configuration and dirty under quality-fixture/ruff.toml, which selects rules this repository does not. It exists so the guards over bin/quality-contract.py have a cell that measures a backlog now that no cell here does, and it is checked so that the clean half of that claim is a measurement rather than an assumption"
         }
       ]
+    },
+    "provisioning": {
+      "unit": "tests",
+      "config": "packages/common/src/dataknobs_common/testing/provisioning.py",
+      "tiers": {
+        "counted": "a package's test suites; the records the gate's test run wrote for it are read, and a package that run did not test is unread",
+        "unchecked": "no test session writes a record for it, so nothing is read"
+      },
+      "cells": [
+        {
+          "path": "src",
+          "tier": "unchecked",
+          "ceiling": 0,
+          "reason": "not a package test suite: no session the gate runs writes a provisioning record for it"
+        },
+        {
+          "path": "conftest.py",
+          "tier": "unchecked",
+          "ceiling": 0,
+          "reason": "not a package test suite: no session the gate runs writes a provisioning record for it"
+        },
+        {
+          "path": "packages/*/src",
+          "tier": "unchecked",
+          "ceiling": 0,
+          "reason": "not a package test suite: no session the gate runs writes a provisioning record for it"
+        },
+        {
+          "path": "packages/*/examples",
+          "tier": "unchecked",
+          "ceiling": 0,
+          "reason": "not a package test suite: no session the gate runs writes a provisioning record for it"
+        },
+        {
+          "path": "packages/*/scripts",
+          "tier": "unchecked",
+          "ceiling": 0,
+          "reason": "not a package test suite: no session the gate runs writes a provisioning record for it"
+        },
+        {
+          "path": "packages/*/benchmarks",
+          "tier": "unchecked",
+          "ceiling": 0,
+          "reason": "not a package test suite: no session the gate runs writes a provisioning record for it"
+        },
+        {
+          "path": "tests",
+          "tier": "unchecked",
+          "ceiling": 0,
+          "reason": "not a package test suite: no session the gate runs writes a provisioning record for it"
+        },
+        {
+          "path": "bin",
+          "tier": "unchecked",
+          "ceiling": 0,
+          "reason": "not a package test suite: no session the gate runs writes a provisioning record for it"
+        },
+        {
+          "path": "quality-fixture",
+          "tier": "unchecked",
+          "ceiling": 0,
+          "reason": "not a package test suite: no session the gate runs writes a provisioning record for it"
+        },
+        {
+          "path": "packages/bots/tests",
+          "tier": "counted",
+          "ceiling": 0,
+          "reason": "no test here takes a fresh index it never writes to; a new one fails"
+        },
+        {
+          "path": "packages/common/tests",
+          "tier": "counted",
+          "ceiling": 0,
+          "reason": "no test here takes a fresh index it never writes to; a new one fails"
+        },
+        {
+          "path": "packages/config/tests",
+          "tier": "counted",
+          "ceiling": 0,
+          "reason": "no test here takes a fresh index it never writes to; a new one fails"
+        },
+        {
+          "path": "packages/data/tests",
+          "tier": "counted",
+          "ceiling": 290,
+          "reason": "tests on a fresh Elasticsearch index that read it and never wrote to it; each could share a seeded index instead"
+        },
+        {
+          "path": "packages/fsm/tests",
+          "tier": "counted",
+          "ceiling": 0,
+          "reason": "no test here takes a fresh index it never writes to; a new one fails"
+        },
+        {
+          "path": "packages/legacy/tests",
+          "tier": "counted",
+          "ceiling": 0,
+          "reason": "no test here takes a fresh index it never writes to; a new one fails"
+        },
+        {
+          "path": "packages/llm/tests",
+          "tier": "counted",
+          "ceiling": 0,
+          "reason": "no test here takes a fresh index it never writes to; a new one fails"
+        },
+        {
+          "path": "packages/structures/tests",
+          "tier": "counted",
+          "ceiling": 0,
+          "reason": "no test here takes a fresh index it never writes to; a new one fails"
+        },
+        {
+          "path": "packages/utils/tests",
+          "tier": "counted",
+          "ceiling": 7,
+          "reason": "tests on a fresh Elasticsearch index that read it and never wrote to it; each could share a seeded index instead"
+        },
+        {
+          "path": "packages/xization/tests",
+          "tier": "counted",
+          "ceiling": 0,
+          "reason": "no test here takes a fresh index it never writes to; a new one fails"
+        }
+      ]
     }
   }
 }
