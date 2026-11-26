@@ -308,13 +308,20 @@ or tuned for a machine with more or fewer cores, without an edit:
 
 | Variable | Default | Values |
 |---|---|---|
-| `DK_GATE_UNIT_JOBS` | `3` | slots in the unit pool, a whole number from 1 |
-| `DK_GATE_INTEGRATION_JOBS` | `1` | integration suites at once, a whole number from 1 |
+| `DK_GATE_UNIT_JOBS` | `4` | slots in the unit pool, a whole number from 1 |
+| `DK_GATE_INTEGRATION_JOBS` | `2` | integration suites at once, a whole number from 1 |
 | `DK_GATE_DOCS` | `pool` | `pool`: the documentation checks take a unit slot; `beside`: they run alongside the pool and take none |
 
 ```bash
-DK_GATE_UNIT_JOBS=4 DK_GATE_INTEGRATION_JOBS=4 bin/dk pr
+DK_GATE_UNIT_JOBS=6 DK_GATE_INTEGRATION_JOBS=4 bin/dk pr
 ```
+
+The defaults are measured, not guessed: three gate runs per value on a 16-core
+machine. Four unit slots took 13 seconds off a 143-second gate, and six took
+nothing more while every job in the pool slowed. Docs out of the pool paid less
+than a fourth slot. Two integration suites at once took that stage from 40 to 28
+seconds, and four took it no lower: the longest suite runs alone in one slot while
+the others finish in the second.
 
 A value the gate does not accept stops it before any check runs, naming the
 variable, rather than falling back to the default. `--full` ignores all three and

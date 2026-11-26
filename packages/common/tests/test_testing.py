@@ -262,6 +262,11 @@ def _health_report(**indicators: str) -> dict[str, Any]:
     }
 
 
+#: The request the probe makes to wait out a red reading. Spelled here rather
+#: than imported, so a change to what the probe asks for fails these tests.
+_ES_SETTLE_PATH = "/_cluster/health?wait_for_status=yellow&timeout=5s"
+
+
 @contextlib.contextmanager
 def _stub_http_json(routes: dict[str, tuple[int, Any]]) -> Iterator[tuple[str, int]]:
     """A real local HTTP server answering probe paths with JSON.
@@ -347,11 +352,50 @@ class TestElasticsearchReadinessProbe:
             assert is_elasticsearch_available(host, port) is False
 
     def test_a_cluster_with_unassigned_primaries_is_not_available(self):
-        """Red ``shards_availability`` means primaries are unassigned."""
+        """Red ``shards_availability`` that stays red means primaries are stranded.
+
+        The settle wait times out, which a real cluster answers with a 408
+        carrying ``timed_out: true`` -- the shape this stub serves.
+        """
         with _stub_http_json(
             {
                 "/_health_report": (200, _health_report(shards_availability="red")),
                 "/_cluster/health": (200, {"status": "red"}),
+                _ES_SETTLE_PATH: (408, {"status": "red", "timed_out": True}),
+            }
+        ) as (host, port):
+            assert is_elasticsearch_available(host, port) is False
+
+    def test_a_red_that_clears_while_the_probe_waits_is_available(self):
+        """Reproduce-first: another session creating an index is not a refusal.
+
+        While a new index's primary is being placed, the health report reads
+        ``shards_availability: red`` with one unassigned primary -- the same
+        reading a cluster that cannot place it gives. Measured against a
+        local cluster with one integration suite running beside the sampler,
+        1 health report in 196 read that way, and every one cleared within
+        milliseconds. With four integration suites starting at once, the
+        ``data`` suite's probe caught the red in every run and skipped all
+        177 of its Elasticsearch tests.
+
+        One sample cannot tell the two apart; duration can. A red that
+        settles to yellow inside the probe's wait is a cluster mid-create.
+        """
+        with _stub_http_json(
+            {
+                "/_health_report": (200, _health_report(shards_availability="red")),
+                "/_cluster/health": (200, {"status": "red"}),
+                _ES_SETTLE_PATH: (200, {"status": "yellow", "timed_out": False}),
+            }
+        ) as (host, port):
+            assert is_elasticsearch_available(host, port) is True
+
+    def test_a_settle_answer_that_claims_success_but_timed_out_is_not_available(self):
+        """``timed_out`` is the verdict; a status alone is not trusted."""
+        with _stub_http_json(
+            {
+                "/_health_report": (200, _health_report(shards_availability="red")),
+                _ES_SETTLE_PATH: (200, {"status": "yellow", "timed_out": True}),
             }
         ) as (host, port):
             assert is_elasticsearch_available(host, port) is False
@@ -402,11 +446,23 @@ class TestElasticsearchReadinessProbe:
 
     def test_the_fallback_still_refuses_a_red_cluster(self):
         """The fallback is a weaker check, not an absent one."""
-        with _stub_http_json({"/_cluster/health": (200, {"status": "red"})}) as (
-            host,
-            port,
-        ):
+        with _stub_http_json(
+            {
+                "/_cluster/health": (200, {"status": "red"}),
+                _ES_SETTLE_PATH: (408, {"status": "red", "timed_out": True}),
+            }
+        ) as (host, port):
             assert is_elasticsearch_available(host, port) is False
+
+    def test_the_fallback_waits_out_a_passing_red_too(self):
+        """A pre-8.7 cluster mid-create reads red the same way, and settles."""
+        with _stub_http_json(
+            {
+                "/_cluster/health": (200, {"status": "red"}),
+                _ES_SETTLE_PATH: (200, {"status": "yellow", "timed_out": False}),
+            }
+        ) as (host, port):
+            assert is_elasticsearch_available(host, port) is True
 
     def test_a_port_that_answers_nothing_useful_is_not_available(self):
         """TCP open and both probes failing is not a cluster to run against."""

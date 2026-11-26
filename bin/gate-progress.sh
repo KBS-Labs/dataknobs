@@ -128,10 +128,10 @@ longest_suite_first() {
 # How many suites the gate runs at once, read from the environment and checked.
 # Sets:
 #
-#   GATE_UNIT_JOBS         DK_GATE_UNIT_JOBS, default 3: slots in the unit pool,
+#   GATE_UNIT_JOBS         DK_GATE_UNIT_JOBS, default 4: slots in the unit pool,
 #                          which also holds the workspace guards and, unless
 #                          GATE_DOCS says otherwise, the documentation checks.
-#   GATE_INTEGRATION_JOBS  DK_GATE_INTEGRATION_JOBS, default 1: integration
+#   GATE_INTEGRATION_JOBS  DK_GATE_INTEGRATION_JOBS, default 2: integration
 #                          suites run at once. 1 is one after another.
 #   GATE_DOCS              DK_GATE_DOCS, default pool: "pool" gives the
 #                          documentation checks a unit slot; "beside" runs them
@@ -139,15 +139,20 @@ longest_suite_first() {
 #
 # Settings rather than constants so the gate can be timed at other values
 # without an edit, and tuned on a machine with a different number of cores.
-# The defaults are the values the gate has always used.
+# The defaults are measured, three gate runs per value on a 16-core machine:
+# four unit slots took 13s off a 143s gate, and six took nothing more while
+# slowing every job in the pool; the docs taking no slot paid less than a
+# fourth slot did. Two integration suites took that stage from 40s to 28s and
+# four took it no lower, since the longest suite then runs alone in one slot
+# while the rest finish in the other.
 #
 # An unset or empty variable takes its default. Any other value that is not
 # one the setting accepts fails, naming the variable: falling back to the
 # default would time a configuration nobody asked for and report it as the
 # one they did.
 resolve_gate_settings() {
-    GATE_UNIT_JOBS="${DK_GATE_UNIT_JOBS:-3}"
-    GATE_INTEGRATION_JOBS="${DK_GATE_INTEGRATION_JOBS:-1}"
+    GATE_UNIT_JOBS="${DK_GATE_UNIT_JOBS:-4}"
+    GATE_INTEGRATION_JOBS="${DK_GATE_INTEGRATION_JOBS:-2}"
     GATE_DOCS="${DK_GATE_DOCS:-pool}"
     _gate_positive_count DK_GATE_UNIT_JOBS "$GATE_UNIT_JOBS" || return 1
     _gate_positive_count DK_GATE_INTEGRATION_JOBS "$GATE_INTEGRATION_JOBS" || return 1

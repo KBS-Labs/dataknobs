@@ -146,7 +146,15 @@ def _cancel_pending_tasks(loop: asyncio.AbstractEventLoop) -> None:
     if not pending:
         return
     for task in pending:
-        task.cancel()
+        # A task already being cancelled is unwinding: its ``finally`` is
+        # running. Cancelling it again throws a second ``CancelledError`` into
+        # that ``finally`` at its next await and abandons the cleanup part way
+        # through, which is what this drain exists to prevent. The timeout
+        # path of :meth:`SyncLoopBridge.run` is exactly this shape: it
+        # cancels, and a ``close`` whose stop lands mid-unwind finds the task
+        # still pending. It only needs the wait below.
+        if not task.cancelling():
+            task.cancel()
     # ``wait`` returns the two sets rather than raising, so a task that ignores
     # cancellation costs the budget and nothing else.
     _, still_pending = loop.run_until_complete(
