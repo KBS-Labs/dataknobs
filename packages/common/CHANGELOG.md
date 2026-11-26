@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Elasticsearch fixtures keep working after a `pytester` test.** pytester
+  restores `sys.modules` when its test ends, so a test using it that was the
+  first in its worker to call one of the plugin's helpers dropped the
+  `requests` they import lazily, and the next request failed with "You can only
+  merge into CookieJar". The plugin now loads `requests` in `pytest_configure`,
+  before any test runs. Importing `dataknobs_common` outside pytest still does
+  not import it.
 - **`SyncLoopBridge.close()` no longer cuts short a coroutine that a timed-out
   `run()` already cancelled.** Teardown cancels whatever is still on the loop
   and waits for it to unwind, and it cancelled a task that was already

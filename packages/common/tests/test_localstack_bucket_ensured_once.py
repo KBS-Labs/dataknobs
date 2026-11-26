@@ -20,13 +20,6 @@ from dataknobs_common.testing import requires_localstack
 
 pytest_plugins = ("pytester",)
 
-# The inner sessions run in a subprocess, not in-process. In-process, pytester
-# restores ``sys.modules`` afterwards, so a module first imported inside the
-# inner session (``requests``, by the plugin's fixtures) is dropped and imported
-# again by the next test in this worker: a second copy whose classes do not match
-# the first's, and an Elasticsearch test then failing with
-# "You can only merge into CookieJar".
-
 # The inner session has no pyproject of its own, so it states the asyncio
 # settings the workspace's sessions run under.
 _INNER_INI = """
