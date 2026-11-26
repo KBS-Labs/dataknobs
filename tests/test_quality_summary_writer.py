@@ -785,3 +785,39 @@ def test_only_an_integration_suite_that_passed_records_its_time() -> None:
     passed = source.index('print_success "Integration tests passed for $pkg')
     assert failed < written < passed
     assert source.count("integration-test-seconds-$pkg.txt") == 1
+
+
+def test_the_gate_clears_an_earlier_run_s_provisioning_records_before_any_check_runs() -> None:
+    """A record left by an earlier run would be counted for a suite that crashed."""
+    source = GATE.read_text(encoding="utf-8")
+    clear = source.find('\nrm -f "$OUTPUT_DIR"/provisioning-*.json\n')
+    assert -1 < clear < source.index("\nrecord_check() {")
+
+
+def test_every_pr_mode_suite_writes_its_provisioning_record() -> None:
+    """Each stage of each package names its own record, which the measurer reads by name."""
+    source = GATE.read_text(encoding="utf-8")
+    for stage, report in (("unit", "cov_report"), ("integration", "TEST_COV_REPORT")):
+        invocations = re.findall(
+            rf'DK_PROVISIONING_RECORD="\$OUTPUT_DIR/provisioning-{stage}-\$pkg\.json" \\\s*\n'
+            rf'\s*\$TEST_CMD "\$pkg" -t {stage} --cov-report "\${report}"',
+            source,
+        )
+        # One with extra pytest arguments and one without.
+        assert len(invocations) == 2, stage
+        assert len(re.findall(rf'\$TEST_CMD "\$pkg" -t {stage}\b', source)) == 2, stage
+
+
+def test_the_provisioning_check_reads_the_records_after_the_test_stages() -> None:
+    source = GATE.read_text(encoding="utf-8")
+    integration_loop = source.index(
+        'for pkg in $PACKAGES_TO_TEST; do\n            if [ -d "packages/$pkg" ]'
+    )
+    check = source.index('"$SCRIPT_DIR/quality-contract.py" check --tool provisioning')
+    assert integration_loop < check
+    assert re.search(
+        r'check --tool provisioning \\\s*\n\s*--records "\$OUTPUT_DIR" --tested \$PACKAGES_TO_TEST;',
+        source,
+    )
+    # Recorded on every path, the skipped ones included, so its absence never reads as a pass.
+    assert source.count("record_check provisioning ") == 2

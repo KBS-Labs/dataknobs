@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-11-25T23:12:28Z",
+  "timestamp": "2026-11-26T00:01:00Z",
   "overall_status": "PASS",
   "run_mode": "pr",
   "environment": "host",
@@ -19,9 +19,9 @@
   "coverage_percent": 85.8,
   "package_hashes": {
     "bots": "c0a0b2c4122854147508fb8db02038eca422e597589ea090067478a4584add65",
-    "common": "b936d62ee6d7cb027ffb45863c01e80e969b3c5a5c11bf61cfafae3e37b73346",
+    "common": "15f0a3dddf6fa9e71c793c240dda5c27cbff4ecac93c01451b9e55da105d73bd",
     "config": "83a579e3abd7b49fe74ed6e0961ae6e453e6f854deb645236ff8703e2c52092f",
-    "data": "d6624b5079aa624dafd0e8d66e4056727147bc263197c2205d8b46dd1ef31dfe",
+    "data": "75da7b5d582a1c2412174522822e67b7b5370f9ba074c52693235fdf09ff3ce0",
     "fsm": "b24633a649f00b23eaf6ab126cf48801288a27d34f25b4e10a19c989c5ca94f3",
     "legacy": "62c8bb7efa5e96033069ccb6f7e6a9d76c48a96d617983f2c15282d1ad89d32b",
     "llm": "02c38319ba9a4d3f0e325f6ec96d56f9e10baffb29c43e5372d67b6fe93bf3f1",
@@ -34,10 +34,10 @@
     "toolchain": "6b86a06c891306ae9b1bdeed67e6c9c48979eaf984424b34d31b498af4d9bf6b",
     "toolchain_test": "b7160b875b37ec44c7e343c1a539f503555bd5296b7690ddf4308ef39c784b14",
     "toolchain_lint": "6bcbb34df9feb37c7eec4ca866cdcb1f006d710109517161e59a83019d12fbbd",
-    "workspace_tests": "35aefff6897020f52a61cef8def38368d92c3661f0405a664c4c95a53c97ce4d",
-    "docs": "dcd8d68d4a614d2d6b75fd7629525e09fb26dc8377b93aebdbc56ce8431d5585"
+    "workspace_tests": "9b5b68253fd3b77edd64993256c194fed7d1c2bc9efcc84767a21e793f3d5c1a",
+    "docs": "39a1b53b2a306a8fd660cd7f076d40573b48fb38295156809097615a4189bbe3"
   },
-  "total_seconds": 144,
+  "total_seconds": 146,
   "checks": {
     "workflow_lint": {
       "status": "pass",
@@ -55,7 +55,7 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "quality-contract.py",
-      "duration_seconds": 6
+      "duration_seconds": 1
     },
     "validation": {
       "status": "pass",
@@ -64,20 +64,27 @@
       "tool": "validate.sh",
       "duration_seconds": 23
     },
+    "provisioning": {
+      "status": "pass",
+      "exit_code": 0,
+      "skipped": false,
+      "tool": "quality-contract.py",
+      "duration_seconds": 1
+    },
     "unit_tests": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 61,
-      "workspace_guards_seconds": 30,
+      "duration_seconds": 66,
+      "workspace_guards_seconds": 36,
       "suite_seconds": {
-        "bots": 22,
-        "common": 23,
-        "config": 5,
-        "data": 34,
+        "bots": 19,
+        "common": 24,
+        "config": 4,
+        "data": 40,
         "fsm": 8,
-        "legacy": 1,
-        "llm": 12,
+        "legacy": 2,
+        "llm": 13,
         "structures": 1,
         "utils": 3,
         "xization": 3
@@ -87,12 +94,12 @@
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
-      "duration_seconds": 42,
+      "duration_seconds": 43,
       "suite_seconds": {
         "bots": 6,
-        "data": 28,
+        "data": 30,
         "llm": 4,
-        "utils": 2
+        "utils": 3
       }
     },
     "documentation": {
@@ -100,21 +107,21 @@
       "exit_code": 0,
       "skipped": false,
       "tool": "mkdocs",
-      "duration_seconds": 36
+      "duration_seconds": 38
     },
     "documentation_versions": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-update-versions.sh",
-      "duration_seconds": 1
+      "duration_seconds": 0
     },
     "documentation_mirrors": {
       "status": "pass",
       "exit_code": 0,
       "skipped": false,
       "tool": "docs-mirror-check.py",
-      "duration_seconds": 0
+      "duration_seconds": 1
     }
   }
 }

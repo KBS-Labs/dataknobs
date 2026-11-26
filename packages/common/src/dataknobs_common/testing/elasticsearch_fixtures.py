@@ -36,9 +36,10 @@ import socket
 import time
 import uuid
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import Any, NamedTuple
 
 from dataknobs_common.testing._core import _docker_aware_default_host
+from dataknobs_common.testing.provisioning import take_fresh_resource
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,114 @@ def wait_for_elasticsearch(
         time.sleep(1)
 
     return False
+
+
+class IndexFingerprint(NamedTuple):
+    """What a test can change about one index, read in two requests.
+
+    Every way of writing to an index moves at least one field. Documents
+    written or deleted move the primaries' ``index_total`` / ``delete_total``
+    (re-indexing an identical document counts too). Settings, mapping and
+    aliases each carry a version, and closing an index changes ``state`` and
+    bumps ``settings_version``. Searches, counts, gets and refreshes move
+    nothing.
+
+    Closing and reopening resets the counters, so they are not monotonic on
+    their own. The tuple still differs, because the close bumped
+    ``settings_version``. A closed index refuses ``_stats``, so its counters
+    are ``None``.
+    """
+
+    exists: bool
+    state: str | None = None
+    mapping_version: int | None = None
+    settings_version: int | None = None
+    aliases_version: int | None = None
+    index_total: int | None = None
+    delete_total: int | None = None
+
+
+_METADATA_FIELDS = ("state", "mapping_version", "settings_version", "aliases_version")
+
+
+def elasticsearch_index_fingerprint(host: str, port: int, index: str) -> IndexFingerprint:
+    """Fingerprint ``index`` so that two readings differ exactly when it was written.
+
+    The provisioning count compares a reading taken as a test's call phase
+    begins with one taken as it ends: equal means the test never wrote to
+    the index it was handed. See :class:`IndexFingerprint` for what each
+    field sees.
+
+    Args:
+        host: Elasticsearch host.
+        port: Elasticsearch port.
+        index: The index name.
+
+    Returns:
+        The fingerprint. An absent index reads ``IndexFingerprint(exists=False)``.
+
+    Raises:
+        ConnectionError: The node did not answer, or answered with an error.
+            A reading that could not be taken must not compare equal to one
+            that was.
+    """
+    import requests
+    from dataknobs_utils.requests_utils import RequestHelper
+
+    helper = RequestHelper(host, port, timeout=5)
+    filter_path = ",".join(f"metadata.indices.*.{field}" for field in _METADATA_FIELDS)
+    try:
+        metadata = helper.get(
+            f"_cluster/state/metadata/{index}", params={"filter_path": filter_path}
+        )
+    except (requests.exceptions.RequestException, ValueError) as exc:
+        raise ConnectionError(f"Could not read the metadata of index {index}: {exc}") from exc
+    if not metadata.succeeded or not isinstance(metadata.json, dict):
+        raise ConnectionError(
+            f"Reading the metadata of index {index} returned status {metadata.status}"
+        )
+    entry = metadata.json.get("metadata", {}).get("indices", {}).get(index)
+    if entry is None:
+        return IndexFingerprint(exists=False)
+
+    fields = {field: entry.get(field) for field in _METADATA_FIELDS}
+    if fields["state"] != "open":
+        return IndexFingerprint(exists=True, **fields)
+    try:
+        stats = helper.get(
+            f"{index}/_stats/indexing",
+            params={
+                "filter_path": "_all.primaries.indexing.index_total,"
+                "_all.primaries.indexing.delete_total"
+            },
+        )
+    except (requests.exceptions.RequestException, ValueError) as exc:
+        raise ConnectionError(f"Could not read the stats of index {index}: {exc}") from exc
+    if not stats.succeeded or not isinstance(stats.json, dict):
+        raise ConnectionError(f"Reading the stats of index {index} returned status {stats.status}")
+    indexing = stats.json.get("_all", {}).get("primaries", {}).get("indexing", {})
+    return IndexFingerprint(
+        exists=True,
+        **fields,
+        index_total=indexing.get("index_total"),
+        delete_total=indexing.get("delete_total"),
+    )
+
+
+def _present_fingerprint(config: dict[str, Any]) -> Callable[[], IndexFingerprint | None]:
+    """A reader for ``config``'s index in the form the provisioning count takes.
+
+    ``None`` while the index does not exist, so a test that took a name and
+    never created it is not counted as having provisioned anything.
+    """
+
+    def read() -> IndexFingerprint | None:
+        fingerprint = elasticsearch_index_fingerprint(
+            config["host"], config["port"], config["index"]
+        )
+        return fingerprint if fingerprint.exists else None
+
+    return read
 
 
 #: Default staleness threshold (seconds) below which an index is considered
@@ -352,6 +461,12 @@ try:
         - ``index``: ``f"{index_prefix}{uuid8}"``
         - ``refresh``: ``True`` (immediate visibility for tests)
 
+        Each index handed out is reported to the provisioning count
+        (:mod:`dataknobs_common.testing.provisioning`). When the gate asks
+        for a record, a test whose index was created in setup and not
+        written to during the test is counted: it could have shared a
+        seeded index rather than paying for one of its own.
+
         Cleanup is best-effort: ``ConnectionError`` / ``ValueError`` /
         ``ElasticsearchRequestError`` during teardown are logged at WARNING and
         swallowed so a teardown failure doesn't mask the real test outcome.
@@ -377,6 +492,7 @@ try:
             config = elasticsearch_connection_params.copy()
             config["index"] = f"{index_prefix}{test_id}"
             config["refresh"] = True
+            take_fresh_resource(config["index"], _present_fingerprint(config))
 
             try:
                 yield config

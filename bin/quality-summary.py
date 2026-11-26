@@ -417,6 +417,7 @@ ROWS = {
     "workflow_lint": ("Workflow Lint:", 20, False),
     "shell_lint": ("Shell Lint:", 20, False),
     "contract": ("Quality Contract:", 20, False),
+    "provisioning": ("Provisioning:", 20, True),
 }
 
 #: The test rows, which are grouped for display rather than shown one per check.

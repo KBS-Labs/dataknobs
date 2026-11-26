@@ -1346,7 +1346,16 @@ def test_the_tools_declared_tier_gated_are_the_ones_that_scope_by_tier() -> None
         "left — and in the second case the declaration is what to revisit."
     )
 
-    for tool in sorted(set(contract_module.MEASURERS) - contract_module._TIER_GATED_TOOLS):
+    # The run-fed tools are left out because they report the cells they skipped
+    # themselves (``Measurement.unread``), which ``check`` honours before any
+    # tier rule. Reading the tier is safe for them; it is what this guard is
+    # about for the tools that hand back only counts.
+    tree_tools = (
+        set(contract_module.MEASURERS)
+        - contract_module._TIER_GATED_TOOLS
+        - contract_module._RUN_FED_TOOLS
+    )
+    for tool in sorted(tree_tools):
         cells = json.loads(json.dumps(contract["tools"][tool]["cells"]))
         before = contract_module._files_in(cells, files, {cells[0]["path"]})
         tallied = contract_module._tally(cells, [str(path) for path in files])

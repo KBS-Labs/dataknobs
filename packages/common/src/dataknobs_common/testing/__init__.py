@@ -111,7 +111,9 @@ from dataknobs_common.testing.error_text import (
     error_names_in,
 )
 from dataknobs_common.testing.elasticsearch_fixtures import (
+    IndexFingerprint,
     elasticsearch_connection_params,
+    elasticsearch_index_fingerprint,
     ensure_elasticsearch_ready,
     make_elasticsearch_test_index,
     sweep_stale_test_indices,
@@ -164,6 +166,7 @@ __all__ = [
     "CauseReadFinding",
     "DataclassSweep",
     "FixedClock",
+    "IndexFingerprint",
     "Supplied",
     "UnbuildableError",
     "assert_config_attribute_access_matches_dataclass",
@@ -187,6 +190,7 @@ __all__ = [
     "create_test_markdown_files",
     "declare_import_root",
     "elasticsearch_connection_params",
+    "elasticsearch_index_fingerprint",
     "ensure_elasticsearch_ready",
     "ensure_localstack_s3_bucket",
     "ensure_postgres_ready",

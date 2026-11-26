@@ -377,24 +377,22 @@ class TestElasticsearchRangeOperators:
         cpu_values = [r.get_value("metrics.cpu") for r in results]
         assert all(40 <= cpu <= 80 for cpu in cpu_values)
 
+    @pytest.fixture
+    def async_range_config(self, make_elasticsearch_test_index):
+        """An index name of its own; the plugin deletes the index afterwards.
+
+        A sync fixture, so the plugin's teardown runs outside the test's loop.
+        """
+        yield from make_elasticsearch_test_index("test_async_range_")
+
     @pytest.mark.asyncio
-    async def test_async_elasticsearch_between(self):
+    async def test_async_elasticsearch_between(self, async_range_config):
         """Test BETWEEN with async Elasticsearch backend."""
         from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 
-        from elasticsearch import ApiError, NotFoundError, TransportError
+        from elasticsearch import NotFoundError
 
-        es_host = os.getenv("ELASTICSEARCH_HOST", "localhost:9200")
-        if ":" in es_host:
-            host, port = es_host.split(":")
-            port = int(port)
-        else:
-            host = es_host
-            port = 9200
-
-        db = AsyncElasticsearchDatabase(
-            config={"host": host, "port": port, "index": "test_async_range_index", "refresh": True}
-        )
+        db = AsyncElasticsearchDatabase(config=async_range_config)
 
         await db.connect()
 
@@ -435,18 +433,8 @@ class TestElasticsearchRangeOperators:
             assert all(v < 20 or v > 50 for v in values)
 
         finally:
-            # Cleanup. Tolerate broadly and always disconnect. ApiError (which
-            # NotFoundError specialises) and TransportError are siblings in the
-            # async client's hierarchy, sharing no base below Exception, so
-            # catching NotFoundError alone would let a connection failure here
-            # escape -- replacing whatever assertion was already failing, and
-            # skipping the disconnect below so the pooled client leaks.
-            try:
-                await db._client.indices.delete(index=db.index_name)
-            except (ApiError, TransportError):
-                pass
-            finally:
-                await db.disconnect()
+            # The plugin deletes the index; the client is this test's to close.
+            await db.disconnect()
 
 
 class TestCrossBackendConsistency:
