@@ -24,7 +24,9 @@ A test that only reads takes a seeded corpus from
 
 The ``requests`` and ``dataknobs_utils.elasticsearch_utils`` imports are
 deferred to fixture-body execution so this module does not impose either
-dep on consumers that don't run Elasticsearch tests.
+dep on consumers that don't run Elasticsearch tests. When pytest loads the
+module as a plugin, its ``pytest_configure`` loads ``requests`` (if installed)
+before any test runs, so a ``pytester`` test cannot drop it; see that hook.
 
 Environment variables (read at fixture-creation time):
 
@@ -37,6 +39,7 @@ Environment variables (read at fixture-creation time):
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import socket
@@ -450,6 +453,24 @@ def sweep_stale_test_indices(
 
 try:
     import pytest
+
+    def pytest_configure(config: pytest.Config) -> None:
+        """Load ``requests`` with the plugin, before any test runs.
+
+        The helpers above import it lazily, and a test using ``pytester`` that
+        is the first in its worker to call one would drop it: pytester restores
+        ``sys.modules`` at teardown, the stale ``http.cookiejar`` stays bound on
+        the surviving ``http`` package, and the next importer gets a
+        ``requests`` whose ``CookieJar`` disagrees with a fresh one ("You can
+        only merge into CookieJar"). Loaded here, it is in every snapshot.
+
+        A hook rather than a module-level import because ``dataknobs_common``
+        imports this module, and a consumer importing the package outside
+        pytest should not pay for ``requests``.
+        """
+        del config
+        with contextlib.suppress(ImportError):
+            import requests  # noqa: F401  (loaded for the side effect described above)
 
     @pytest.fixture(scope="session")
     def elasticsearch_connection_params() -> dict[str, Any]:

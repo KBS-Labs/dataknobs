@@ -20,11 +20,6 @@ from typing import Any
 
 import pytest
 
-# Imported here rather than left to the fingerprint's lazy import: the pytester
-# fixture snapshots sys.modules and restores it at teardown, so a module first
-# imported inside a test is dropped afterwards, and the next test to import it
-# gets a second copy of requests ("You can only merge into CookieJar").
-import dataknobs_utils.requests_utils  # noqa: F401
 from dataknobs_common.testing import elasticsearch_index_fingerprint, requires_elasticsearch
 
 pytest_plugins = ("pytester",)
