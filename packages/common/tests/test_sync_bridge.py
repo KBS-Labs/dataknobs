@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import threading
+import time
 import traceback
 import warnings
 import weakref
@@ -332,12 +333,39 @@ def test_close_stays_idempotent_after_a_failed_teardown(
     # Make the first close raise partway through, using the shipped blocking
     # detector: `close()` joins the loop thread, which the detector reports
     # as a blocking call. A real exception at a real point in teardown.
+    #
+    # The detector reports a join only while it would block -- blockbuster
+    # lets an acquire of an unheld lock through -- so the loop thread must
+    # still be running when `close()` reaches `join()`. Left to the
+    # scheduler, it often was not: `close()` schedules `loop.stop` and then
+    # joins, and a main thread descheduled between the two (one run in three
+    # with six suites sharing the machine) found the thread already gone, so
+    # nothing raised. The loop is held busy until the first close has
+    # raised. It spins on the flag rather than waiting on it: a wait is a
+    # blocking acquire on the loop thread, which the active detector would
+    # raise inside the loop and end the hold early.
+    holding = threading.Event()
+    release = threading.Event()
+
+    async def _hold_the_loop() -> None:
+        holding.set()
+        while not release.is_set():
+            pass
+
+    holder = threading.Thread(target=bridge.run, args=(_hold_the_loop(),), daemon=True)
+    holder.start()
+    assert holding.wait(timeout=10.0), "the loop never started the hold"
+
     async def _close_under_detector() -> None:
         with assert_no_blocking():
             bridge.close()
 
-    with pytest.raises(blocking_error_type()):
-        asyncio.run(_close_under_detector())
+    try:
+        with pytest.raises(blocking_error_type()):
+            asyncio.run(_close_under_detector())
+    finally:
+        release.set()
+    holder.join(timeout=10.0)
 
     finished = threading.Event()
 
@@ -352,6 +380,13 @@ def test_close_stays_idempotent_after_a_failed_teardown(
         "close() deadlocked after an earlier close() raised: the waiter is "
         "blocked on a _closed_event that the failed teardown never set."
     )
+    # The failed close never joined the loop thread, so the second close --
+    # which waits on the event rather than tearing down again -- returns
+    # without joining it either. The thread still exits once the released
+    # loop runs the stop the first close scheduled; give it a bounded wait.
+    deadline = time.monotonic() + 10.0
+    while new_dk_daemon_threads(DK_SYNC_BRIDGE_THREAD) and time.monotonic() < deadline:
+        time.sleep(0.01)
     assert new_dk_daemon_threads(DK_SYNC_BRIDGE_THREAD) == []
 
 
@@ -480,4 +515,48 @@ def test_close_lets_a_cancelled_coroutine_finish_unwinding() -> None:
     assert cleaned.is_set(), (
         "the coroutine was abandoned part way through its finally: close() "
         "stopped the loop before the cancellation had finished unwinding"
+    )
+
+
+def test_close_does_not_cancel_a_coroutine_again_while_it_unwinds() -> None:
+    """Teardown must not interrupt cleanup that a cancellation already started.
+
+    Reproduce-first. When ``run`` times out it cancels the coroutine, and the
+    coroutine's ``finally`` starts unwinding. If ``close`` stops the loop
+    while that ``finally`` is still between awaits, teardown finds the task
+    not done and cancelled it *again* --- and the second ``CancelledError``
+    lands inside the ``finally``, abandoning the rollback or release it was
+    part way through. That is the failure the drain exists to prevent,
+    delivered by the drain.
+
+    The test above reaches this only when the scheduler puts ``close``'s stop
+    inside the ``finally``, which it did in two of nine gate runs with four
+    suites sharing the machine. Here the ``finally`` signals that it has
+    started and then holds an await open, so the stop lands inside it every
+    time.
+    """
+    started = threading.Event()
+    unwinding = threading.Event()
+    cleaned = threading.Event()
+
+    async def slow() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        finally:
+            unwinding.set()
+            await asyncio.sleep(0.2)  # a rollback that takes a moment
+            cleaned.set()
+
+    bridge = SyncLoopBridge(thread_name="dk-drain-probe")
+    with pytest.raises(TimeoutError):
+        bridge.run(slow(), timeout=0.05)
+    assert started.wait(timeout=5.0), "the coroutine never started"
+    assert unwinding.wait(timeout=5.0), "the cancellation never reached the coroutine"
+
+    bridge.close()
+
+    assert cleaned.is_set(), (
+        "teardown cancelled the coroutine a second time while its finally was "
+        "running, and the cleanup after that await never ran"
     )

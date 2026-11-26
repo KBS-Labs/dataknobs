@@ -300,17 +300,25 @@ def _settings(**values: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_the_defaults_are_the_values_the_gate_always_used() -> None:
-    """Three unit slots, the docs in the pool, integration one suite at a time."""
+def test_the_defaults_are_the_measured_values() -> None:
+    """Four unit slots, the docs in the pool, two integration suites at once.
+
+    Four is where measuring put the unit pool: 13s off a 143s gate, and six
+    took nothing more off while slowing every job in the pool. The docs stay
+    in the pool because moving them out paid less than a fourth slot did.
+    Two integration suites took the stage from 40s to 28s, and four took it
+    no lower: the longest suite runs alone in one slot while the rest finish
+    in the other.
+    """
     result = _settings()
     assert result.returncode == 0, result.stderr
-    assert result.stdout.split() == ["3", "1", "pool"]
+    assert result.stdout.split() == ["4", "2", "pool"]
 
 
 def test_an_empty_setting_takes_its_default() -> None:
     result = _settings(DK_GATE_UNIT_JOBS="", DK_GATE_INTEGRATION_JOBS="", DK_GATE_DOCS="")
     assert result.returncode == 0, result.stderr
-    assert result.stdout.split() == ["3", "1", "pool"]
+    assert result.stdout.split() == ["4", "2", "pool"]
 
 
 def test_each_setting_is_read() -> None:

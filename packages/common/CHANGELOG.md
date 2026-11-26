@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`SyncLoopBridge.close()` no longer cuts short a coroutine that a timed-out
+  `run()` already cancelled.** Teardown cancels whatever is still on the loop
+  and waits for it to unwind, and it cancelled a task that was already
+  unwinding a second time: the second `CancelledError` landed inside the
+  task's `finally` at its next await, abandoning the rollback or release it
+  was part way through. It happened when `close()` followed a timeout closely
+  enough for the loop to stop mid-unwind. A task already being cancelled is
+  now waited for, not cancelled again.
+- **`requires_elasticsearch` no longer skips a suite because another session
+  is creating an index.** The readiness probe treated a single red
+  `shards_availability` reading as a refusal, but every cluster reads red for
+  the moment between accepting an index and placing its primary. With several
+  suites against one cluster, a suite starting while another created an index
+  skipped every Elasticsearch test it had. A red reading is now waited out with
+  `_cluster/health?wait_for_status=yellow&timeout=5s`, and only a red that lasts
+  the wait reads as unavailable; the pre-8.7 fallback's red cluster status is
+  treated the same way. A healthy cluster makes no extra request.
 - **`make_elasticsearch_test_index` logs an index deletion Elasticsearch
   refused**, at WARNING; it went unreported.
 - **A registry bounds its own error once a factory has added words to it.**

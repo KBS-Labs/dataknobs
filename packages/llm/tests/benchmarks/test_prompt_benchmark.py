@@ -1,5 +1,6 @@
 """Tests for PromptBenchmark to ensure all benchmarks run correctly."""
 
+import itertools
 import sys
 from pathlib import Path
 import pytest
@@ -102,18 +103,28 @@ class TestPromptBenchmark:
             assert result.operations_per_second > 0
             assert result.std_dev >= 0
 
-    def test_performance_consistency(self, prompt_bench):
-        """Test that benchmarks produce consistent results across runs."""
-        # Warmup run to avoid cold-start overhead (imports, JIT, etc.)
-        prompt_bench.benchmark_simple_rendering()
+    def test_performance_consistency(self):
+        """Two runs of one benchmark measure the same work the same way.
 
-        # Run same benchmark twice for consistency check
-        result1 = prompt_bench.benchmark_simple_rendering()
-        result2 = prompt_bench.benchmark_simple_rendering()
+        This used to compare two wall-clock runs and require their means
+        within a factor of two. Ten iterations of a render that takes
+        microseconds put that at the mercy of the scheduler: one preempted
+        iteration doubles a mean, and with four suites sharing the machine it
+        failed one gate run in nine. That measured the machine, not the
+        harness. With a clock that advances a fixed step per reading, each
+        iteration measures exactly one step, so any difference between the
+        runs would be the harness's own: an iteration skipped, a timing taken
+        around the wrong call.
+        """
+        readings = itertools.count()
+        bench = PromptBenchmark(iterations=10, clock=lambda: next(readings) * 1e-6)
 
-        # Results should be similar (within 50% variance is reasonable for small samples)
-        mean_ratio = result1.mean_time / result2.mean_time
-        assert 0.5 < mean_ratio < 2.0, "Benchmark results are too inconsistent"
+        result1 = bench.benchmark_simple_rendering()
+        result2 = bench.benchmark_simple_rendering()
+
+        assert result1.mean_time == pytest.approx(1e-6)
+        assert result2.mean_time == pytest.approx(result1.mean_time)
+        assert result2.std_dev == pytest.approx(result1.std_dev)
 
     def test_benchmark_iterations_respected(self):
         """Test that iteration count is respected."""

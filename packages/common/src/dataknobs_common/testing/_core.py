@@ -710,6 +710,49 @@ _ES_GATING_INDICATORS: dict[str, tuple[str, ...]] = {
 #: cluster whose first fixture request times out.
 _ES_PROBE_TIMEOUT_SECONDS = 5
 
+#: Seconds the cluster is given to bring a red reading back to yellow before
+#: the red counts as standing. Matched to the probe timeout for the same
+#: reason that one is matched to the fixtures': it is the patience the suite
+#: would have shown its first request.
+_ES_SETTLE_SECONDS = 5
+
+
+def _elasticsearch_red_settles(base: str) -> bool:
+    """Whether a red reading clears to yellow within :data:`_ES_SETTLE_SECONDS`.
+
+    A red ``shards_availability`` (or red cluster status) is what a cluster
+    that cannot place a primary reports, and it is also what any cluster
+    reports for the moment between accepting a new index and placing its
+    primary. The two readings are identical -- one unassigned primary,
+    nothing initializing -- so a single sample cannot separate them. While
+    other sessions create indices against the same cluster (concurrent
+    suites in one gate, or another checkout), a probe that trusts one sample
+    skips a whole suite on a cluster that was never refusing anything.
+
+    Duration separates them. Elasticsearch waits server-side: asked for
+    ``wait_for_status=yellow``, it answers as soon as the status reaches
+    yellow, or with a 408 and ``timed_out: true`` when the wait runs out. So
+    a passing red costs milliseconds, and only a standing one costs the wait.
+    The client allows the wait plus the ordinary probe timeout, so a slow
+    answer is not mistaken for a timed-out one.
+
+    Args:
+        base: ``http://host:port`` of the cluster.
+
+    Returns:
+        True if the cluster reached yellow or green inside the wait.
+    """
+    settled = _get_probe_json(
+        f"{base}/_cluster/health?wait_for_status=yellow&timeout={_ES_SETTLE_SECONDS}s",
+        _ES_SETTLE_SECONDS + _ES_PROBE_TIMEOUT_SECONDS,
+        what="Elasticsearch cluster health (waiting out a red reading)",
+    )
+    return (
+        isinstance(settled, dict)
+        and settled.get("timed_out") is False
+        and settled.get("status") in ("green", "yellow")
+    )
+
 
 def _elasticsearch_can_host_an_index(host: str, port: int) -> bool:
     """Whether the cluster can still allocate and write a new test index.
@@ -729,6 +772,12 @@ def _elasticsearch_can_host_an_index(host: str, port: int) -> bool:
     :func:`~dataknobs_common.testing.elasticsearch_fixtures.wait_for_elasticsearch`
     has always used — weaker, since it cannot see a refusal that has not
     stranded a shard yet, but it is the criterion those clusters have.
+
+    A red reading -- ``shards_availability`` in the report, or the cluster
+    status in the fallback -- is waited out before it counts (see
+    :func:`_elasticsearch_red_settles`): the same red is reported for a
+    moment by every cluster creating an index, and only a red that stays is
+    a refusal. The other indicators are read strictly, from one sample.
 
     Failing both ways is ``False``: a port that accepts connections and
     answers neither probe is not a cluster to run a suite against.
@@ -750,6 +799,12 @@ def _elasticsearch_can_host_an_index(host: str, port: int) -> bool:
         for name, permitted in _ES_GATING_INDICATORS.items():
             indicator = indicators.get(name)
             if isinstance(indicator, dict) and indicator.get("status") not in permitted:
+                if (
+                    name == "shards_availability"
+                    and indicator.get("status") == "red"
+                    and _elasticsearch_red_settles(base)
+                ):
+                    continue
                 logger.debug(
                     "Elasticsearch at %s:%s reports %s=%s; treating as unavailable",
                     host,
@@ -770,6 +825,8 @@ def _elasticsearch_can_host_an_index(host: str, port: int) -> bool:
         # A 200 that parses but names no status is a cluster we cannot judge.
         # Run the suite: a failure is visible, and a silent skip is not.
         return True
+    if status == "red":
+        return _elasticsearch_red_settles(base)
     return status in ("green", "yellow")
 
 

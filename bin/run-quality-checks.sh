@@ -1445,9 +1445,16 @@ if [ "$SKIP_TESTS" != "yes" ]; then
         print_status "Running unit tests..."
         _unit_start=$(date +%s)
         # How many at once is GATE_UNIT_JOBS (resolve_gate_settings, above;
-        # 1 in full mode). The default of 3 was set to keep CPU contention from
-        # breaking timing-sensitive tests; no test was named when it was, so
-        # what a higher value breaks is for a measurement to say.
+        # 1 in full mode). It was once held at 3 to keep CPU contention from
+        # breaking timing-sensitive tests, with none named. Measured: the 23
+        # test files that bound a wall-clock time from above each passed 20
+        # runs beside 0, 2 and 5 loading suites. Contention did surface three
+        # failures across the gate runs, each fixed rather than capped: a
+        # benchmark test comparing two wall-clock means (now on an injected
+        # clock), a test whose setup raced the scheduler, and a real defect --
+        # bridge teardown cancelling a task already unwinding. It now costs
+        # time, not correctness, and the default sits where the time stopped
+        # falling.
         if [ "$RUN_MODE" = "full" ]; then
             # Full mode: sequential execution, with each suite's own XML report.
             UNIT_COV_REPORT="$TEST_COV_REPORT"
@@ -1502,16 +1509,20 @@ if [ "$SKIP_TESTS" != "yes" ]; then
             WORKSPACE_GUARD_SECONDS=$(cat "$OUTPUT_DIR/workspace-guards-seconds.txt")
         fi
 
-        # Run integration tests, GATE_INTEGRATION_JOBS at a time (default 1:
-        # one after another), longest first, as the unit pool orders its suites.
+        # Run integration tests, GATE_INTEGRATION_JOBS at a time (default 2),
+        # longest first, as the unit pool orders its suites.
         #
         # Suites running at once share the external services. What keeps them
         # apart: every Elasticsearch index a test takes is named by the plugin
         # for that session, and the session sweep deletes only test_* indices
         # older than 300 seconds (DK_ES_TEST_INDEX_MAX_AGE_SECONDS), so two
         # sessions of one gate cannot sweep each other's while each stays under
-        # five minutes; the longest takes well under one. Whatever else they
-        # share is what running them at once is there to find out.
+        # five minutes; the longest takes well under one. The one interference
+        # measured was in the readiness probe: a suite starting while another
+        # created an index read the cluster's momentary red as a refusal and
+        # skipped every Elasticsearch test it had, which the provisioning
+        # check's service_skipped count reported. The probe now waits a red
+        # reading out before believing it.
         #
         # An empty PACKAGES_TO_TEST makes the pool below run nothing, so
         # the stage did not run rather than running instantly. Recorded here so

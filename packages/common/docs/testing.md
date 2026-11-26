@@ -1120,6 +1120,18 @@ to have opted in and the driver to be installed.
 > and falls back to the `yellow`-or-`green` cluster status that
 > `wait_for_elasticsearch()` has always used.
 >
+> A **red** reading is waited out before it counts. Every cluster reports red
+> `shards_availability` — one unassigned primary — for the moment between
+> accepting a new index and placing it, and that reading is identical to a
+> cluster that cannot place it at all. So while other sessions create indices
+> (suites running side by side, another checkout's run), one sample would skip
+> a whole suite against a healthy cluster. On red, the probe asks
+> `GET /_cluster/health?wait_for_status=yellow&timeout=5s`: a passing red
+> answers in milliseconds, and only a red that lasts the five seconds — the
+> cluster's 408 with `timed_out: true` — reads as unavailable. The fallback's
+> red cluster status is treated the same way. The other indicators are still
+> read from one sample.
+>
 > The skip reads **"Elasticsearch unreachable, or not in a state to host a
 > test index"**. If you see it against a cluster you can see running, ask it
 > what it thinks:

@@ -1,6 +1,7 @@
 """Benchmarks for prompt template rendering performance."""
 
 import time
+from collections.abc import Callable
 from typing import List
 
 from dataknobs_llm.prompts.rendering.template_renderer import TemplateRenderer
@@ -24,13 +25,18 @@ class PromptBenchmark:
     - Mixed mode vs. pure Jinja2 mode
     """
 
-    def __init__(self, iterations: int = 1000):
+    def __init__(self, iterations: int = 1000, clock: Callable[[], float] = time.perf_counter):
         """Initialize prompt benchmark.
 
         Args:
             iterations: Number of iterations to run for each benchmark
+            clock: Returns the current time in seconds, read before and after
+                each iteration. ``time.perf_counter`` by default; a test
+                passes a clock it controls, so it can check how the harness
+                measures without depending on how loaded the machine is.
         """
         self.iterations = iterations
+        self._clock = clock
         self.renderer = TemplateRenderer()
 
     def benchmark_simple_rendering(self) -> BenchmarkResult:
@@ -43,9 +49,9 @@ class PromptBenchmark:
 
         times = []
         for _ in range(self.iterations):
-            start = time.perf_counter()
+            start = self._clock()
             self.renderer.render(template, params)
-            end = time.perf_counter()
+            end = self._clock()
             times.append(end - start)
 
         return BenchmarkResult.from_times("Simple Variable Substitution", times)
@@ -60,9 +66,9 @@ class PromptBenchmark:
 
         times = []
         for _ in range(self.iterations):
-            start = time.perf_counter()
+            start = self._clock()
             self.renderer.render(template, params, mode=TemplateMode.MIXED)
-            end = time.perf_counter()
+            end = self._clock()
             times.append(end - start)
 
         return BenchmarkResult.from_times("Conditional Rendering (( ))", times)
@@ -80,9 +86,9 @@ class PromptBenchmark:
 
         times = []
         for _ in range(self.iterations):
-            start = time.perf_counter()
+            start = self._clock()
             self.renderer.render(template, params, mode=TemplateMode.JINJA2)
-            end = time.perf_counter()
+            end = self._clock()
             times.append(end - start)
 
         return BenchmarkResult.from_times("Jinja2 Filters", times)
@@ -97,9 +103,9 @@ class PromptBenchmark:
 
         times = []
         for _ in range(self.iterations):
-            start = time.perf_counter()
+            start = self._clock()
             self.renderer.render(template, params, mode=TemplateMode.JINJA2)
-            end = time.perf_counter()
+            end = self._clock()
             times.append(end - start)
 
         return BenchmarkResult.from_times("Jinja2 Conditionals", times)
@@ -118,9 +124,9 @@ class PromptBenchmark:
 
         times = []
         for _ in range(self.iterations):
-            start = time.perf_counter()
+            start = self._clock()
             self.renderer.render(template, params, mode=TemplateMode.JINJA2)
-            end = time.perf_counter()
+            end = self._clock()
             times.append(end - start)
 
         return BenchmarkResult.from_times("Jinja2 Loops (10 items)", times)
@@ -152,9 +158,9 @@ class PromptBenchmark:
 
         times = []
         for _ in range(self.iterations):
-            start = time.perf_counter()
+            start = self._clock()
             self.renderer.render(template, params, mode=TemplateMode.MIXED)
-            end = time.perf_counter()
+            end = self._clock()
             times.append(end - start)
 
         return BenchmarkResult.from_times("Complex Template (Mixed)", times)
@@ -172,17 +178,17 @@ class PromptBenchmark:
         # Mixed mode
         times_mixed = []
         for _ in range(self.iterations):
-            start = time.perf_counter()
+            start = self._clock()
             self.renderer.render(template_mixed, params, mode=TemplateMode.MIXED)
-            end = time.perf_counter()
+            end = self._clock()
             times_mixed.append(end - start)
 
         # Jinja2 mode
         times_jinja2 = []
         for _ in range(self.iterations):
-            start = time.perf_counter()
+            start = self._clock()
             self.renderer.render(template_jinja2, params, mode=TemplateMode.JINJA2)
-            end = time.perf_counter()
+            end = self._clock()
             times_jinja2.append(end - start)
 
         return [
@@ -200,9 +206,9 @@ class PromptBenchmark:
 
         times = []
         for _ in range(self.iterations):
-            start = time.perf_counter()
+            start = self._clock()
             self.renderer.render(template, params, mode=TemplateMode.MIXED)
-            end = time.perf_counter()
+            end = self._clock()
             times.append(end - start)
 
         return BenchmarkResult.from_times("Nested Conditionals (5 levels)", times)
