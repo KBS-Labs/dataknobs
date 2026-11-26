@@ -1581,9 +1581,10 @@ _BREACH_ADVICE = {
     "provisioning": (
         "Each test counted above took a fresh index from make_elasticsearch_test_index, "
         "which setup created, and never wrote to it during the test. A test that only "
-        "reads should share one seeded index rather than pay for its own; keep a fresh "
-        "index for a test that writes. The suite's provisioning-<stage>-<package>.json "
-        "record names each test. See .claude/rules/test-cost.md."
+        "reads should share one seeded index from make_elasticsearch_corpus rather than "
+        "pay for its own; keep a fresh index for a test that writes. The suite's "
+        "provisioning-<stage>-<package>.json record names each test. See "
+        ".claude/rules/test-cost.md."
     ),
 }
 

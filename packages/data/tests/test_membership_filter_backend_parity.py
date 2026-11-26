@@ -46,6 +46,7 @@ from dataknobs_data.backends.sql_base import SQLQueryBuilder
 from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
 from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 from dataknobs_data.query import RESERVED_KEY_FIELD, Query
+from dataknobs_data.testing import seed_elasticsearch_records
 from dataknobs_data.query_logic import (
     ComplexQuery,
     FilterCondition,
@@ -141,6 +142,21 @@ def _complex_cases() -> list[tuple[str, ComplexQuery | Query]]:
     ]
 
 
+def _corpus_records() -> list[Record]:
+    return [Record(data=dict(data), id=record_id) for record_id, data in CORPUS.items()]
+
+
+def _elasticsearch_corpus(request: pytest.FixtureRequest) -> dict[str, Any]:
+    """The corpus, seeded once into an index both twins and every case read.
+
+    Every other backend is built and seeded per test, which costs nothing
+    worth sharing.
+    """
+    corpus = request.getfixturevalue("make_elasticsearch_corpus")
+    config: dict[str, Any] = corpus("test_member_", seed_elasticsearch_records(_corpus_records()))
+    return config
+
+
 def _ids(records: list[Record]) -> set[str]:
     return {record.id for record in records if record.id is not None}
 
@@ -167,13 +183,12 @@ def _make_sync_db(kind: str, root: Path, request: pytest.FixtureRequest) -> Iter
     if kind == "elasticsearch":
         from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
 
-        for config in request.getfixturevalue("make_elasticsearch_test_index")("test_member_"):
-            db = SyncElasticsearchDatabase(config)
-            db.connect()
-            try:
-                yield db
-            finally:
-                db.close()
+        db = SyncElasticsearchDatabase(_elasticsearch_corpus(request))
+        db.connect()
+        try:
+            yield db
+        finally:
+            db.close()
         return
     if kind == "sqlite":
         db = SyncSQLiteDatabase({"path": str(root / "records.db")})
@@ -210,13 +225,12 @@ async def _make_async_db(
     if kind == "elasticsearch":
         from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
 
-        for config in request.getfixturevalue("make_elasticsearch_test_index")("test_member_"):
-            db = AsyncElasticsearchDatabase(config)
-            await db.connect()
-            try:
-                yield db
-            finally:
-                await db.close()
+        db = AsyncElasticsearchDatabase(_elasticsearch_corpus(request))
+        await db.connect()
+        try:
+            yield db
+        finally:
+            await db.close()
         return
     if kind == "sqlite":
         db = AsyncSQLiteDatabase({"path": str(root / "records.db")})
@@ -234,8 +248,9 @@ def sync_db(request: pytest.FixtureRequest) -> Iterator[Any]:
     """A connected sync backend holding the corpus."""
     with tempfile.TemporaryDirectory() as d:
         for db in _make_sync_db(request.param, Path(d), request):
-            for record_id, data in CORPUS.items():
-                db.create(Record(data=dict(data), id=record_id))
+            if request.param != "elasticsearch":  # seeded once, shared
+                for record in _corpus_records():
+                    db.create(record)
             yield db
 
 
@@ -244,8 +259,9 @@ async def async_db(request: pytest.FixtureRequest) -> AsyncIterator[Any]:
     """A connected async backend holding the corpus."""
     with tempfile.TemporaryDirectory() as d:
         async for db in _make_async_db(request.param, Path(d), request):
-            for record_id, data in CORPUS.items():
-                await db.create(Record(data=dict(data), id=record_id))
+            if request.param != "elasticsearch":  # seeded once, shared
+                for record in _corpus_records():
+                    await db.create(record)
             yield db
 
 

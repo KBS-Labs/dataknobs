@@ -1240,6 +1240,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`seed_elasticsearch_records(records, **config)`** in `dataknobs_data.testing`
+  builds a seed for `make_elasticsearch_corpus` (from `dataknobs-common`'s pytest
+  plugin): it writes the records with one `create_batch` through
+  `SyncElasticsearchDatabase`, so the shared index has the backend's own mapping.
 - **`Operator.CONTAINS` and `NOT_CONTAINS`** find a record by one element of a
   list, on every backend (`Filter("tags", Operator.CONTAINS, "urgent")`). An
   element equals the value as `EQ` has it. Only a list contains anything; a

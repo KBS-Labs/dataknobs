@@ -594,6 +594,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`make_elasticsearch_corpus`, a seeded Elasticsearch index that tests which
+  only read share.** `corpus(name, seed)` seeds the index once per test module
+  and name, refreshes it once, and returns the same config to every later
+  caller; the index is deleted when the session ends. After each test the corpus
+  is compared with how the seed left it: a test that wrote errors in its
+  teardown, and every later test asking for that corpus errors at setup naming
+  the writer. The generic halves are `take_shared_resource` and
+  `check_shared_resources` in `dataknobs_common.testing.provisioning`.
 - **A count of tests that took a fresh Elasticsearch index and never wrote to
   it.** The `dataknobs_common.testing.provisioning` pytest plugin is inert until
   `DK_PROVISIONING_RECORD` names a file. Then each index

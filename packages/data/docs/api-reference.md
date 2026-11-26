@@ -1522,7 +1522,8 @@ change either.
 `dataknobs_data.testing` provides deterministic vector draws — for this
 package's own tests, and for consumers testing their own implementations of the
 `VectorStore` protocol — plus `HoldingStreamDatabase`, for testing that a
-consumer of `stream_read` closes the read it opened.
+consumer of `stream_read` closes the read it opened, and
+`seed_elasticsearch_records`, for seeding a shared Elasticsearch corpus.
 
 Each helper builds its own `numpy.random.Generator`. Nothing here touches the
 process-global RNG, so a draw in one test cannot shift what any later test
@@ -1593,6 +1594,32 @@ Filters are not applied, so every row reaches the consumer and a break is the
 consumer's own decision rather than an empty read's. `limit` is applied,
 because a bounded read is where a caller most expects the generator to have
 finished on its own — and it has not, which is usually the point.
+
+### `seed_elasticsearch_records`
+
+`make_elasticsearch_corpus`, a fixture from `dataknobs-common`'s pytest plugin,
+seeds an Elasticsearch index once and shares it between the tests that only
+read it (see the *Shared Integration Fixtures* section of
+`packages/common/docs/testing.md`). It takes the seed as a callable, because
+`dataknobs-common` cannot import a backend. `seed_elasticsearch_records(records,
+**config)` returns the usual one:
+
+```python
+from dataknobs_data import Record
+from dataknobs_data.testing import seed_elasticsearch_records
+
+RECORDS = [Record({"n": n}, id=f"r{n}") for n in range(25)]
+
+@pytest.fixture
+def corpus(make_elasticsearch_corpus):
+    return make_elasticsearch_corpus("test_records_", seed_elasticsearch_records(RECORDS))
+```
+
+The seed opens a `SyncElasticsearchDatabase` on the corpus config, so the index
+has the backend's own mapping, writes every record with one `create_batch`, and
+closes it. Record ids are kept, and minted where absent. Keyword arguments
+(`mappings=`, `settings=`, any backend option) are laid over the corpus config.
+`records` is read once, when the seed is built, so a generator is fine.
 
 ## Exceptions
 

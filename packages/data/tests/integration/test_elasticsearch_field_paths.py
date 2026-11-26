@@ -147,17 +147,37 @@ async def twins(config: dict[str, Any]) -> AsyncIterator[Twins]:
     await asyncio.to_thread(sync_db.close)
 
 
+def _make_foreign(client: Any, index: str) -> None:
+    """Create ``index`` with :data:`FOREIGN_MAPPINGS` and write :data:`ROWS` to it."""
+    client.indices.create(index=index, mappings=FOREIGN_MAPPINGS)
+    for row_id, data in ROWS.items():
+        client.index(index=index, id=row_id, document={"id": row_id, "data": data})
+    client.indices.refresh(index=index)
+
+
+def _seed_foreign(config: dict[str, Any]) -> None:
+    from elasticsearch import Elasticsearch
+
+    client = Elasticsearch([f"http://{config['host']}:{config['port']}"])
+    try:
+        _make_foreign(client, config["index"])
+    finally:
+        client.close()
+
+
 @pytest.fixture
 def foreign_index(config: dict[str, Any], index_client: Any) -> None:
-    index_client.indices.create(index=config["index"], mappings=FOREIGN_MAPPINGS)
-    for row_id, data in ROWS.items():
-        index_client.index(
-            index=config["index"], id=row_id, document={"id": row_id, "data": data}, refresh=True
-        )
+    """The foreign index, made in this test's own index, for a test that changes it."""
+    _make_foreign(index_client, config["index"])
 
 
-@pytest.mark.usefixtures("foreign_index")
 class TestAnIndexMappedElsewhere:
+    """Every case only reads, so they share one foreign index, seeded once."""
+
+    @pytest.fixture
+    def config(self, make_elasticsearch_corpus: Any) -> dict[str, Any]:
+        return make_elasticsearch_corpus("test_paths_foreign_", _seed_foreign)
+
     @pytest.mark.parametrize(
         ("field", "ascending"),
         [

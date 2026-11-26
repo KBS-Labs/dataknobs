@@ -39,6 +39,7 @@ from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDataba
 from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
 from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
 from dataknobs_data.query import Query
+from dataknobs_data.testing import seed_elasticsearch_records
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -88,10 +89,15 @@ def backend(request: pytest.FixtureRequest) -> Iterator[tuple[str, dict[str, Any
         ):
             yield kind, {**config, "prefix": f"cp-{uuid.uuid4().hex[:10]}/"}
     elif kind == "elasticsearch":
-        for config in request.getfixturevalue("make_elasticsearch_test_index")(
-            "test_count_paging_"
-        ):
-            yield kind, config
+        # Seeded once into an index every case and both twins read: nothing
+        # here writes. Every other backend is built and seeded per test.
+        yield (
+            kind,
+            request.getfixturevalue("make_elasticsearch_corpus")(
+                "test_count_paging_",
+                seed_elasticsearch_records(Record(data=dict(data)) for data in RECORDS),
+            ),
+        )
     else:
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
@@ -155,8 +161,9 @@ def sync_db(backend: tuple[str, dict[str, Any]]) -> Iterator[Any]:
     db = _sync_class(kind)(config)
     db.connect()
     try:
-        for data in RECORDS:
-            db.create(Record(data=dict(data)))
+        if kind != "elasticsearch":  # seeded once, shared
+            for data in RECORDS:
+                db.create(Record(data=dict(data)))
         yield db
     finally:
         if kind == "s3":
@@ -171,8 +178,9 @@ async def async_db(backend: tuple[str, dict[str, Any]]) -> AsyncIterator[Any]:
     db = _async_class(kind)(config)
     await db.connect()
     try:
-        for data in RECORDS:
-            await db.create(Record(data=dict(data)))
+        if kind != "elasticsearch":  # seeded once, shared
+            for data in RECORDS:
+                await db.create(Record(data=dict(data)))
         yield db
     finally:
         if kind == "s3":
