@@ -1,11 +1,14 @@
 {
-  "timestamp": "2026-11-26T00:20:31Z",
+  "timestamp": "2026-11-26T00:47:17Z",
   "python_version": "Python 3.12.12",
   "uv_version": "uv 0.13.10 (Homebrew 2026-11-24 aarch64-apple-darwin)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "seeded-corpus",
-  "git_commit": "124ac375da00821eef6c3752f87f26fbaa4191c9",
+  "git_branch": "gate-concurrency-settings",
+  "git_commit": "f56dd7cf6efdac9f3613a14f1dab031b807ff8bd",
   "docker_container": "false",
-  "docker_compose_services": "postgres, elasticsearch, localstack"
+  "docker_compose_services": "postgres, elasticsearch, localstack",
+  "gate_unit_jobs": 3,
+  "gate_integration_jobs": 1,
+  "gate_docs": "pool"
 }
